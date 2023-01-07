@@ -1,0 +1,3 @@
+[submodule "submodules/rsgc"]
+	path = submodules/rsgc
+	url = https://github.com/playxe/rsgc
