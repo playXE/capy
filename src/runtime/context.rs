@@ -1,20 +1,24 @@
 #![allow(dead_code)]
 use std::{
-    cell::Cell,
+    cell::{Cell, UnsafeCell},
     hash::Hash,
     intrinsics::likely,
     panic::{AssertUnwindSafe, RefUnwindSafe, UnwindSafe},
     ptr::null_mut,
-    sync::atomic::AtomicUsize,
+    sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize},
 };
 
-use r7rs_parser::{parser::{ParseError, Parser}, expr::NoIntern};
+use r7rs_parser::{
+    expr::NoIntern,
+    parser::{ParseError, Parser},
+};
 use rsgc::heap::root_processor::ThreadRootProcessor;
 
 use crate::{
+    compiler::r7rs_to_value,
     data::exception::{Exception, SourcePosition},
     prelude::*,
-    utilities::arraylist::ArrayList, compiler::r7rs_to_value,
+    utilities::arraylist::ArrayList,
 };
 
 use super::{
@@ -51,7 +55,7 @@ impl Context {
             let module = library_manager().null_module;
             Code::new(thread, insns, consts, frags, module.get_handle_of())
         };
-        let captured = rt.empty_array;
+        let captured = Array::new(thread, 0, |_, _| unreachable!());
         let mut stack = Vec::with_capacity(512);
         stack.resize(512, Value::UNDEFINED);
         let this = Box::leak(Box::new(Self {
@@ -82,7 +86,11 @@ impl Context {
         Ok(Value::make_list_arraylist(self, &exprs, Value::nil()))
     }
 
-    pub fn parse_exprs(&mut self, path: &str, fold_case: bool) -> Result<ArrayList<Value>, Handle<Exception>> {
+    pub fn parse_exprs(
+        &mut self,
+        path: &str,
+        fold_case: bool,
+    ) -> Result<ArrayList<Value>, Handle<Exception>> {
         let runtime = Runtime::get();
         let mut manager = runtime.source_manager.lock(true);
         let res = manager.read_source(path);
@@ -103,19 +111,29 @@ impl Context {
                             exprs.push(self.mutator(), val);
                         }
                         Err(ParseError::Syntax(position, error)) => {
-                            let exc = Exception::syntax(self, error, &[], SourcePosition {
-                                position,
-                                source_id: source_id as _ 
-                            });
+                            let exc = Exception::syntax(
+                                self,
+                                error,
+                                &[],
+                                SourcePosition {
+                                    position,
+                                    source_id: source_id as _,
+                                },
+                            );
 
                             return Err(exc);
                         }
 
                         Err(ParseError::Lexical(position, error)) => {
-                            let exc = Exception::lexical(self, error, &[], SourcePosition {
-                                position,
-                                source_id: source_id as _ 
-                            });
+                            let exc = Exception::lexical(
+                                self,
+                                error,
+                                &[],
+                                SourcePosition {
+                                    position,
+                                    source_id: source_id as _,
+                                },
+                            );
 
                             return Err(exc);
                         }
@@ -142,7 +160,12 @@ impl Context {
         self.apply(loader, list)
     }
 
-    pub fn eval_path_in(&mut self, path: &str, fold_case: bool, lib: Handle<Library>) -> Result<Value, Handle<Exception>> {
+    pub fn eval_path_in(
+        &mut self,
+        path: &str,
+        fold_case: bool,
+        lib: Handle<Library>,
+    ) -> Result<Value, Handle<Exception>> {
         let exprs = self.parse(path, fold_case)?;
 
         let source_dir = std::path::Path::new(path).parent().unwrap();
@@ -153,8 +176,6 @@ impl Context {
         let list = Value::make_list_slice(self, &[exprs, Value::new(s), lib], Value::nil());
         self.apply(loader, list)
     }
-
-
 
     #[inline(always)]
     pub fn push(&mut self, v: Value) {
@@ -389,7 +410,7 @@ impl Context {
                             kind: ProcedureKind::Closure(
                                 ClosureType::Anonymous,
                                 Value::nil(),
-                                self.runtime().empty_array,
+                                Array::new(self.mutator(), 0, |_, _| unreachable!()),
                                 generated,
                             ),
                             id: Procedure::new_id(),
@@ -1076,22 +1097,37 @@ impl Context {
         Some(stack_trace)
     }
 
-    fn capture(&mut self, n: usize) -> Handle<Array<Value>> {
+    fn capture(&mut self, n: usize) -> Handle<Array<Handle<Upvalue>>> {
         let mut list = ArrayList::new(self.mutator());
-        let mut i = self.sp - n;
+        for i in 0..self.registers.code.captures[n].len() {
+            let capture = self.registers.code.captures[n][i];
 
-        while i < self.sp {
-            let val = self.stack[i];
-            list.push(self.mutator(), val);
-            i += 1;
+            if capture.local {
+                let offset = self.registers.fp + capture.index as usize;
+                let ptr = &mut self.stack[offset] as *mut Value;
+                let start = self.stack.as_ptr();
+                let end = unsafe { start.add(self.stack.len()) };
+                let upvalue = self.mutator().allocate(Upvalue {
+                    closed: AtomicBool::new(false),
+                    next: AtomicPtr::new(null_mut()),
+                    state: UnsafeCell::new(UpvalueState {
+                        stack: (ptr, start as usize, end as usize),
+                    }),
+                });
+                unsafe {
+                    self.runtime().push_upvalues(upvalue);
+                }
+                list.push(self.mutator(), upvalue);
+            } else {
+                let upvalue = self.registers.captured[capture.index as usize];
+                list.push(self.mutator(), upvalue);
+            }
         }
-
-        self.sp -= n;
         Array::new(self.thread, list.len(), |_, ix| list[ix])
     }
 
     pub(crate) unsafe fn execute_named(&mut self, code: Handle<Code>, name: Handle<Str>) -> Value {
-        let empty = self.runtime().empty_array;
+        let empty = Array::new(self.mutator(), 0, |_, _| unreachable!());
         let proc = self.mutator().allocate(Procedure {
             id: Procedure::new_id(),
             kind: ProcedureKind::Closure(ClosureType::Named(name), Value::UNDEFINED, empty, code),
@@ -1104,7 +1140,7 @@ impl Context {
     }
 
     pub(crate) unsafe fn execute_unnamed(&mut self, code: Handle<Code>) -> Value {
-        let empty = self.runtime().empty_array;
+        let empty = Array::new(self.mutator(), 0, |_, _| unreachable!());
         let proc = self.mutator().allocate(Procedure {
             id: Procedure::new_id(),
             kind: ProcedureKind::Closure(ClosureType::Anonymous, Value::UNDEFINED, empty, code),
@@ -1120,7 +1156,7 @@ impl Context {
         &mut self,
         code: Handle<Code>,
         args: usize,
-        captured: Handle<Array<Value>>,
+        captured: Handle<Array<Handle<Upvalue>>>,
     ) -> Value {
         let saved_registers = self.registers;
         self.registers = Registers::new(
@@ -1163,6 +1199,9 @@ impl Context {
                 Ins::PushVoid => {
                     self.push(Value::void());
                 }
+                Ins::PushUndef => {
+                    self.push(Value::UNDEFINED);
+                }
                 Ins::PushConstant(c) => {
                     self.push(self.registers.code.constants[c as usize]);
                 }
@@ -1198,18 +1237,22 @@ impl Context {
                 }
 
                 Ins::PushCaptured(l) => {
-                    let val = self.registers.captured[l as usize];
+                    let val = self.registers.captured[l as usize].get();
                     self.push(val);
                 }
 
                 Ins::SetCaptured(l) => {
                     let val = self.pop();
-                    self.thread.write_barrier(self.registers.captured);
-                    self.registers.captured[l as usize] = val;
+                    self.thread
+                        .write_barrier(self.registers.captured[l as usize]);
+                    self.registers.captured[l as usize].set(val);
                 }
 
                 Ins::MakeVariableArgument(_) => {}
-                Ins::MakeLocalVariable(_) => {}
+                Ins::MakeLocalVariable(n) => {
+                    let val = self.pop();
+                    self.stack[self.registers.fp + n as usize] = val;
+                }
 
                 Ins::Pack(n) => {
                     let mut list = Value::nil();
@@ -1394,9 +1437,9 @@ impl Context {
                     let sym = self.registers.code.constants[ix as usize].get_handle_of::<Symbol>();
 
                     if constant {
-                        lm.define_const( self.registers.module.get_handle_of(), sym, value);
+                        lm.define_const(self.registers.module.get_handle_of(), sym, value, false);
                     } else {
-                        lm.define( self.registers.module.get_handle_of(), sym, value);
+                        lm.define(self.registers.module.get_handle_of(), sym, value, false);
                     }
                 }
 
@@ -1465,13 +1508,40 @@ impl Context {
                     self.push(rest);
                 }
 
+                Ins::AssertArgCount(n) => {
+                    if self.sp - n as usize != self.registers.fp {
+                        let ls = self.pop_as_list(self.sp - self.registers.fp);
+                        let exc = Exception::argument_count(
+                            self,
+                            None,
+                            n as _,
+                            n as _,
+                            ls,
+                            SourcePosition::unknown(),
+                        );
+                        self.error(exc);
+                    }
+                }
+
+                Ins::AssertMinArgCount(n) => {
+                    if (self.sp - n as usize) < self.registers.fp {
+                        let ls = self.pop_as_list(self.sp - self.registers.fp);
+                        let exc = Exception::argument_count(
+                            self,
+                            None,
+                            n as _,
+                            usize::MAX,
+                            ls,
+                            SourcePosition::unknown(),
+                        );
+                        self.error(exc);
+                    }
+                }
+
                 Ins::Call(n) => {
                     self.thread.safepoint();
                     self.stack[self.sp - n as usize - 2] =
                         Value::encode_int32(self.registers.ip as _);
-                    for i in 0..self.sp {
-                        println!("#{}: {}", self.sp, self.stack[i].to_string(false));
-                    }
                     let mut m = n as usize;
 
                     if let ProcedureKind::Closure(_, _, ref newcaptured, ref newcode) =
@@ -1492,9 +1562,15 @@ impl Context {
                             self.registers
                                 .r#use(*newcode, *newcaptured, self.registers.fp);
 
-                            for i in 0..n {
+                            for i in 0..=n {
                                 self.stack[self.registers.fp - 1 + i] =
                                     self.stack[self.sp - n - 1 + i];
+                            }
+
+                            unsafe {
+                                let raw_sp = self.stack.as_ptr();
+                                let after = raw_sp.add(self.registers.fp + n);
+                                self.runtime().close_upvalues(after);
                             }
 
                             self.sp = self.registers.fp + n;
@@ -1503,6 +1579,12 @@ impl Context {
                         _ => {
                             if self.registers.top_level() {
                                 let res = self.pop();
+
+                                unsafe {
+                                    let raw_sp = self.stack.as_ptr();
+                                    let after = raw_sp.add(self.registers.initial_fp - 1);
+                                    self.runtime().close_upvalues(after);
+                                }
 
                                 self.sp = self.registers.initial_fp - 1;
                                 return res;
@@ -1516,7 +1598,11 @@ impl Context {
                 Ins::Return => {
                     if self.registers.top_level() {
                         let res = self.pop();
-
+                        unsafe {
+                            let raw_sp = self.stack.as_ptr();
+                            let after = raw_sp.add(self.registers.initial_fp - 1);
+                            self.runtime().close_upvalues(after);
+                        }
                         self.sp = self.registers.initial_fp - 1;
                         return res;
                     } else {
@@ -1567,6 +1653,19 @@ impl Context {
                     self.thread.safepoint();
                 }
 
+                Ins::Reset(index, n) => {
+                    let index = index as usize;
+                    let n = n as usize;
+                    unsafe {
+                        let raw_sp = self.stack.as_ptr();
+                        let after = raw_sp.add(self.registers.fp + index);
+                        self.runtime().close_upvalues(after);
+                    }
+                    for i in (self.registers.fp + index)..(self.registers.fp + index + n) {
+                        self.stack[i] = Value::UNDEFINED;
+                    }
+                }
+
                 ins => todo!("{:?}", ins),
             }
         }
@@ -1588,6 +1687,12 @@ impl Context {
         let newfp = self.stack[fp - 3].get_int32() as usize;
 
         self.stack[fp - 3] = self.stack[self.sp - 1];
+
+        unsafe {
+            let raw_sp = self.stack.as_ptr();
+            let after = raw_sp.add(fp - 2);
+            self.runtime().close_upvalues(after);
+        }
 
         self.sp = fp - 2;
         self.registers.fp = newfp as _;
@@ -1684,7 +1789,7 @@ pub struct Registers {
     rid: usize,
     code: Handle<Code>,
     module: Value,
-    captured: Handle<Array<Value>>,
+    captured: Handle<Array<Handle<Upvalue>>>,
     ip: usize,
     fp: usize,
     initial_fp: usize,
@@ -1696,7 +1801,7 @@ impl Registers {
     pub(crate) fn new(
         code: Handle<Code>,
         module: Value,
-        captured: Handle<Array<Value>>,
+        captured: Handle<Array<Handle<Upvalue>>>,
         fp: usize,
         root: bool,
     ) -> Self {
@@ -1715,7 +1820,12 @@ impl Registers {
         }
     }
 
-    pub(crate) fn r#use(&mut self, code: Handle<Code>, captured: Handle<Array<Value>>, fp: usize) {
+    pub(crate) fn r#use(
+        &mut self,
+        code: Handle<Code>,
+        captured: Handle<Array<Handle<Upvalue>>>,
+        fp: usize,
+    ) {
         self.code = code;
         self.captured = captured;
         self.ip = 0;

@@ -3,11 +3,19 @@ use super::{
     pure_nan::{pure_nan, purify_nan},
 };
 use crate::{
-    data::special_form::SpecialForm, prelude::*, runtime::Runtime,
-    utilities::{string_builder::StringBuilder, arraylist::ArrayList},
+    data::special_form::SpecialForm,
+    prelude::*,
+    runtime::Runtime,
+    utilities::{arraylist::ArrayList, string_builder::StringBuilder},
 };
 use core::fmt;
-use std::{collections::HashSet, fmt::Debug};
+use std::{
+    cell::UnsafeCell,
+    collections::HashSet,
+    fmt::Debug,
+    ptr::null_mut,
+    sync::atomic::{AtomicBool, AtomicPtr, Ordering},
+};
 #[derive(Copy, Clone, Debug)]
 pub struct Value(pub(crate) EncodedValueDescriptor);
 #[derive(Clone, Copy)]
@@ -693,9 +701,6 @@ impl Value {
         }
         Self::make_list_from_stack(ctx, &ls, append)
     }
-    
-
-
 }
 
 impl Value {
@@ -953,7 +958,7 @@ impl Value {
                 } else {
                     visited.insert(pair.as_ptr());
 
-                    let mut expr = pair.cdr();
+                    let mut expr = Value::new(pair);
                     let mut builder = StringBuilder::new("(", "", Some(" "), None);
                     while expr.is_pair() {
                         let car = expr.car();
@@ -1081,7 +1086,17 @@ impl Value {
             } else if val.is_handle_of::<Syntax>() {
                 string_repr_of(visited, obj_id, val.get_handle_of::<Syntax>().expr, escape)
             } else if val.is_handle_of::<Library>() {
-                format!("#<library {:p}: {}>", val.get_handle(), string_repr_of(visited, obj_id, val.get_handle_of::<Library>().name, escape))
+                format!(
+                    "#<library {:p}: {}>",
+                    val.get_handle(),
+                    string_repr_of(visited, obj_id, val.get_handle_of::<Library>().name, escape)
+                )
+            } else if val.is_handle_of::<Gloc>() {
+                format!(
+                    "#<gloc {:p}: {}>",
+                    val.raw() as *mut u8,
+                    val.get_handle_of::<Gloc>().value.to_string(escape)
+                )
             } else {
                 format!("#<unknown {:p}>", val.raw() as *mut u8)
             }
@@ -1164,6 +1179,7 @@ impl Gloc {
                     set
                 })
             }
+            GlocFlag::BindingMut => {}
 
             _ => todo!(),
         }
@@ -1195,3 +1211,104 @@ impl Object for Gloc {
 }
 
 impl Allocation for Gloc {}
+
+/// Upvalue is a reference to a value on the stack or a closed value.
+///
+/// Upvalues are created when closure accesses local variable of the parent function. They get closed
+/// once parent function stack frame is popped. In multi-threaded context these values get copied and closed
+/// automatically once closure is sent to other thread.
+pub struct Upvalue {
+    pub(crate) next: AtomicPtr<Upvalue>,
+    pub(crate) closed: AtomicBool,
+    pub(crate) state: UnsafeCell<UpvalueState>,
+}
+
+unsafe impl Send for Upvalue {}
+unsafe impl Sync for Upvalue {}
+
+pub(crate) union UpvalueState {
+    pub closed: Value,
+    pub stack: (*mut Value, usize, usize),
+}
+
+impl Object for Upvalue {
+    fn trace(&self, visitor: &mut dyn Visitor) {
+        self.get().trace(visitor);
+    }
+}
+
+impl Allocation for Upvalue {}
+
+impl Upvalue {
+    pub(crate) unsafe fn next(&self) -> Option<Handle<Upvalue>> {
+        let next = self.next.load(Ordering::Acquire);
+        if next.is_null() {
+            None
+        } else {
+            Some(Handle::from_raw(next.cast()))
+        }
+    }
+
+    pub(crate) fn stack_location(&self) -> (*mut Value, usize, usize) {
+        debug_assert!(!self.is_closed());
+        unsafe { (*self.state.get()).stack }
+    }
+
+    pub(crate) fn set_next(&self, next: Option<Handle<Upvalue>>) {
+        self.next.store(
+            next.map(|x| x.as_ptr() as *mut Upvalue).unwrap_or(null_mut()),
+            Ordering::Release,
+        );
+    }
+
+    /// Closes upvalue using CAS loop.
+    #[inline]
+    pub(crate) fn close(&self) -> bool {
+        let mut old = self.closed.load(Ordering::Relaxed);
+        loop {
+            if old {
+                return false;
+            }
+            match self
+                .closed
+                .compare_exchange_weak(old, true, Ordering::AcqRel, Ordering::Relaxed)
+            {
+                Ok(_) => {
+                    // successfully closed upvalue: update state.
+                    unsafe {
+                        let state = &mut *self.state.get();
+                        state.closed = state.stack.0.read();
+                    }
+                    return true;
+                }
+                Err(v) => old = v,
+            }
+        }
+    }
+
+    /// Checks if upvalue is closed atomically.
+    ///
+    /// Check is atomic because we don't want to read value from the stack if it is being closed on the other thread.
+    #[inline]
+    pub fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
+    }
+
+    #[inline]
+    pub fn get(&self) -> Value {
+        if self.is_closed() {
+            unsafe { (*self.state.get()).closed }
+        } else {
+            unsafe { *(*self.state.get()).stack.0 }
+        }
+    }
+
+    #[inline]
+    pub fn set(&self, value: Value) {
+        if self.is_closed() {
+            unsafe { (*self.state.get()).closed = value }
+        } else {
+            unsafe { *(*self.state.get()).stack.0 = value }
+        }
+    }
+}

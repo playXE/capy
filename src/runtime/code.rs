@@ -10,7 +10,7 @@ use rsgc::{
 
 use crate::{
     prelude::{Arity, Value, Library},
-    utilities::{arraylist::ArrayList, vec_to_gc},
+    utilities::{arraylist::ArrayList, vec_to_gc}, compiler::Capture,
 };
 
 pub struct Code {
@@ -19,6 +19,7 @@ pub struct Code {
     pub fragments: ArrayList<Handle<Code>>,
     pub arity: once_cell::sync::OnceCell<Handle<Array<Arity>>>,
     pub module: Handle<Library>,
+    pub captures: ArrayList<ArrayList<Capture>>,
 }
 
 impl Code {
@@ -36,6 +37,7 @@ impl Code {
             fragments,
             module,
             arity: OnceCell::new(),
+            captures: ArrayList::new(thread)
         };
         thread.allocate(code)
     }

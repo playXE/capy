@@ -2,7 +2,10 @@ use std::collections::hash_map::RandomState;
 
 use crate::prelude::{eval_error::EvalError, *};
 
-use super::exception::{Exception, SourcePosition};
+use super::{
+    exception::{Exception, SourcePosition},
+    special_form::{Form, SpecialForm},
+};
 
 #[allow(dead_code)]
 pub struct Library {
@@ -98,6 +101,31 @@ impl LibraryManager {
         thread.write_barrier(m);
         m.mpl = Value::encode_handle_value(mpl);
         m
+    }
+
+    pub fn lookup_import(&self, ctx: &mut Context, name: Value) -> Option<Handle<Library>> {
+        let mname = self.module_name(ctx, name);
+        let name = self.filename(name);
+        
+        let mname = ctx.runtime().symbol_table().intern(&mname);
+        if let Some(lib) = self.find_module(ctx, mname, false, true) {
+            return Some(lib);
+        }
+
+        let path = ctx
+            .runtime()
+            .file_manager
+            .lock(true)
+            .library_file_path(&name, None)
+            .unwrap_or(name.to_string());
+        match ctx.eval_path(&path, false) {
+            Ok(_) => {
+                self.find_module(ctx, mname, false, true)
+            }
+            Err(err) => {
+                ctx.error(err);
+            }
+        }
     }
 
     pub fn lookup_module(&self, name: Handle<Symbol>) -> Option<Handle<Library>> {
@@ -268,8 +296,12 @@ impl LibraryManager {
         module: Handle<Library>,
         sym: Handle<Symbol>,
         value: Value,
+        export: bool
     ) -> Handle<Gloc> {
         let gloc = self.make_binding(module, sym, value, GlocFlag::BindingMut);
+        if export {
+            self.export_symbol(module, sym, sym);
+        }
         gloc
     }
 
@@ -278,9 +310,37 @@ impl LibraryManager {
         module: Handle<Library>,
         sym: Handle<Symbol>,
         value: Value,
+        export: bool
     ) -> Handle<Gloc> {
         let gloc = self.make_binding(module, sym, value, GlocFlag::BindingConst);
+        if export {
+            self.export_symbol(module, sym, sym);
+        }
         gloc
+    }
+
+    pub fn insert_binding(
+        &self,
+        ctx: &mut Context,
+        module: Handle<Library>,
+        sym: Handle<Symbol>,
+        value: Value,
+        constant: bool,
+    ) -> Option<Handle<Gloc>> {
+        if let Some(_) = self.global_variable_ref(ctx, module, sym, true, false) {
+            return None;
+        } else {
+            Some(self.make_binding(
+                module,
+                sym,
+                value,
+                if constant {
+                    GlocFlag::BindingConst
+                } else {
+                    GlocFlag::BindingMut
+                },
+            ))
+        }
     }
 
     pub fn find_module(
@@ -291,6 +351,7 @@ impl LibraryManager {
         silent: bool,
     ) -> Option<Handle<Library>> {
         if create {
+
             let (_created, m) = self.lookup_module_create(sym);
 
             Some(m)
@@ -383,6 +444,39 @@ impl LibraryManager {
         Value::new(p)
     }
 
+
+    pub fn name(&self, ctx: &mut Context, components: &[String]) -> Value {
+        let mut res = Value::nil();
+        for component in components.iter().rev() {
+            let sym = ctx.runtime().symbol_table().intern(component);
+            res = ctx.make_pair(Value::new(sym), res);
+        }
+
+        res
+    }
+
+    pub fn module_name(&self, _ctx: &mut Context, val: Value) -> String {
+        let mut components = vec![];
+        let mut expr = val;
+
+        while expr.is_pair() {
+            let component = expr.car();
+            let next = expr.cdr();
+
+            if component.is_symbol() {
+                components.push(component.get_symbol().identifier().to_string());
+            } else if component.is_int32() {
+                components.push(component.get_int32().to_string());
+            }
+            expr = next;
+        }
+
+        std::path::PathBuf::from(components.join("/"))
+            .to_str()
+            .unwrap()
+            .to_string()
+    }
+
     pub fn filename(&self, val: Value) -> String {
         let mut components = vec![];
         let mut expr = val;
@@ -418,6 +512,27 @@ impl LibraryManager {
         path.replace("/", ".")
     }
 
+    pub fn export_symbol(&self,  mut module: Handle<Library>, name: Handle<Symbol>, exported_name: Handle<Symbol>) {
+        let modules = self.libraries.lock(true);
+        let mcopy = module;
+        let value = match module.internal.entry(name) {
+            Entry::Occupied(entry) => *entry.get(),
+            Entry::Vacant(vacant) => {
+                let gloc = Thread::current().allocate(Gloc::new(
+                    name,
+                    mcopy,
+                    Value::encode_undefined_value(),
+                ));
+
+                
+                *vacant.insert(Value::new(gloc))
+            }
+        };
+        module.external.put(Thread::current(), exported_name, value);
+
+        drop(modules);
+    }
+
     /// <spec>  :: <name> | (rename <name> <exported-name>)
     pub fn export_symbols(
         &self,
@@ -451,13 +566,14 @@ impl LibraryManager {
             let spec = lp.car();
             let name;
             let exported_name;
-
+           
             if spec.is_symbol() {
                 name = spec.get_symbol();
                 exported_name = name;
             } else {
                 name = spec.cadr().get_symbol();
                 exported_name = spec.cddr().car().get_symbol();
+                println!("{} -> {}", name.to_string(), exported_name.to_string());
             }
 
             match module.external.entry(exported_name) {
@@ -478,16 +594,59 @@ impl LibraryManager {
                         mcopy,
                         Value::encode_undefined_value(),
                     ));
+
+                    
                     *vacant.insert(Value::new(gloc))
                 }
             };
-
             module.external.put(ctx.mutator(), exported_name, value);
         });
 
         drop(modules);
 
         Value::encode_undefined_value()
+    }
+
+    pub fn add_definition<'a>(
+        &self,
+        thread: &mut Thread,
+        module: Handle<Library>,
+        def: impl Into<Definition<'a>>,
+        constant: bool,
+        export: bool
+    ) {
+        let def = def.into();
+        let sym = Runtime::get().symbol_table().intern(def.name());
+
+        let def = match def {
+            Definition::NativeProcedure(name, proc) => {
+                let name = Str::new(thread, name);
+                let proc = Procedure {
+                    id: Procedure::new_id(),
+                    module,
+                    kind: ProcedureKind::Primitive(name, proc, None),
+                };
+
+                Value::new(thread.allocate(proc))
+            }
+            Definition::Special(name, form) => {
+                let name = Str::new(thread, name);
+                let special = SpecialForm {
+                    original_name: Some(name),
+                    kind: form,
+                };
+
+                Value::new(thread.allocate(special))
+            }
+            Definition::Value(_, val) => val,
+            _ => todo!(),
+        };
+
+        if constant {
+            self.define_const(module, sym, def, export);
+        } else {
+            self.define(module, sym, def, export);
+        }
     }
 }
 
@@ -608,4 +767,46 @@ pub(crate) fn init(manager: &mut LibraryManager) {
         car: mpl.car(),
         cdr: Value::nil(),
     }));
+}
+
+pub enum Definition<'a> {
+    Special(&'a str, Form),
+    NativeProcedure(&'a str, Implementation),
+    Value(&'a str, Value),
+    ClosureSource(&'a str, String, &'a [&'a str]),
+}
+
+impl<'a, T: Into<Implementation>> Into<Definition<'a>> for (&'a str, T) {
+    fn into(self) -> Definition<'a> {
+        Definition::NativeProcedure(self.0, self.1.into())
+    }
+}
+
+impl<'a> Into<Definition<'a>> for (&'a str, Form) {
+    fn into(self) -> Definition<'a> {
+        Definition::Special(self.0, self.1)
+    }
+}
+
+impl<'a> Into<Definition<'a>> for (&'a str, String, &'a [&'a str]) {
+    fn into(self) -> Definition<'a> {
+        Definition::ClosureSource(self.0, self.1, self.2)
+    }
+}
+
+impl<'a> Definition<'a> {
+    pub fn name(&self) -> &'a str {
+        match self {
+            Definition::Special(name, _) => name,
+            Definition::NativeProcedure(name, _) => name,
+            Definition::ClosureSource(name, _, _) => name,
+            Definition::Value(name, _) => name,
+        }
+    }
+}
+
+impl<'a> Into<Definition<'a>> for (&'a str, FormCompiler) {
+    fn into(self) -> Definition<'a> {
+        Definition::Special(self.0, Form::Primitive(self.1))
+    }
 }

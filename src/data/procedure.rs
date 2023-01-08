@@ -97,7 +97,7 @@ impl Allocation for Procedure {}
 pub enum ProcedureKind {
     Primitive(Handle<Str>, Implementation, Option<FormCompiler>),
     Parameter(Handle<Pair>),
-    Closure(ClosureType, Value, Handle<Array<Value>>, Handle<Code>),
+    Closure(ClosureType, Value, Handle<Array<Handle<Upvalue>>>, Handle<Code>),
     RawContinuation(SavedState),
     Transformer(Handle<SyntaxRules>),
 }
@@ -152,6 +152,18 @@ pub enum Implementation {
     Native1R(fn(&mut Context, Value, &Arguments) -> Value),
     Native2R(fn(&mut Context, Value, Value, &Arguments) -> Value),
     Native3R(fn(&mut Context, Value, Value, Value, &Arguments) -> Value),
+}
+
+impl Into<Implementation> for fn(&mut Context, &Arguments) -> (Handle<Procedure>, ArrayList<Value>) {
+    fn into(self) -> Implementation {
+        Implementation::Apply(self)
+    }
+}
+
+impl Into<Implementation> for fn(&mut Context, &Arguments) -> Handle<Code> {
+    fn into(self) -> Implementation {
+        Implementation::Eval(self)
+    }
 }
 
 impl Into<Implementation> for fn(&mut Context) -> Value {

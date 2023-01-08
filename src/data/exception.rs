@@ -126,8 +126,16 @@ impl Exception {
             irritants,
             descriptor: ExceptionDescriptor::ArgumentCount(
                 name,
-                min as _,
-                max as _
+                if min == usize::MAX {
+                    i32::MAX 
+                } else {
+                    min as _
+                },
+                if max == usize::MAX {
+                    i32::MAX 
+                } else {
+                    max as _ 
+                }
             ),
             calltrace: None,
             stacktrace: None

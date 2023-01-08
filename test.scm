@@ -1,1 +1,5 @@
-(load "test2.scm")
+(begin
+    1
+    2
+    3
+    4)
