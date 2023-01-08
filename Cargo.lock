@@ -39,6 +39,7 @@ dependencies = [
  "dashmap",
  "env_logger",
  "libc",
+ "log",
  "memoffset 0.8.0",
  "once_cell",
  "r7rs-parser",

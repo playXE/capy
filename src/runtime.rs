@@ -229,7 +229,8 @@ impl Runtime {
 pub fn scm_main_thread<R>(f: impl Fn(&mut Context) -> R) -> R {
     let args = HeapArguments::from_env();
     let f = AssertUnwindSafe(f);
-    match rsgc::thread::main_thread(args, move |_| unsafe {
+    match rsgc::thread::main_thread(args, move |heap| unsafe {
+        heap.add_core_root_set();
         let rt = Runtime::new(rsgc::heap::heap::heap());
         let main_ctx = Context::new(rt, 1024, Thread::current());
         let res = f(main_ctx);

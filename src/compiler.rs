@@ -65,7 +65,6 @@ pub enum Access {
 }
 
 impl Environment {
-
     pub fn bind_to_cc(&mut self, cc: *const Compiler) {
         match self {
             Self::Global((_, lenv)) => lenv.cc = cc,
@@ -77,18 +76,16 @@ impl Environment {
         &mut self,
         ctx: &mut Context,
         sym: Handle<Symbol>,
-        mut incr: impl FnMut() -> usize
+        mut incr: impl FnMut() -> usize,
     ) -> usize {
         match self {
             Self::Global((_, lenv)) => {
-                
-                    if let Some(binding) = lenv.vars.get(&sym) {
-                        return binding.get_int32() as usize;
-                    }
-                    let key = incr();
-                    lenv.vars.put(ctx.mutator(), sym, Value::new(key as i32));
-                    return key;
-                
+                if let Some(binding) = lenv.vars.get(&sym) {
+                    return binding.get_int32() as usize;
+                }
+                let key = incr();
+                lenv.vars.put(ctx.mutator(), sym, Value::new(key as i32));
+                return key;
             }
 
             Self::Local(env) => {
@@ -135,14 +132,18 @@ impl Environment {
         }
     }
 
-    pub fn lookup(&mut self, ctx: &mut Context, sym: Handle<Symbol>, mut captures: Handle<HashMap<Handle<Symbol>, Value>>) -> Access {
+    pub fn lookup(
+        &mut self,
+        ctx: &mut Context,
+        sym: Handle<Symbol>,
+        mut captures: Handle<HashMap<Handle<Symbol>, Value>>,
+    ) -> Access {
         let mut env = self;
         let initial = match env {
             Self::Global((_, lenv)) => lenv.cc,
             Self::Local(lenv) => lenv.cc,
         };
         loop {
-            let p = env as *const Self;
             match env {
                 Self::Global((library, local)) => {
                     if let Some(index) = local.vars.get(&sym) {
@@ -162,8 +163,6 @@ impl Environment {
                                             sym,
                                             Value::new(capture as i32),
                                         );
-
-                                        println!("capture {}<-{} ({:p}", sym.to_string(), capture, captures);
 
                                         return Access::Env(capture);
                                     }
@@ -210,7 +209,6 @@ impl Environment {
                                             Value::new(capture as i32),
                                         );
 
-                                        println!("capture {}<-{} {:p}", sym.to_string(), capture, p);
                                         return Access::Env(capture);
                                     }
                                 }
@@ -238,28 +236,35 @@ pub struct Compiler {
     pub num_locals: usize,
     pub max_locals: usize,
     pub captures: Handle<HashMap<Handle<Symbol>, Value>>,
-    pub capture_array: ArrayList<ArrayList<Capture>>
+    pub capture_array: ArrayList<ArrayList<Capture>>,
+    pub toplevel: bool,
 }
 
 impl Compiler {
-
-    pub fn with_library<R>(&mut self,library: Handle<Library>, ctx: &mut Context, callback: impl FnOnce(&mut Context, &mut Self) -> R) -> R {
-        let env = Environment::Global(
-            (library,
+    pub fn with_library<R>(
+        &mut self,
+        library: Handle<Library>,
+        ctx: &mut Context,
+        callback: impl FnOnce(&mut Context, &mut Self) -> R,
+    ) -> R {
+        let env = Environment::Global((
+            library,
             LocalEnv {
                 vars: HashMap::with_hasher(RandomState::new()),
                 captures: self.captures,
                 parent: None,
-                cc: self as *const Self
-            })
-        );
+                cc: self as *const Self,
+            },
+        ));
         let saved = self.env;
         self.env = ctx.mutator().allocate(env);
-        ctx.try_finally(self, |ctx, cc| {
-            callback(ctx, cc)
-        }, |_, cc| {
-            cc.env = saved;
-        })
+        ctx.try_finally(
+            self,
+            |ctx, cc| callback(ctx, cc),
+            |_, cc| {
+                cc.env = saved;
+            },
+        )
     }
 
     pub fn add_constant(&mut self, ctx: &mut Context, value: Value) -> usize {
@@ -302,6 +307,11 @@ impl Compiler {
 
         n
     }
+
+    pub fn offset_to_next(&self, ip: isize) -> isize {
+        self.code.len() as isize - ip - 1
+    }
+
     pub fn next_local_index(&mut self) -> usize {
         let index = self.num_locals;
         self.num_locals += 1;
@@ -311,15 +321,217 @@ impl Compiler {
         index
     }
 
-
-    pub fn compile_bindings(&mut self, ctx: &mut Context, binding_list: Value, lenv: Handle<Environment>, atomic: bool, predef: bool, postset: bool) -> Handle<Environment> {
+    pub fn compile_multi_bindings(
+        &mut self,
+        ctx: &mut Context,
+        binding_list: Value,
+        lenv: Handle<Environment>,
+        atomic: bool,
+        predef: bool,
+    ) -> Handle<Environment> {
         let lgroup = LocalEnv {
             vars: HashMap::with_hasher(RandomState::new()),
             captures: self.captures,
             parent: Some(self.env),
-            cc: self as *const Self
+            cc: self as *const Self,
         };
-        
+
+        let mut group = ctx.mutator().allocate(Environment::Local(lgroup));
+        let env = if atomic && !predef {
+            lenv
+        } else {
+            self.env = group;
+            group
+        };
+
+        let mut bindings = binding_list;
+        if predef {
+            while bindings.is_pair() && bindings.car().is_pair() {
+                let rest = bindings.cdr();
+                let variables = bindings.car().car();
+
+                let mut vars = variables;
+
+                while vars.is_pair() && vars.car().is_symbol() {
+                    let binding =
+                        group.add_binding(ctx, vars.car().get_symbol(), || self.next_local_index());
+
+                    self.emit(ctx, Ins::PushUndef);
+                    self.emit(ctx, Ins::MakeLocalVariable(binding as _));
+
+                    vars = vars.cdr();
+                }
+
+                bindings = rest;
+            }
+
+            bindings = binding_list
+        }
+
+        let mut prev_index = -1;
+
+        while bindings.is_pair() {
+            let variables = bindings.car();
+            if !bindings.cdr().is_pair() {
+                let exc = Exception::eval(
+                    ctx,
+                    EvalError::MalformedBinding,
+                    &[variables, bindings],
+                    SourcePosition::unknown(),
+                );
+                ctx.error(exc);
+            }
+
+            let init = bindings.cdr().car();
+            let rest = bindings.cdr().cdr();
+
+            let old = self.env;
+            self.env = env;
+            self.compile(ctx, init, false);
+            self.env = old;
+
+            let mut vars = variables;
+            let mut syms = ArrayList::new(ctx.mutator());
+            while vars.is_pair() && vars.car().is_symbol() {
+                syms.push(ctx.mutator(), vars.car().get_symbol());
+                vars = vars.cdr();
+            }
+
+            if vars.is_null() {
+                self.emit(ctx, Ins::Unpack(syms.len() as _, false));
+            } else if vars.is_symbol() {
+                self.emit(ctx, Ins::Unpack(syms.len() as _, true));
+                let binding = group.add_binding(ctx, vars.get_symbol(), || self.next_local_index());
+                self.emit(ctx, Ins::SetLocal(binding as _));
+                prev_index = binding as _;
+            } else {
+                let exc = Exception::eval(
+                    ctx,
+                    EvalError::MalformedBinding,
+                    &[variables, binding_list],
+                    SourcePosition::unknown(),
+                );
+                ctx.error(exc);
+            }
+
+            for sym in syms.iter().rev() {
+                let binding = group.add_binding(ctx, *sym, || self.next_local_index());
+
+                if predef || (binding as isize) > prev_index {
+                    self.emit(ctx, Ins::SetLocal(binding as _));
+                    prev_index = binding as _;
+                } else {
+                    let exc = Exception::eval(
+                        ctx,
+                        EvalError::DuplicateBinding,
+                        &[Value::new(*sym), binding_list],
+                        SourcePosition::unknown(),
+                    );
+                    ctx.error(exc);
+                }
+            }
+
+            bindings = rest;
+        }
+
+        /*println!("multi: {}", bindings.to_string(true));
+        while bindings.is_pair() {
+            let binding = bindings.car();
+            let rest = bindings.cdr();
+            println!("vars: {}",  binding.to_string(false));
+            println!("rest: {}", rest.to_string(false));
+            if binding.is_pair() && binding.cdr().is_pair() && binding.cdr().cdr().is_null() {
+                let variables = binding.car();
+
+                let expr = binding.cdr().car();
+                let old = self.env;
+                self.env = env;
+                self.compile(ctx, expr, false);
+                self.env = old;
+                let mut vars = variables;
+                let mut syms = ArrayList::new(ctx.mutator());
+                while vars.is_pair() && vars.car().is_symbol() {
+                    syms.push(ctx.mutator(), vars.car().get_symbol());
+                    vars = vars.cdr();
+                }
+
+                if vars.is_null() {
+                    self.emit(ctx, Ins::Unpack(syms.len() as _, false));
+                } else if vars.is_symbol() {
+                    self.emit(ctx, Ins::Unpack(syms.len() as _, true));
+                    let binding = group.add_binding(ctx, vars.get_symbol(), || self.next_local_index());
+                    self.emit(ctx, Ins::SetLocal(binding as _));
+                    prev_index = binding as _;
+                } else {
+
+                    let exc = Exception::eval(
+                        ctx,
+                        EvalError::MalformedBinding,
+                        &[binding, binding_list],
+                        SourcePosition::unknown(),
+                    );
+                    ctx.error(exc);
+                }
+
+                for sym in syms.iter().rev() {
+                    let binding = group.add_binding(ctx, *sym, || self.next_local_index());
+
+                    if predef || (binding as isize) > prev_index {
+                        self.emit(ctx, Ins::SetLocal(binding as _));
+                        prev_index = binding as _;
+                    } else {
+                        let exc = Exception::eval(
+                            ctx,
+                            EvalError::DuplicateBinding,
+                            &[Value::new(*sym), binding_list],
+                            SourcePosition::unknown(),
+                        );
+                        ctx.error(exc);
+                    }
+                }
+
+                bindings = rest;
+            } else {
+
+                let exc = Exception::eval(
+                    ctx,
+                    EvalError::MalformedBinding,
+                    &[binding, binding_list],
+                    SourcePosition::unknown(),
+                );
+                ctx.error(exc);
+            }
+        }*/
+
+        if !bindings.is_null() {
+            let exc = Exception::eval(
+                ctx,
+                EvalError::MalformedBindings,
+                &[binding_list],
+                SourcePosition::unknown(),
+            );
+            ctx.error(exc);
+        }
+
+        group
+    }
+
+    pub fn compile_bindings(
+        &mut self,
+        ctx: &mut Context,
+        binding_list: Value,
+        lenv: Handle<Environment>,
+        atomic: bool,
+        predef: bool,
+        postset: bool,
+    ) -> Handle<Environment> {
+        let lgroup = LocalEnv {
+            vars: HashMap::with_hasher(RandomState::new()),
+            captures: self.captures,
+            parent: Some(self.env),
+            cc: self as *const Self,
+        };
+
         let mut group = ctx.mutator().allocate(Environment::Local(lgroup));
         let env = if atomic && !predef {
             lenv
@@ -331,20 +543,18 @@ impl Compiler {
         let mut bindings = binding_list;
 
         if predef || postset {
+            while bindings.is_pair()
+                && (bindings.car().is_pair() && bindings.car().car().is_symbol())
+            {
+                let sym = bindings.car().car().get_symbol();
 
-            while bindings.is_pair() 
-                && (bindings.car().is_pair()  && bindings.car().car().is_symbol())
-                {
-                    let sym = bindings.car().car().get_symbol();
+                let index = group.add_binding(ctx, sym, || self.next_local_index());
 
-                    let index = self.num_locals;
-                    self.num_locals += 1;
+                self.emit(ctx, Ins::PushUndef);
+                self.emit(ctx, Ins::MakeLocalVariable(index as _));
 
-                    self.emit(ctx, Ins::PushUndef);
-                    self.emit(ctx, Ins::MakeLocalVariable(index as _));
-                    group.add_binding(ctx, sym, || self.next_local_index());
-                    bindings = bindings.cdr();
-                }
+                bindings = bindings.cdr();
+            }
 
             bindings = binding_list
         }
@@ -355,10 +565,14 @@ impl Compiler {
             let binding = bindings.car();
             let rest = bindings.cdr();
 
-            if binding.is_pair() && binding.car().is_symbol() && binding.cdr().is_pair() && binding.cdr().cdr().is_null() {
+            if binding.is_pair()
+                && binding.car().is_symbol()
+                && binding.cdr().is_pair()
+                && binding.cdr().cdr().is_null()
+            {
                 let sym = binding.car().get_symbol();
                 let expr = binding.cdr().car();
-                
+
                 let old = self.env;
                 self.env = env;
                 self.compile(ctx, expr, false);
@@ -366,9 +580,13 @@ impl Compiler {
                 let binding = group.add_binding(ctx, sym, || self.next_local_index());
 
                 if !atomic || (predef && !postset) || binding as isize > prev_index {
-
                 } else {
-                    let exc = Exception::eval(ctx, EvalError::DuplicateBinding, &[Value::new(sym)], SourcePosition::unknown());
+                    let exc = Exception::eval(
+                        ctx,
+                        EvalError::DuplicateBinding,
+                        &[Value::new(sym)],
+                        SourcePosition::unknown(),
+                    );
                     ctx.error(exc);
                 }
 
@@ -380,12 +598,16 @@ impl Compiler {
                 prev_index = binding as isize;
             }
 
-
             bindings = rest;
         }
 
         if !bindings.is_null() {
-            let exc = Exception::eval(ctx, EvalError::MalformedBindings, &[binding_list], SourcePosition::unknown());
+            let exc = Exception::eval(
+                ctx,
+                EvalError::MalformedBindings,
+                &[binding_list],
+                SourcePosition::unknown(),
+            );
             ctx.error(exc);
         }
 
@@ -394,7 +616,6 @@ impl Compiler {
         }
 
         group
-
     }
 
     pub fn build(
@@ -408,11 +629,12 @@ impl Compiler {
             vars: HashMap::with_hasher(RandomState::new()),
             captures,
             parent: None,
-            cc: null()
+            cc: null(),
         };
         let fragments = ArrayList::new(ctx.mutator());
         let arguments = ArrayList::new(ctx.mutator());
         let mut this = Compiler {
+            toplevel: true,
             env: ctx
                 .mutator()
                 .allocate(Environment::Global((library, local))),
@@ -430,16 +652,15 @@ impl Compiler {
         let p = &this as *const Compiler;
         this.env.bind_to_cc(p);
 
-
         this.compile_body(ctx, form, Value::nil(), false);
-        
+
         let code = ctx.mutator().allocate(Code {
             instructions: this.code,
             constants: this.constants,
             fragments: this.fragments,
             arity: Default::default(),
             module: library,
-            captures: this.capture_array
+            captures: this.capture_array,
         });
 
         println!("code: {:?}", code.instructions);
@@ -456,7 +677,7 @@ impl Compiler {
             fragments: this.fragments,
             arity: Default::default(),
             module: this.library,
-            captures: this.capture_array
+            captures: this.capture_array,
         })
     }
 
@@ -589,11 +810,12 @@ impl Compiler {
         let arguments = ArrayList::new(ctx.mutator());
         let captures = HashMap::with_hasher(RandomState::new());
         let mut closure_cc = Compiler {
+            toplevel: false,
             env: ctx.mutator().allocate(Environment::Local(LocalEnv {
                 vars: HashMap::with_hasher(RandomState::new()),
                 captures,
                 parent: Some(self.env.clone()),
-                cc: null()
+                cc: null(),
             })),
             code: ArrayList::new(ctx.mutator()),
             constants: ArrayList::new(ctx.mutator()),
@@ -606,7 +828,6 @@ impl Compiler {
             max_locals: 0,
             capture_array: ArrayList::new(ctx.mutator()),
         };
-
 
         let p = &closure_cc as *const Compiler;
         closure_cc.env.bind_to_cc(p);
@@ -664,7 +885,12 @@ impl Compiler {
 
             let proc = Procedure {
                 id: Procedure::new_id(),
-                kind: ProcedureKind::Closure(typ, Value::nil(), Array::new(ctx.mutator(), 0, |_,_| unreachable!()), code),
+                kind: ProcedureKind::Closure(
+                    typ,
+                    Value::nil(),
+                    Array::new(ctx.mutator(), 0, |_, _| unreachable!()),
+                    code,
+                ),
                 module: library,
             };
 
@@ -679,27 +905,27 @@ impl Compiler {
             let mut capture_array = ArrayList::new(ctx.mutator());
 
             for (name, _) in captures.iter() {
-                println!("capture {}", name.to_string());
                 match self.env.lookup(ctx, *name, self.captures) {
-                    Access::Env(env) => {
-                        capture_array.push(ctx.mutator(), Capture {
+                    Access::Env(env) => capture_array.push(
+                        ctx.mutator(),
+                        Capture {
                             local: false,
-                            index: env
-                        })
-                    }
-                    Access::Local(env) => {
-                        capture_array.push(ctx.mutator(), Capture {
+                            index: env,
+                        },
+                    ),
+                    Access::Local(env) => capture_array.push(
+                        ctx.mutator(),
+                        Capture {
                             local: true,
-                            index: env
-                        })
-                    }
+                            index: env,
+                        },
+                    ),
 
-                    _ => unreachable!()
+                    _ => unreachable!(),
                 }
             }
             let ix = self.capture_array.len();
             self.capture_array.push(ctx.mutator(), capture_array);
-            
 
             if tagged {
                 self.emit(
@@ -736,7 +962,7 @@ impl Compiler {
     }
 
     pub fn check_toplevel(&mut self, ctx: &mut Context, form: Value, pos: SourcePosition) {
-        if let Environment::Local(_) = &*self.env {
+        if !self.toplevel {
             let exc = Exception::eval(ctx, EvalError::TopLevelForm, &[form], pos);
             ctx.error(exc);
         }
@@ -792,7 +1018,7 @@ impl Compiler {
             Value::new(ctx.mutator().allocate(Vector {
                 mutable: form.mutable,
                 growable: form.growable,
-                elements: vec
+                elements: vec,
             }))
         } else if form.is_handle_of::<Syntax>() {
             let syntax = form.get_handle_of::<Syntax>();
@@ -907,7 +1133,7 @@ impl Compiler {
     pub fn call(&mut self, ctx: &mut Context, n: usize, tail: bool) -> bool {
         if tail {
             self.emit(ctx, Ins::TailCall(n as _));
-            true 
+            true
         } else {
             self.emit(ctx, Ins::Call(n as _));
             false
@@ -953,11 +1179,10 @@ pub fn r7rs_to_value(ctx: &mut Context, source_id: u32, expr: &Expr<NoIntern>) -
     }
 }
 
-
 #[derive(Clone, Copy)]
 pub struct Capture {
     pub index: u16,
-    pub local: bool
+    pub local: bool,
 }
 
 impl Object for Capture {}

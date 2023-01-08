@@ -1184,6 +1184,7 @@ impl Context {
 
     pub(crate) unsafe fn execute(&mut self) -> Value {
         loop {
+            //rsgc::heap::heap::heap().request_gc();
             let ip = self.registers.ip;
             self.registers.ip = ip + 1;
             debug_assert!(ip < self.registers.code.instructions.len());
@@ -1767,6 +1768,7 @@ impl Context {
         }
     }
 
+    #[cold]
     pub fn error(&mut self, exception: Handle<Exception>) -> ! {
         std::panic::resume_unwind(Box::new(exception))
     }
