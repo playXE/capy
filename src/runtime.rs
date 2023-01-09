@@ -32,7 +32,7 @@ pub struct Runtime {
     pub(crate) file_manager: Mutex<FileManager>,
     pub(crate) source_manager: Mutex<SourceManager>,
     pub(crate) loader: Value,
-    pub(crate) open_upvalues: Mutex<Option<Handle<Upvalue>>>,
+    pub(crate) identity: Value,
 }
 
 static mut RT: *mut Runtime = null_mut();
@@ -73,67 +73,7 @@ impl Runtime {
         }
     }
 
-    pub(crate) unsafe fn close_upvalues(&self, after: *const Value) {
-        let mut lock = self.open_upvalues.lock(true);
-        let mut ls = *lock;
-        let mut prev: Option<Handle<Upvalue>> = None;
-
-        while let Some(upval) = ls {
-            let next = upval.next();
-            let (val, stack_start, stack_end) = upval.stack_location();
-
-            // Check that the upvalue points to correct stack and that it is not closed already.
-            if stack_start >= after as usize && val >= after as *mut Value && stack_end > after as usize {
-                upval.close();
-                if let Some(prev) = prev {
-                    prev.set_next(upval.next());
-                } else {
-                    *lock = upval.next();
-                }
-            } else {
-                prev = Some(upval);
-            }
-
-            ls = next;
-        }
-    }
-
-
-    #[allow(dead_code)]
-    pub(crate) unsafe fn find_upvalue(&self, val: *const Value) -> Option<Handle<Upvalue>> {
-        let lock = self.open_upvalues.lock(true);
-        let mut ls = *lock;
-
-        while let Some(upval) = ls {
-            let (upval_val, stack_start, stack_end) = upval.stack_location();
-            if upval_val == val as *mut Value && stack_start <= val as usize && stack_end > val as usize {
-                return Some(upval);
-            }
-            ls = upval.next();
-        }
-
-        None
-    }
-
-    pub(crate) unsafe fn push_upvalues(&self, upvalues: Handle<Upvalue>) {
-        let mut lock = self.open_upvalues.lock(true);
-        let mut ls = *lock;
-
-        if ls.is_none() {
-            *lock = Some(upvalues);
-            return;
-        }
-
-        while let Some(upval) = ls {
-            let next = upval.next();
-            if next.is_none() {
-                upval.set_next(Some(upvalues));
-                break;
-            }
-            ls = next;
-        }
-    }
-
+    
     pub fn new(heap: &'static mut Heap) -> &'static mut Self {
         let thr = Thread::current();
 
@@ -146,6 +86,7 @@ impl Runtime {
             heap,
             eof: Value::new(eof),
             documentation: DashMap::new(),
+            identity: Value::nil(),
             void: Value::new(void),
             contexts: Mutex::new(null_mut()),
             empty_array,
@@ -154,7 +95,6 @@ impl Runtime {
             loader: Value::nil(),
             source_manager: Mutex::new(SourceManager::new()),
             file_manager: Mutex::new(FileManager::new()),
-            open_upvalues: Mutex::new(None),
         }));
 
         unsafe {
@@ -194,21 +134,10 @@ impl Runtime {
 
                 rt.symtab.trace(processor.visitor());
                 rt.loader.trace(processor.visitor());
-
+                rt.identity.trace(processor.visitor());
                 for node in rt.documentation.iter() {
                     processor.visitor().visit(*node.key() as *const u8);
                 }
-
-                let open_upvalues = rt.open_upvalues.lock(false);
-
-                let mut upvalue = *open_upvalues;
-
-                while let Some(val) = upvalue {
-                    val.trace(processor.visitor());
-                    upvalue = unsafe { val.next() };
-                }
-
-                drop(open_upvalues);
             }));
 
         let _ = library_manager();

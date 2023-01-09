@@ -4,9 +4,15 @@ use r7rs_parser::{
     lexer::{lexical_error::LexicalError, scanner::Position},
     parser::syntax_error::SyntaxError,
 };
-use rsgc::{system::{array::Array, object::Handle, string::Str}, prelude::{Object, Allocation}};
+use rsgc::{
+    prelude::{Allocation, Object},
+    system::{array::Array, object::Handle, string::Str},
+};
 
-use crate::{prelude::{eval_error::EvalError, Type, Value, Context, Procedure}, utilities::arraylist::ArrayList};
+use crate::{
+    prelude::{eval_error::EvalError, Context, Procedure, Type, Value},
+    utilities::arraylist::ArrayList,
+};
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct SourcePosition {
@@ -45,13 +51,11 @@ impl Object for Exception {
         self.calltrace.trace(visitor);
         self.descriptor.trace(visitor);
     }
-    
 }
 
 impl Allocation for Exception {}
 
 impl Exception {
-
     pub(crate) fn attach_ctx(&mut self, ctx: &mut Context, current: Option<Handle<Procedure>>) {
         if self.stacktrace.is_none() {
             self.stacktrace = Some(ctx.get_stack_trace(current));
@@ -61,47 +65,92 @@ impl Exception {
             //self.calltrace = ctx.get_call_trace(current, None);
         }
     }
-    
-    pub fn lexical(ctx: &mut Context, err: LexicalError, irritants: &[Value], pos :SourcePosition) -> Handle<Exception> {
+
+    pub fn type_error(
+        ctx: &mut Context,
+        expected: &[Type],
+        got: Value,
+        pos: SourcePosition,
+    ) -> Handle<Exception> {
+        let mut irritants = Array::new(ctx.mutator(), 1, |_, _| Value::nil());
+        irritants[0] = got;
+        let mut aexpected = ArrayList::with_capacity(ctx.mutator(), expected.len());
+        for e in expected.iter().copied() {
+            aexpected.push(ctx.mutator(), e);
+        }
+
+        let this = ctx.mutator().allocate(Exception {
+            pos,
+            irritants,
+            calltrace: None,
+            stacktrace: None,
+            descriptor: ExceptionDescriptor::Type(got.typ(), aexpected),
+        });
+
+        this
+    }
+
+    pub fn lexical(
+        ctx: &mut Context,
+        err: LexicalError,
+        irritants: &[Value],
+        pos: SourcePosition,
+    ) -> Handle<Exception> {
         let irritants = Array::new(ctx.mutator(), irritants.len(), |_, ix| irritants[ix]);
         let this = ctx.mutator().allocate(Exception {
             pos,
             irritants,
             calltrace: None,
             stacktrace: None,
-            descriptor: ExceptionDescriptor::Lexical(err)
+            descriptor: ExceptionDescriptor::Lexical(err),
         });
 
         this
     }
 
-    pub fn syntax(ctx: &mut Context, err: SyntaxError, irritants: &[Value], pos :SourcePosition) -> Handle<Exception> {
+    pub fn syntax(
+        ctx: &mut Context,
+        err: SyntaxError,
+        irritants: &[Value],
+        pos: SourcePosition,
+    ) -> Handle<Exception> {
         let irritants = Array::new(ctx.mutator(), irritants.len(), |_, ix| irritants[ix]);
         let this = ctx.mutator().allocate(Exception {
             pos,
             irritants,
             calltrace: None,
             stacktrace: None,
-            descriptor: ExceptionDescriptor::Syntax(err)
+            descriptor: ExceptionDescriptor::Syntax(err),
         });
 
         this
     }
 
-    pub fn eval(ctx: &mut Context, err: EvalError, irritants: &[Value], pos :SourcePosition) -> Handle<Exception> {
+    pub fn eval(
+        ctx: &mut Context,
+        err: EvalError,
+        irritants: &[Value],
+        pos: SourcePosition,
+    ) -> Handle<Exception> {
         let irritants = Array::new(ctx.mutator(), irritants.len(), |_, ix| irritants[ix]);
         let this = ctx.mutator().allocate(Exception {
             pos,
             irritants,
             calltrace: None,
             stacktrace: None,
-            descriptor: ExceptionDescriptor::Eval(err)
+            descriptor: ExceptionDescriptor::Eval(err),
         });
 
         this
     }
 
-    pub fn custom(ctx: &mut Context, kind: &str, template: &str, irritants: &[Value], pos :SourcePosition) -> Handle<Exception> {
+    pub fn custom(
+        ctx: &mut Context,
+        kind: &str,
+        template: &str,
+        irritants: &[Value],
+        pos: SourcePosition,
+    ) -> Handle<Exception> {
         let irritants = Array::new(ctx.mutator(), irritants.len(), |_, ix| irritants[ix]);
         let kind = Str::new(ctx.mutator(), kind);
         let template = Str::new(ctx.mutator(), template);
@@ -110,15 +159,22 @@ impl Exception {
             irritants,
             calltrace: None,
             stacktrace: None,
-            descriptor: ExceptionDescriptor::Custom(kind, template)
+            descriptor: ExceptionDescriptor::Custom(kind, template),
         });
 
         this
     }
 
-    pub fn argument_count(ctx: &mut Context, of: Option<&str>, min: usize, max: usize, args: Value, pos :SourcePosition) -> Handle<Exception> {
+    pub fn argument_count(
+        ctx: &mut Context,
+        of: Option<&str>,
+        min: usize,
+        max: usize,
+        args: Value,
+        pos: SourcePosition,
+    ) -> Handle<Exception> {
         let mut irritants = Array::new(ctx.mutator(), 2, |_, _| Value::nil());
-        irritants[0] = Value::new(args.length() as i32); 
+        irritants[0] = Value::new(args.length() as i32);
         irritants[1] = args;
         let name = of.map(|s| Str::new(ctx.mutator(), s));
         let this = ctx.mutator().allocate(Exception {
@@ -127,25 +183,29 @@ impl Exception {
             descriptor: ExceptionDescriptor::ArgumentCount(
                 name,
                 if min == usize::MAX {
-                    i32::MAX 
+                    i32::MAX
                 } else {
                     min as _
                 },
                 if max == usize::MAX {
-                    i32::MAX 
+                    i32::MAX
                 } else {
-                    max as _ 
-                }
+                    max as _
+                },
             ),
             calltrace: None,
-            stacktrace: None
+            stacktrace: None,
         });
 
         this
     }
 
     pub fn message(&self) -> String {
-        Self::replace_placeholders(&self.descriptor.message_template(), &self.irritants, &mut Default::default())
+        Self::replace_placeholders(
+            &self.descriptor.message_template(),
+            &self.irritants,
+            &mut Default::default(),
+        )
     }
 
     pub fn inline_description(&self) -> String {
@@ -203,7 +263,6 @@ impl Exception {
                             }
                             continue;
                         }
-                        
                     }
                     _ => {
                         if variable.is_empty() {
@@ -234,7 +293,7 @@ impl Exception {
                         variable.clear();
                         parsing_variable = false;
                         embed_variable = false;
-                    },
+                    }
                     _ => {
                         res.push('$');
                         if embed_variable {
@@ -265,9 +324,9 @@ impl Exception {
         }
 
         if parsing_variable {
-            let varnum = variable.parse::<i32>().ok(); 
+            let varnum = variable.parse::<i32>().ok();
 
-            if let Some(varnum) = varnum.filter(|&x| x>= 0 && x < values.len() as i32) {
+            if let Some(varnum) = varnum.filter(|&x| x >= 0 && x < values.len() as i32) {
                 let var = values[varnum as usize];
 
                 if embed_variable {
@@ -296,7 +355,7 @@ pub enum ExceptionDescriptor {
     Syntax(SyntaxError),
     Range(Option<Handle<Str>>, Option<isize>, i32, i32),
     ArgumentCount(Option<Handle<Str>>, i32, i32),
-    Type(Type, Handle<Array<Type>>),
+    Type(Type, ArrayList<Type>),
     Eval(EvalError),
     OS(Handle<Str>),
     Abortion,

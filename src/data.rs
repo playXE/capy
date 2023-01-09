@@ -7,3 +7,4 @@ pub mod special_form;
 pub mod symbol;
 pub mod value;
 pub mod library;
+pub mod equality;

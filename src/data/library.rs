@@ -614,7 +614,7 @@ impl LibraryManager {
         def: impl Into<Definition<'a>>,
         constant: bool,
         export: bool
-    ) {
+    ) -> Value {
         let def = def.into();
         let sym = Runtime::get().symbol_table().intern(def.name());
 
@@ -647,6 +647,8 @@ impl LibraryManager {
         } else {
             self.define(module, sym, def, export);
         }
+
+        def
     }
 }
 

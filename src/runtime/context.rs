@@ -1,11 +1,11 @@
 #![allow(dead_code)]
 use std::{
-    cell::{Cell, UnsafeCell},
+    cell::Cell,
     hash::Hash,
     intrinsics::likely,
     panic::{AssertUnwindSafe, RefUnwindSafe, UnwindSafe},
     ptr::null_mut,
-    sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize},
+    sync::atomic::{AtomicUsize, AtomicI32},
 };
 
 use r7rs_parser::{
@@ -33,10 +33,12 @@ pub struct Context {
     pub(crate) stack: Vec<Value>,
     pub(crate) sp: usize,
     registers: Registers,
-    winders: Option<Handle<Winder>>,
+    pub(crate) winders: Option<Handle<Winder>>,
     rt: &'static mut Runtime,
     limit_sp: usize,
     thread: &'static mut Thread,
+
+    open_upvalues: Option<Handle<Upvalue>>,
 
     pub(crate) next: *mut Context,
     pub(crate) prev: *mut Context,
@@ -64,6 +66,7 @@ impl Context {
             rt,
             limit_sp,
             thread,
+            open_upvalues: None,
             stack,
             sp: 0,
             next: null_mut(),
@@ -201,18 +204,14 @@ impl Context {
     }
 
     #[cold]
-    fn push_slow(&mut self, v: Value) {
-        self.stack.push(v);
-
-        if self.sp >= self.limit_sp {
-            let exc = Exception::eval(
-                self,
-                EvalError::StackOverflow,
-                &[],
-                SourcePosition::unknown(),
-            );
-            self.error(exc);
-        }
+    fn push_slow(&mut self, _: Value) {
+        let exc = Exception::eval(
+            self,
+            EvalError::StackOverflow,
+            &[],
+            SourcePosition::unknown(),
+        );
+        self.error(exc);
     }
 
     #[inline]
@@ -238,8 +237,8 @@ impl Context {
             let v = unsafe { *self.stack.get_unchecked(i as usize) };
             v.trace(visitor);
         }
-        self.registers.code.trace(visitor);
-        self.registers.captured.trace(visitor);
+        self.registers.trace(visitor);
+        self.open_upvalues.trace(visitor);
         if let Some(winders) = self.winders {
             winders.trace(visitor);
         }
@@ -451,7 +450,7 @@ impl Context {
 
                         self.popn(overhead);
                         let res = exec(self);
-                        self.stack.push(res);
+                        self.push(res);
                         *n = 0;
                         return Some(proc);
                     }
@@ -469,11 +468,11 @@ impl Context {
                             );
                             self.error(exc);
                         }
-
-                        self.popn(overhead);
                         let arg = self.pop();
+                        self.popn(overhead);
+                        
                         let res = exec(self, arg);
-                        self.stack.push(res);
+                        self.push(res);
                         *n = 0;
                         return Some(proc);
                     }
@@ -491,12 +490,11 @@ impl Context {
                             );
                             self.error(exc);
                         }
-
-                        self.popn(overhead);
                         let arg2 = self.pop();
                         let arg1 = self.pop();
+                        self.popn(overhead);
                         let res = exec(self, arg1, arg2);
-                        self.stack.push(res);
+                        self.push(res);
                         *n = 0;
                         return Some(proc);
                     }
@@ -514,13 +512,13 @@ impl Context {
                             );
                             self.error(exc);
                         }
-
-                        self.popn(overhead);
                         let arg3 = self.pop();
                         let arg2 = self.pop();
                         let arg1 = self.pop();
+                        self.popn(overhead);
+                        
                         let res = exec(self, arg1, arg2, arg3);
-                        self.stack.push(res);
+                        self.push(res);
                         *n = 0;
                         return Some(proc);
                     }
@@ -538,14 +536,14 @@ impl Context {
                             );
                             self.error(exc);
                         }
-
-                        self.popn(overhead);
                         let arg4 = self.pop();
                         let arg3 = self.pop();
                         let arg2 = self.pop();
                         let arg1 = self.pop();
+                        self.popn(overhead);
+                        
                         let res = exec(self, arg1, arg2, arg3, arg4);
-                        self.stack.push(res);
+                        self.push(res);
                         *n = 0;
                         return Some(proc);
                     }
@@ -554,12 +552,13 @@ impl Context {
                         if *n == 0 {
                             self.popn(overhead as _);
                             let res = exec(self, None);
-                            self.stack.push(res);
+                            self.push(res);
                         } else if *n == 1 {
-                            let arg = self.pop();
                             self.popn(overhead);
+                            let arg = self.pop();
+                            
                             let res = exec(self, Some(arg));
-                            self.stack.push(res);
+                            self.push(res);
                         } else {
                             let args = self.pop_as_list(*n as _);
                             let exc = Exception::argument_count(
@@ -580,13 +579,13 @@ impl Context {
                             let arg = self.pop();
                             self.popn(overhead);
                             let res = exec(self, arg, None);
-                            self.stack.push(res);
+                            self.push(res);
                         } else if *n == 2 {
                             let arg2 = self.pop();
                             let arg1 = self.pop();
                             self.popn(overhead);
                             let res = exec(self, arg1, Some(arg2));
-                            self.stack.push(res);
+                            self.push(res);
                         } else {
                             let args = self.pop_as_list(*n as _);
                             let exc = Exception::argument_count(
@@ -608,14 +607,14 @@ impl Context {
                             let arg1 = self.pop();
                             self.popn(overhead);
                             let res = exec(self, arg1, arg2, None);
-                            self.stack.push(res);
+                            self.push(res);
                         } else if *n == 3 {
                             let arg3 = self.pop();
                             let arg2 = self.pop();
                             let arg1 = self.pop();
                             self.popn(overhead);
                             let res = exec(self, arg1, arg2, Some(arg3));
-                            self.stack.push(res);
+                            self.push(res);
                         } else {
                             let args = self.pop_as_list(*n as _);
                             let exc = Exception::argument_count(
@@ -638,7 +637,7 @@ impl Context {
                             let arg1 = self.pop();
                             self.popn(overhead);
                             let res = exec(self, arg1, arg2, arg3, None);
-                            self.stack.push(res);
+                            self.push(res);
                         } else if *n == 4 {
                             let arg4 = self.pop();
                             let arg3 = self.pop();
@@ -646,7 +645,7 @@ impl Context {
                             let arg1 = self.pop();
                             self.popn(overhead);
                             let res = exec(self, arg1, arg2, arg3, Some(arg4));
-                            self.stack.push(res);
+                            self.push(res);
                         } else {
                             let args = self.pop_as_list(*n as _);
                             let exc = Exception::argument_count(
@@ -666,18 +665,18 @@ impl Context {
                         if *n == 0 {
                             self.popn(overhead as _);
                             let res = exec(self, None, None);
-                            self.stack.push(res);
+                            self.push(res);
                         } else if *n == 1 {
                             let arg = self.pop();
                             self.popn(overhead);
                             let res = exec(self, Some(arg), None);
-                            self.stack.push(res);
+                            self.push(res);
                         } else if *n == 2 {
                             let arg2 = self.pop();
                             let arg1 = self.pop();
                             self.popn(overhead);
                             let res = exec(self, Some(arg1), Some(arg2));
-                            self.stack.push(res);
+                            self.push(res);
                         } else {
                             let args = self.pop_as_list(*n as _);
                             let exc = Exception::argument_count(
@@ -698,20 +697,20 @@ impl Context {
                             let arg = self.pop();
                             self.popn(overhead);
                             let res = exec(self, arg, None, None);
-                            self.stack.push(res);
+                            self.push(res);
                         } else if *n == 2 {
                             let arg2 = self.pop();
                             let arg1 = self.pop();
                             self.popn(overhead);
                             let res = exec(self, arg1, Some(arg2), None);
-                            self.stack.push(res);
+                            self.push(res);
                         } else if *n == 3 {
                             let arg3 = self.pop();
                             let arg2 = self.pop();
                             let arg1 = self.pop();
                             self.popn(overhead);
                             let res = exec(self, arg1, Some(arg2), Some(arg3));
-                            self.stack.push(res);
+                            self.push(res);
                         } else {
                             let args = self.pop_as_list(*n as _);
                             let exc = Exception::argument_count(
@@ -734,14 +733,14 @@ impl Context {
                             let arg1 = self.pop();
                             self.popn(overhead);
                             let res = exec(self, arg1, arg2, None, None);
-                            self.stack.push(res);
+                            self.push(res);
                         } else if *n == 3 {
                             let arg3 = self.pop();
                             let arg2 = self.pop();
                             let arg1 = self.pop();
                             self.popn(overhead);
                             let res = exec(self, arg1, arg2, Some(arg3), None);
-                            self.stack.push(res);
+                            self.push(res);
                         } else if *n == 4 {
                             let arg4 = self.pop();
                             let arg3 = self.pop();
@@ -749,7 +748,7 @@ impl Context {
                             let arg1 = self.pop();
                             self.popn(overhead);
                             let res = exec(self, arg1, arg2, Some(arg3), Some(arg4));
-                            self.stack.push(res);
+                            self.push(res);
                         } else {
                             let args = self.pop_as_list(*n as _);
                             let exc = Exception::argument_count(
@@ -773,7 +772,7 @@ impl Context {
                             let arg1 = self.pop();
                             self.popn(overhead);
                             let res = exec(self, arg1, arg2, arg3, None, None);
-                            self.stack.push(res);
+                            self.push(res);
                         } else if *n == 4 {
                             let arg4 = self.pop();
                             let arg3 = self.pop();
@@ -781,7 +780,7 @@ impl Context {
                             let arg1 = self.pop();
                             self.popn(overhead);
                             let res = exec(self, arg1, arg2, arg3, Some(arg4), None);
-                            self.stack.push(res);
+                            self.push(res);
                         } else if *n == 5 {
                             let arg5 = self.pop();
                             let arg4 = self.pop();
@@ -790,7 +789,7 @@ impl Context {
                             let arg1 = self.pop();
                             self.popn(overhead);
                             let res = exec(self, arg1, arg2, arg3, Some(arg4), Some(arg5));
-                            self.stack.push(res);
+                            self.push(res);
                         } else {
                             let args = self.pop_as_list(*n as _);
                             let exc = Exception::argument_count(
@@ -812,7 +811,7 @@ impl Context {
                         let args = &self.stack[(self.sp - *n)..self.sp];
                         let res = exec(this, args);
                         self.popn(*n as usize + overhead as usize);
-                        self.stack.push(res);
+                        self.push(res);
 
                         return Some(proc);
                     }
@@ -825,7 +824,7 @@ impl Context {
 
                             let res = exec(this, arg0, args);
                             self.popn(*n as usize + overhead as usize);
-                            self.stack.push(res);
+                            self.push(res);
                         } else {
                             let args = self.pop_as_list(*n as _);
                             let exc = Exception::argument_count(
@@ -850,7 +849,7 @@ impl Context {
                             let args = &self.stack[(self.sp - *n + 2)..self.sp];
                             let res = exec(this, arg0, arg1, args);
                             self.popn(*n as usize + overhead as usize);
-                            self.stack.push(res);
+                            self.push(res);
                         } else {
                             let args = self.pop_as_list(*n as _);
                             let exc = Exception::argument_count(
@@ -877,7 +876,7 @@ impl Context {
 
                             let res = exec(this, arg0, arg1, arg2, args);
                             self.popn(*n as usize + overhead as usize);
-                            self.stack.push(res);
+                            self.push(res);
                         } else {
                             let args = self.pop_as_list(*n as _);
                             let exc = Exception::argument_count(
@@ -932,10 +931,14 @@ impl Context {
                                 );
                                 self.error(exc);
                             }
-
-                            let _arg = self.stack.pop();
+                            let arg = self.pop();
                             // todo: push identity function and resume execution
                             self.restore_state(&vm_state);
+                            self.push(Runtime::get().identity);
+                            self.push(arg);
+
+                           
+                            return proc;
                         }
                         _ => return proc,
                     }
@@ -951,22 +954,39 @@ impl Context {
                 }
             }
         }
-
-        todo!()
     }
 
     fn restore_state(&mut self, state: &SavedState) {
         {
-            self.stack.clear();
-            self.stack.extend_from_slice(&state.stack);
+            self.stack.fill(Value::UNDEFINED);
+            for i in 0..state.stack.len() {
+                self.stack[i] = state.stack[i];
+            }
+
             self.sp = state.sp;
-            self.registers.captured = state.registers.captured;
-            self.registers.fp = state.registers.fp;
-            self.registers.ip = state.registers.ip;
-            self.registers.initial_fp = state.registers.initial_fp;
-            self.registers.code = state.registers.code;
-            self.registers.module = state.registers.module;
+            let after: *mut Value = &mut self.stack[self.sp];
+            self.close_upvalues(after);
+            self.registers = state.registers;
         }
+    }
+
+    pub fn save_state(&mut self) -> SavedState {
+        let mut stack = ArrayList::new(self.mutator());
+        for i in 0..self.sp {
+            let val = self.stack[i];
+            stack.push(self.mutator(), val);
+        }
+
+        let mut state = SavedState {
+            stack,
+            sp: self.sp - 2,
+            registers: self.registers,
+            winders: self.winders
+        };
+
+        state.registers.ip -= 1;
+
+        state
     }
 
     pub fn get_stack_trace(
@@ -1097,7 +1117,68 @@ impl Context {
         Some(stack_trace)
     }
 
+    fn capture_upvalue(&mut self, location: *mut Value) -> Handle<Upvalue> {
+        let mut prev_upvalue = None;
+        let mut upvalue = self.open_upvalues;
+
+        while let Some(value) = upvalue {
+            if value.stack_location() == location {
+                return value;
+            }
+            upvalue = value.next();
+            prev_upvalue = Some(value);
+        }
+
+        let created_upvalue = self.mutator().allocate(Upvalue {
+            closed: false,
+            state: UpvalueState { stack: location },
+            next: upvalue,
+        });
+
+        if let Some(mut prev) = prev_upvalue {
+            prev.next = Some(created_upvalue);
+        } else {
+            self.open_upvalues = Some(created_upvalue);
+        }
+
+        created_upvalue
+    }
+
+    fn close_upvalues(&mut self, last: *mut Value) {
+        let mut upvalue = self.open_upvalues;
+
+        while let Some(mut value) = upvalue {
+            if value.stack_location() >= last {
+                value.close();
+                self.open_upvalues = value.next();
+                upvalue = self.open_upvalues;
+            } else {
+                upvalue = value.next();
+            }
+        }
+    }
+
     fn capture(&mut self, n: usize) -> Handle<Array<Handle<Upvalue>>> {
+        let mut list = ArrayList::new(self.mutator());
+
+        for i in 0..self.registers.code.captures[n].len() {
+            let capture = self.registers.code.captures[n][i];
+
+            if capture.local {
+                let offset = self.registers.fp + capture.index as usize;
+                let ptr = &mut self.stack[offset] as *mut Value;
+                let upvalue = self.capture_upvalue(ptr);
+                list.push(self.mutator(), upvalue);
+            } else {
+                let upvalue = self.registers.captured[capture.index as usize];
+                list.push(self.mutator(), upvalue);
+            }
+        }
+
+        Array::new(self.mutator(), list.len(), |_, ix| list[ix])
+    }
+
+    /*fn capture(&mut self, n: usize) -> Handle<Array<Handle<Upvalue>>> {
         let mut list = ArrayList::new(self.mutator());
         for i in 0..self.registers.code.captures[n].len() {
             let capture = self.registers.code.captures[n][i];
@@ -1124,7 +1205,7 @@ impl Context {
             }
         }
         Array::new(self.thread, list.len(), |_, ix| list[ix])
-    }
+    }*/
 
     pub(crate) unsafe fn execute_named(&mut self, code: Handle<Code>, name: Handle<Str>) -> Value {
         let empty = Array::new(self.mutator(), 0, |_, _| unreachable!());
@@ -1137,6 +1218,29 @@ impl Context {
         self.push(Value::new(proc));
 
         self.execute_catch(code, 0, empty)
+    }
+
+    pub fn wind_up(&mut self, before: Handle<Procedure>, after: Handle<Procedure>, handlers: Option<Value>) {
+        let winder = Winder::new(before, after, handlers, self.winders);
+        self.winders = Some(self.mutator().allocate(winder));
+    }
+
+    pub fn wind_down(&mut self) -> Option<Handle<Winder>> {
+        let res = self.winders?;
+
+        self.winders = res.next;
+
+        Some(res)
+    }
+
+    pub fn current_handlers(&self) -> Option<Value> {
+        let mut winders = self.winders;
+
+        while let Some(w) = winders.filter(|w| w.handlers.is_none()) {
+            winders = w.next;
+        }
+
+        winders?.handlers
     }
 
     pub(crate) unsafe fn execute_unnamed(&mut self, code: Handle<Code>) -> Value {
@@ -1182,6 +1286,12 @@ impl Context {
         }
     }
 
+    pub fn dump_stack(&self) {
+        for i in 0..self.sp {
+            println!("#{}: {}", i, self.stack[i].to_string(false));
+        }
+    }
+
     pub(crate) unsafe fn execute(&mut self) -> Value {
         loop {
             //rsgc::heap::heap::heap().request_gc();
@@ -1191,7 +1301,8 @@ impl Context {
             match *self.registers.code.instructions.get_unchecked(ip) {
                 Ins::NoOp => continue,
                 Ins::Pop => {
-                    self.stack.pop();
+                    
+                    self.pop();
                 }
                 Ins::Dup => {
                     let top = self.top();
@@ -1442,6 +1553,8 @@ impl Context {
                     } else {
                         lm.define(self.registers.module.get_handle_of(), sym, value, false);
                     }
+
+                    self.push(Value::void());
                 }
 
                 Ins::MakeFrame => {
@@ -1504,7 +1617,7 @@ impl Context {
                     while self.sp > self.registers.fp + n as usize {
                         let val = self.pop();
                         rest = self.make_pair(val, rest);
-                    }
+                    }   
 
                     self.push(rest);
                 }
@@ -1555,7 +1668,8 @@ impl Context {
                 Ins::TailCall(m) => {
                     self.thread.safepoint();
                     let mut n = m as usize;
-
+                    let after: *mut Value = &mut self.stack[self.registers.fp];
+                    self.close_upvalues(after);
                     let proc = self.invoke(&mut n, 1);
 
                     match proc.kind {
@@ -1568,24 +1682,12 @@ impl Context {
                                     self.stack[self.sp - n - 1 + i];
                             }
 
-                            unsafe {
-                                let raw_sp = self.stack.as_ptr();
-                                let after = raw_sp.add(self.registers.fp + n);
-                                self.runtime().close_upvalues(after);
-                            }
-
                             self.sp = self.registers.fp + n;
                         }
-                        ProcedureKind::RawContinuation(_) => break,
+                        ProcedureKind::RawContinuation(_) => (),
                         _ => {
                             if self.registers.top_level() {
                                 let res = self.pop();
-
-                                unsafe {
-                                    let raw_sp = self.stack.as_ptr();
-                                    let after = raw_sp.add(self.registers.initial_fp - 1);
-                                    self.runtime().close_upvalues(after);
-                                }
 
                                 self.sp = self.registers.initial_fp - 1;
                                 return res;
@@ -1597,13 +1699,11 @@ impl Context {
                 }
 
                 Ins::Return => {
+                    let after: *mut Value = &mut self.stack[self.registers.fp];
+                    self.close_upvalues(after);
                     if self.registers.top_level() {
                         let res = self.pop();
-                        unsafe {
-                            let raw_sp = self.stack.as_ptr();
-                            let after = raw_sp.add(self.registers.initial_fp - 1);
-                            self.runtime().close_upvalues(after);
-                        }
+
                         self.sp = self.registers.initial_fp - 1;
                         return res;
                     } else {
@@ -1657,11 +1757,10 @@ impl Context {
                 Ins::Reset(index, n) => {
                     let index = index as usize;
                     let n = n as usize;
-                    unsafe {
-                        let raw_sp = self.stack.as_ptr();
-                        let after = raw_sp.add(self.registers.fp + index);
-                        self.runtime().close_upvalues(after);
-                    }
+
+                    let after: *mut Value = &mut self.stack[self.registers.fp + index as usize];
+                    self.close_upvalues(after);
+
                     for i in (self.registers.fp + index)..(self.registers.fp + index + n) {
                         self.stack[i] = Value::UNDEFINED;
                     }
@@ -1670,7 +1769,7 @@ impl Context {
                 ins => todo!("{:?}", ins),
             }
         }
-        Value::nil()
+        
     }
 
     fn exit_frame(&mut self) {
@@ -1688,12 +1787,6 @@ impl Context {
         let newfp = self.stack[fp - 3].get_int32() as usize;
 
         self.stack[fp - 3] = self.stack[self.sp - 1];
-
-        unsafe {
-            let raw_sp = self.stack.as_ptr();
-            let after = raw_sp.add(fp - 2);
-            self.runtime().close_upvalues(after);
-        }
 
         self.sp = fp - 2;
         self.registers.fp = newfp as _;
@@ -1847,6 +1940,7 @@ impl Object for Registers {
     fn trace(&self, visitor: &mut dyn Visitor) {
         self.code.trace(visitor);
         self.captured.trace(visitor);
+        self.module.trace(visitor);
     }
 }
 
@@ -1855,7 +1949,7 @@ pub struct SavedState {
     stack: ArrayList<Value>,
     sp: usize,
     registers: Registers,
-    winders: Option<Handle<Winder>>,
+    pub(crate) winders: Option<Handle<Winder>>,
 }
 
 impl Object for SavedState {
@@ -1870,11 +1964,14 @@ impl Object for SavedState {
 
 impl Allocation for SavedState {}
 
+static WINDER_ID: AtomicI32 = AtomicI32::new(i32::MIN);
+
 pub struct Winder {
-    before: Handle<Procedure>,
-    after: Handle<Procedure>,
-    handlers: Option<Value>,
-    next: Option<Handle<Winder>>,
+    pub before: Handle<Procedure>,
+    pub after: Handle<Procedure>,
+    pub handlers: Option<Value>,
+    pub next: Option<Handle<Winder>>,
+    id: i32,
 }
 
 impl Winder {
@@ -1889,7 +1986,12 @@ impl Winder {
             after,
             handlers,
             next,
+            id: WINDER_ID.fetch_add(1, std::sync::atomic::Ordering::AcqRel)
         }
+    }
+
+    pub fn id(&self) -> i32 {
+        self.id 
     }
 
     pub fn count(&self) -> usize {

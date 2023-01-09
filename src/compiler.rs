@@ -287,7 +287,7 @@ impl Compiler {
 
     pub fn emit_placeholder(&mut self, ctx: &mut Context) -> usize {
         let ip = self.code.len();
-        self.code.push(ctx.mutator(), Ins::Branch(0));
+        self.code.push(ctx.mutator(), Ins::NoOp);
         ip
     }
 
@@ -663,14 +663,14 @@ impl Compiler {
             captures: this.capture_array,
         });
 
-        println!("code: {:?}", code.instructions);
+        //println!("code: {:?}", code.instructions);
 
         code
     }
 
     pub fn bundle(self, ctx: &mut Context) -> Handle<Code> {
         let this = self;
-        println!("bundle: {:?}", this.code);
+        //println!("bundle: {:?}", this.code);
         ctx.mutator().allocate(Code {
             instructions: this.code,
             constants: this.constants,
@@ -752,7 +752,7 @@ impl Compiler {
                 self.emit(ctx, Ins::Return);
             }
 
-            if self.max_locals > 0 {
+            if self.max_locals > self.arguments.len() {
                 let n = self.max_locals - self.arguments.len();
                 self.code[reserve_local_ip] = Ins::Alloc(n as _);
             }
@@ -790,9 +790,16 @@ impl Compiler {
             Environment::Local(ref mut local) => local,
         };
 
+        let mut j = 0;
         for i in 0..self.arguments.len() {
             let (sym, ix) = self.arguments[i];
             local.vars.put(ctx.mutator(), sym, Value::new(ix as i32));
+            j += 1;
+        }
+
+        self.num_locals = j;
+        if self.num_locals > self.max_locals {
+            self.max_locals = self.num_locals;
         }
     }
 

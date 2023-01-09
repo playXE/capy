@@ -14,6 +14,90 @@ pub(crate) fn control_flow(_: &mut Runtime) {
     let manager = library_manager();
     let thr = Thread::current();
 
+    let base = manager.scheme_module.get_handle_of::<Library>();
+
+    manager.add_definition(
+        thr,
+        base,
+        ("_make-values", Implementation::Native1(make_values)),
+        true,
+        true,
+    );
+
+    manager.add_definition(
+        thr,
+        base,
+        ("_continuation", Form::Primitive(compile_continuation)),
+        true,
+        true,
+    );
+    manager.add_definition(
+        thr,
+        base,
+        (
+            "_call-with-unprotected-continuation",
+            Implementation::Apply(call_with_unprotected_continuation),
+        ),
+        true,
+        true,
+    );
+    manager.add_definition(
+        thr,
+        base,
+        ("continuation?", Implementation::Native1(is_continuation)),
+        false,
+        false,
+    );
+
+    manager.add_definition(
+        thr,
+        base,
+        ("_wind-down", Implementation::Native0(wind_down)),
+        false,
+        false,
+    );
+
+    manager.add_definition(
+        thr,
+        base,
+        ("_wind-up", Implementation::Native2O(wind_up)),
+        false,
+        false,
+    );
+
+    manager.add_definition(
+        thr,
+        base,
+        ("_wind-up-raise", Implementation::Native2(wind_up_raise)),
+        false,
+        false,
+    );
+
+    manager.add_definition(
+        thr,
+        base,
+        ("_dynamic-wind-base", Implementation::Native1(dynamic_wind_base)),
+        false,
+        false,
+    );
+
+    manager.add_definition(
+        thr,
+        base,
+        ("_dynamic-wind-current", Implementation::Native0(dynamic_wind_current)),
+        false,
+        false,
+    );
+
+    manager.add_definition(
+        thr,
+        base,
+        ("_dynamic-winders", Implementation::Native1(dynamic_winders)),
+        false,
+        false,
+    );
+
+
     let keywords = manager.keyword_module.get_handle_of::<Library>();
 
     manager.add_definition(
@@ -649,7 +733,7 @@ pub fn compile_do(cc: &mut Compiler, ctx: &mut Context, form: Value, tail: bool)
         let binding_list = form.cdr().car();
         if form.cdr().cdr().is_pair() {
             let exit = form.cdr().cdr().car();
-            let body = form.cdr().cdar().cdr();
+            let body = form.cdr().cdr().cdr();
 
             if exit.is_pair() {
                 let test = exit.car();
@@ -758,10 +842,14 @@ pub fn compile_do(cc: &mut Compiler, ctx: &mut Context, form: Value, tail: bool)
                 cc.code[exit_jump_ip] = Ins::BranchIf(cc.offset_to_next(exit_jump_ip as _) as _);
                 let res = cc.compile_seq(ctx, terminal, tail, false, None);
                 if !res && cc.num_locals > initial_locals {
-                    cc.emit(ctx, Ins::Reset(initial_locals as _, (cc.num_locals - initial_locals) as _));
+                    cc.emit(
+                        ctx,
+                        Ins::Reset(initial_locals as _, (cc.num_locals - initial_locals) as _),
+                    );
                 }
                 cc.num_locals = initial_locals;
                 cc.env = old;
+                return false;
             } else {
                 let exc = Exception::eval(
                     ctx,
@@ -779,9 +867,179 @@ pub fn compile_do(cc: &mut Compiler, ctx: &mut Context, form: Value, tail: bool)
         Some("do"),
         2,
         usize::MAX,
-        Value::nil(),
+        form,
         SourcePosition::unknown(),
     );
 
     ctx.error(exc);
+}
+
+pub fn make_values(_: &mut Context, val: Value) -> Value {
+    if val.is_null() {
+        Value::void()
+    } else if val.is_pair() && val.cdr().is_null() {
+        val.car()
+    } else {
+        val
+    }
+}
+
+pub fn is_continuation(_: &mut Context, val: Value) -> Value {
+    Value::new(if val.is_handle_of::<Procedure>() {
+        let proc = val.get_handle_of::<Procedure>();
+
+        match proc.kind {
+            ProcedureKind::RawContinuation(_)
+            | ProcedureKind::Closure(ClosureType::Continuation, _, _, _) => true,
+            _ => false,
+        }
+    } else {
+        false
+    })
+}
+
+pub fn compile_continuation(
+    cc: &mut Compiler,
+    ctx: &mut Context,
+    form: Value,
+    _tail: bool,
+) -> bool {
+    if form.is_pair() && form.cdr().is_pair() {
+        let arglist = form.cdr().car();
+        let body = form.cdr().cdr();
+        cc.compile_lambda(ctx, None, arglist, body, false, false, false, true);
+        false
+    } else {
+        let exc = Exception::argument_count(
+            ctx,
+            Some("_continuation"),
+            1,
+            1,
+            form,
+            SourcePosition::unknown(),
+        );
+        ctx.error(exc);
+    }
+}
+
+pub fn call_with_unprotected_continuation(
+    ctx: &mut Context,
+    args: &Arguments,
+) -> (Handle<Procedure>, ArrayList<Value>) {
+    if args.len() != 1 {
+        let ls = Value::make_list_slice(ctx, args, Value::nil());
+        let exc = Exception::argument_count(
+            ctx,
+            Some("_call-with-unprotected-continuation"),
+            1,
+            1,
+            ls,
+            SourcePosition::unknown(),
+        );
+        ctx.error(exc);
+    }
+
+    if !args[0].is_handle_of::<Procedure>() {
+        let exc =
+            Exception::type_error(ctx, &[Type::Procedure], args[0], SourcePosition::unknown());
+        ctx.error(exc);
+    }
+    let proc = args[0].get_handle_of::<Procedure>();
+    let vm_state = ctx.save_state();
+    let cont = Procedure {
+        id: Procedure::new_id(),
+        kind: ProcedureKind::RawContinuation(vm_state),
+        module: proc.module,
+    };
+    let cont = ctx.mutator().allocate(cont);
+    let mut ls = ArrayList::with_capacity(ctx.mutator(), 1);
+    ls.push(ctx.mutator(), Value::new(cont));
+    (proc, ls)
+}
+
+pub fn wind_up(ctx: &mut Context, before: Value, after: Value, handler: Option<Value>) -> Value {
+    let mut handlers = None;
+
+    if let Some(handler) = handler {
+        let current = ctx.current_handlers().unwrap_or(Value::nil());
+        handlers = Some(ctx.make_pair(handler, current));
+    }
+    before.assert_type(ctx, SourcePosition::unknown(), &[Type::Procedure]);
+    after.assert_type(ctx, SourcePosition::unknown(), &[Type::Procedure]);
+    ctx.wind_up(before.get_handle_of(), after.get_handle_of(), handlers);
+
+    Value::void()
+}
+
+pub fn wind_down(ctx: &mut Context) -> Value {
+    if let Some(winder) = ctx.wind_down() {
+        ctx.make_pair(Value::new(winder.before), Value::new(winder.after))
+    } else {
+        Value::nil()
+    }
+}
+
+pub fn dynamic_wind_base(ctx: &mut Context, cont: Value) -> Value {
+    if cont.is_handle_of::<Procedure>() {
+        let proc = cont.get_handle_of::<Procedure>();
+
+        if let ProcedureKind::RawContinuation(ref vm_state) = proc.kind {
+            match ctx.winders {
+                Some(winders) => {
+                    return Winder::common_prefix(winders, vm_state.winders)
+                        .map(|x| Value::new(x.id()))
+                        .unwrap_or(Value::new(0))
+                }
+                None => return Value::new(0),
+            }
+        }
+    }
+
+    panic!("_dynamic-wind-base({})", cont.to_string(false))
+}
+
+pub fn dynamic_wind_current(ctx: &mut Context) -> Value {
+    ctx.winders.map(|x| Value::new(x.id())).unwrap_or(Value::new(0))
+}
+
+pub fn dynamic_winders(ctx: &mut Context, cont: Value) -> Value {
+    if cont.is_handle_of::<Procedure>() {
+        let proc = cont.get_handle_of::<Procedure>();
+
+        if let ProcedureKind::RawContinuation(ref vm_state) = proc.kind {
+            let base = ctx.winders;
+            let mut res = Value::nil();
+            let mut next = vm_state.winders;
+
+            while let Some(winder) = next.filter(|winder| base.is_none() || base.unwrap().id() == winder.id()) {
+                let p1 = ctx.make_pair(Value::new(winder.before), Value::new(winder.after));
+                res = ctx.make_pair(p1, res);
+                next = winder.next;
+            }
+
+            return res;
+        }
+    }
+
+    panic!("_dynamic-winders({})", cont.to_string(false))
+}
+
+pub fn wind_up_raise(ctx: &mut Context, before: Value, after: Value) -> Value {
+    before.assert_type(ctx, SourcePosition::unknown(), &[Type::Procedure]);
+    after.assert_type(ctx, SourcePosition::unknown(), &[Type::Procedure]);
+
+    match ctx.current_handlers() {
+        Some(p) => {
+            if p.is_pair() {
+                let rest = p.cdr();
+                let handler = rest.car();
+                ctx.wind_up(before.get_handle_of(), after.get_handle_of(), Some(handler));
+                return handler;
+            } else {
+                Value::new(false)
+            }
+        }
+
+        None => Value::new(false)
+    }
 }

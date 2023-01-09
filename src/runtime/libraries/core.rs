@@ -27,6 +27,142 @@ pub(crate) fn core_library(rt: &mut Runtime) {
     rt.loader = Value::new(loader);
 
     manager.add_definition(thr, base, ("load", Implementation::Apply(load)), true, true);
+    let id = manager.add_definition(
+        thr,
+        base,
+        ("identity", Implementation::Native1(identity)),
+        true,
+        true,
+    );
+
+    rt.identity = id;
+    manager.add_definition(
+        thr,
+        base,
+        ("null?", Implementation::Native1(is_null)),
+        true,
+        true,
+    );
+
+    manager.add_definition(
+        thr,
+        base,
+        ("pair?", Implementation::Native1(is_pair)),
+        true,
+        true,
+    );
+
+    manager.add_definition(
+        thr,
+        base,
+        ("symbol?", Implementation::Native1(is_symbol)),
+        true,
+        true,
+    );
+
+    manager.add_definition(
+        thr,
+        base,
+        ("string?", Implementation::Native1(is_string)),
+        true,
+        true,
+    );
+
+    manager.add_definition(
+        thr,
+        base,
+        ("fixnum?", Implementation::Native1(is_fixnum)),
+        true,
+        true,
+    );
+
+    manager.add_definition(
+        thr,
+        base,
+        ("flonum?", Implementation::Native1(is_flonum)),
+        true,
+        true,
+    );
+
+    manager.add_definition(
+        thr,
+        base,
+        ("list?", Implementation::Native1(is_list)),
+        true,
+        true,
+    );
+
+    manager.add_definition(
+        thr,
+        base,
+        ("vector?", Implementation::Native1(is_vector)),
+        true,
+        true,
+    );
+
+    manager.add_definition(
+        thr,
+        base,
+        ("length", Implementation::Native1(length)),
+        true,
+        true,
+    );
+
+    manager.add_definition(
+        thr,
+        base,
+        ("car", Implementation::Native1(car)),
+        true,
+        true,
+    );
+
+    manager.add_definition(
+        thr,
+        base,
+        ("cdr", Implementation::Native1(cdr)),
+        true,
+        true,
+    );
+
+    manager.add_definition(
+        thr,
+        base,
+        ("cons", Implementation::Native2(cons)),
+        true,
+        true,
+    );
+
+    manager.add_definition(
+        thr,
+        base,
+        ("eq?", Implementation::Native2(eq)),
+        true,
+        true,
+    );
+
+    manager.add_definition(
+        thr,
+        base,
+        ("eqv?", Implementation::Native2(eqv)),
+        true,
+        true,
+    );
+
+    manager.add_definition(
+        thr,
+        base,
+        ("equal?", Implementation::Native2(equal)),
+        true,
+        true,
+    );
+
+    manager.add_definition(
+        thr,
+        base,
+        ("_dbg", Implementation::Native0R(dbg)),
+        true,
+        true,
+    );
 
     let keywords = manager.keyword_module.get_handle_of::<Library>();
     manager.add_definition(
@@ -531,13 +667,18 @@ pub fn compile_define_values(
                 let rest = vars.cdr();
                 let sym = vars.car().get_symbol();
                 if syms.contains(&sym) {
-                    let exc = Exception::eval(ctx, EvalError::DuplicateBinding, &[Value::new(sym), sig], SourcePosition::unknown());
+                    let exc = Exception::eval(
+                        ctx,
+                        EvalError::DuplicateBinding,
+                        &[Value::new(sym), sig],
+                        SourcePosition::unknown(),
+                    );
                     ctx.error(exc);
                 }
 
                 syms.push(ctx.mutator(), sym);
 
-                vars = rest;    
+                vars = rest;
             }
 
             if vars.is_null() {
@@ -548,14 +689,24 @@ pub fn compile_define_values(
             } else {
                 let ls = ctx.make_pair(value, Value::nil());
                 let ls = ctx.make_pair(sig, ls);
-                let exc = Exception::eval(ctx, EvalError::MalformedDefinition, &[ls], SourcePosition::unknown());
-                    ctx.error(exc);
+                let exc = Exception::eval(
+                    ctx,
+                    EvalError::MalformedDefinition,
+                    &[ls],
+                    SourcePosition::unknown(),
+                );
+                ctx.error(exc);
             }
 
             let mut res = Value::nil();
 
             for (_, sym) in syms.iter().enumerate().rev() {
-                library_manager().make_binding(cc.library, *sym, Value::UNDEFINED, GlocFlag::BindingMut);
+                library_manager().make_binding(
+                    cc.library,
+                    *sym,
+                    Value::UNDEFINED,
+                    GlocFlag::BindingMut,
+                );
                 let index = cc.add_constant(ctx, Value::new(*sym));
                 cc.emit(ctx, Ins::DefineGlobal(index as _, false));
                 res = ctx.make_pair(Value::new(*sym), res);
@@ -572,10 +723,96 @@ pub fn compile_define_values(
             let index = cc.add_constant(ctx, res);
             cc.emit(ctx, Ins::PushConstant(index as _));
         }
-        false 
+        false
     } else {
-        let exc = Exception::argument_count(ctx, Some("define-values"), 2, 2, form, SourcePosition::unknown());
+        let exc = Exception::argument_count(
+            ctx,
+            Some("define-values"),
+            2,
+            2,
+            form,
+            SourcePosition::unknown(),
+        );
         ctx.error(exc);
     }
+}
 
+pub fn is_null(_: &mut Context, val: Value) -> Value {
+    Value::new(val.is_null())
+}
+
+pub fn is_pair(_: &mut Context, val: Value) -> Value {
+    Value::new(val.is_pair())
+}
+
+pub fn is_symbol(_: &mut Context, val: Value) -> Value {
+    Value::new(val.is_symbol())
+}
+
+pub fn is_string(_: &mut Context, val: Value) -> Value {
+    Value::new(val.is_string())
+}
+
+pub fn is_fixnum(_: &mut Context, val: Value) -> Value {
+    Value::new(val.is_int32())
+}
+
+pub fn is_flonum(_: &mut Context, val: Value) -> Value {
+    Value::new(val.is_double())
+}
+
+pub fn is_list(_: &mut Context, val: Value) -> Value {
+    Value::new(val.is_list_recsafe())
+}
+
+pub fn is_vector(_: &mut Context, val: Value) -> Value {
+    Value::new(val.is_vector())
+}
+
+pub fn length(ctx: &mut Context, val: Value) -> Value {
+    val.assert_type(ctx, SourcePosition::unknown(), &[Type::List]);
+    Value::new(val.length_recsafe().1 as i32)
+}
+
+pub fn car(ctx: &mut Context, val: Value) -> Value {
+    val.assert_type(ctx, SourcePosition::unknown(), &[Type::Pair]);
+
+    val.car()
+}
+
+pub fn cdr(ctx: &mut Context, val: Value) -> Value {
+    val.assert_type(ctx, SourcePosition::unknown(), &[Type::Pair]);
+
+    val.cdr()
+}
+
+pub fn cons(ctx: &mut Context, car: Value, cdr: Value) -> Value {
+    ctx.make_pair(car, cdr)
+}
+
+pub fn eq(ctx: &mut Context, a: Value, b: Value) -> Value {
+    crate::data::equality::eq(ctx, a, b).into()
+}
+
+pub fn eqv(ctx: &mut Context, a: Value, b: Value) -> Value {
+    crate::data::equality::eqv(ctx, a, b).into()
+}
+
+pub fn equal(ctx: &mut Context, a: Value, b: Value) -> Value {
+    crate::data::equality::equal(ctx, a, b).into()
+}
+
+
+pub fn identity(_: &mut Context, val: Value) -> Value {
+    val
+}
+
+pub fn dbg(_: &mut Context, args: &Arguments) -> Value {
+
+    for arg in args.iter() {
+        print!("{} ", arg.to_string(true));
+    }
+    println!();
+
+    Value::void()
 }

@@ -1,5 +1,5 @@
 use super::{
-    exception::SourcePosition,
+    exception::{Exception, SourcePosition},
     pure_nan::{pure_nan, purify_nan},
 };
 use crate::{
@@ -9,13 +9,7 @@ use crate::{
     utilities::{arraylist::ArrayList, string_builder::StringBuilder},
 };
 use core::fmt;
-use std::{
-    cell::UnsafeCell,
-    collections::HashSet,
-    fmt::Debug,
-    ptr::null_mut,
-    sync::atomic::{AtomicBool, AtomicPtr, Ordering},
-};
+use std::{collections::HashSet, fmt::Debug};
 #[derive(Copy, Clone, Debug)]
 pub struct Value(pub(crate) EncodedValueDescriptor);
 #[derive(Clone, Copy)]
@@ -440,6 +434,38 @@ impl Object for Value {
 }
 
 impl Value {
+    pub fn typ(&self) -> Type {
+        if self.is_null() {
+            Type::Null
+        } else if self.is_void() {
+            Type::Void
+        } else if self.is_undefined() {
+            Type::Undefined
+        } else if self.is_bool() {
+            Type::Boolean
+        } else if self.is_int32() {
+            Type::Fixnum
+        } else if self.is_double() {
+            Type::Float
+        } else if self.is_bytes() {
+            Type::ByteVector
+        } else if self.is_vector() {
+            Type::Vector
+        } else if self.is_symbol() {
+            Type::Symbol
+        } else if self.is_string() {
+            Type::Str
+        } else if self.is_pair() {
+            Type::Pair
+        } else if self.is_eof() {
+            Type::Eof
+        } else if self.is_handle_of::<Procedure>() {
+            Type::Procedure
+        } else {
+            todo!()
+        }
+    }
+
     #[inline]
     pub unsafe fn fill(start: *mut Self, end: *mut Self, fill: Value) {
         let mut cur = start;
@@ -946,7 +972,7 @@ impl Value {
                 double_string(val.get_double())
             } else if val.is_string() {
                 if escape {
-                    format!("{:?}", val)
+                    format!("{:?}", val.get_string().to_string())
                 } else {
                     val.get_string().to_string()
                 }
@@ -1106,6 +1132,25 @@ impl Value {
         let mut obj_id = std::collections::HashMap::new();
         string_repr_of(&mut visited, &mut obj_id, self.clone(), escape)
     }
+
+    pub fn assert_type(&self, ctx: &mut Context, pos: SourcePosition, types: &[Type]) {
+        for typ in types {
+            if let Some(subtypes) = typ.included() {
+                for subtype in subtypes {
+                    if *subtype == self.typ() {
+                        return;
+                    }
+                }
+            }
+
+            if self.typ() == *typ {
+                return;
+            }
+        }
+
+        let exc = Exception::type_error(ctx, types, *self, pos);
+        ctx.error(exc);
+    }
 }
 
 pub struct Values(pub Value);
@@ -1213,102 +1258,89 @@ impl Object for Gloc {
 impl Allocation for Gloc {}
 
 /// Upvalue is a reference to a value on the stack or a closed value.
-///
-/// Upvalues are created when closure accesses local variable of the parent function. They get closed
-/// once parent function stack frame is popped. In multi-threaded context these values get copied and closed
-/// automatically once closure is sent to other thread.
 pub struct Upvalue {
-    pub(crate) next: AtomicPtr<Upvalue>,
-    pub(crate) closed: AtomicBool,
-    pub(crate) state: UnsafeCell<UpvalueState>,
+    pub(crate) next: Option<Handle<Self>>,
+    pub(crate) closed: bool,
+    pub(crate) state: UpvalueState,
 }
-
-unsafe impl Send for Upvalue {}
-unsafe impl Sync for Upvalue {}
 
 pub(crate) union UpvalueState {
     pub closed: Value,
-    pub stack: (*mut Value, usize, usize),
+    pub stack: *mut Value,
 }
 
 impl Object for Upvalue {
     fn trace(&self, visitor: &mut dyn Visitor) {
         self.get().trace(visitor);
+        if let Some(next) = self.next {
+            next.trace(visitor);
+        }
     }
 }
 
 impl Allocation for Upvalue {}
 
 impl Upvalue {
-    pub(crate) unsafe fn next(&self) -> Option<Handle<Upvalue>> {
-        let next = self.next.load(Ordering::Acquire);
-        if next.is_null() {
-            None
-        } else {
-            Some(Handle::from_raw(next.cast()))
-        }
+    pub(crate) fn next(&self) -> Option<Handle<Upvalue>> {
+        self.next
     }
 
-    pub(crate) fn stack_location(&self) -> (*mut Value, usize, usize) {
+    pub(crate) fn stack_location(&self) -> *mut Value {
         debug_assert!(!self.is_closed());
-        unsafe { (*self.state.get()).stack }
+        unsafe { self.state.stack }
     }
 
-    pub(crate) fn set_next(&self, next: Option<Handle<Upvalue>>) {
-        self.next.store(
-            next.map(|x| x.as_ptr() as *mut Upvalue).unwrap_or(null_mut()),
-            Ordering::Release,
-        );
-    }
-
-    /// Closes upvalue using CAS loop.
     #[inline]
-    pub(crate) fn close(&self) -> bool {
-        let mut old = self.closed.load(Ordering::Relaxed);
-        loop {
-            if old {
-                return false;
-            }
-            match self
-                .closed
-                .compare_exchange_weak(old, true, Ordering::AcqRel, Ordering::Relaxed)
-            {
-                Ok(_) => {
-                    // successfully closed upvalue: update state.
-                    unsafe {
-                        let state = &mut *self.state.get();
-                        state.closed = state.stack.0.read();
-                    }
-                    return true;
-                }
-                Err(v) => old = v,
-            }
+    pub(crate) fn close(&mut self) {
+        unsafe {
+            let val = self.state.stack.read();
+            self.state.closed = val;
+            self.closed = true;
         }
     }
 
-    /// Checks if upvalue is closed atomically.
-    ///
-    /// Check is atomic because we don't want to read value from the stack if it is being closed on the other thread.
+    /// Checks if upvalue is closed
     #[inline]
     pub fn is_closed(&self) -> bool {
-        self.closed.load(Ordering::Acquire)
+        self.closed
     }
 
     #[inline]
     pub fn get(&self) -> Value {
         if self.is_closed() {
-            unsafe { (*self.state.get()).closed }
+            unsafe { self.state.closed }
         } else {
-            unsafe { *(*self.state.get()).stack.0 }
+            unsafe { self.state.stack.read() }
         }
     }
 
     #[inline]
-    pub fn set(&self, value: Value) {
+    pub fn set(&mut self, value: Value) {
         if self.is_closed() {
-            unsafe { (*self.state.get()).closed = value }
+            self.state.closed = value;
         } else {
-            unsafe { *(*self.state.get()).stack.0 = value }
+            unsafe {
+                self.state.stack.write(value);
+            }
         }
+    }
+}
+
+impl Type {
+    pub fn included(&self) -> Option<&[Type]> {
+        Some(match self {
+            Type::Procedure => &[Type::Procedure, Type::Parameter],
+            Type::Number => &[Type::Integer, Type::Fixnum, Type::Float],
+            Type::ProperList => &[Type::Null, Type::Pair, Type::ProperList],
+            Type::AssocList => &[Type::AssocList, Type::Null, Type::Pair],
+            Type::List => &[
+                Type::List,
+                Type::Pair,
+                Type::Null,
+                Type::ProperList,
+                Type::AssocList,
+            ],
+            _ => return None,
+        })
     }
 }
