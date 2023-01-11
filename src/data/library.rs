@@ -103,13 +103,13 @@ impl LibraryManager {
         m
     }
 
-    pub fn lookup_import(&self, ctx: &mut Context, name: Value) -> Option<Handle<Library>> {
+    pub fn lookup_import(&self, ctx: &mut Context, name: Value) -> ScmResult<Option<Handle<Library>>> {
         let mname = self.module_name(ctx, name);
         let name = self.filename(name);
         
         let mname = ctx.runtime().symbol_table().intern(&mname);
-        if let Some(lib) = self.find_module(ctx, mname, false, true) {
-            return Some(lib);
+        if let Some(lib) = self.find_module(ctx, mname, false, true)? {
+            return Ok(Some(lib));
         }
 
         let path = ctx
@@ -123,7 +123,7 @@ impl LibraryManager {
                 self.find_module(ctx, mname, false, true)
             }
             Err(err) => {
-                ctx.error(err);
+                Err(err)
             }
         }
     }
@@ -256,11 +256,11 @@ impl LibraryManager {
         sym: Handle<Symbol>,
         stay_in_module: bool,
         external_only: bool,
-    ) -> Option<Value> {
+    ) -> ScmResult<Option<Value>> {
         let modules = self.libraries.lock(true);
         let res = Self::search_binding(module, sym, stay_in_module, external_only, false);
         drop(modules);
-        res.map(|x| Gloc::get(ctx, x))
+        res.map(|x| Gloc::get(ctx, x)).transpose()
     }
 
     pub fn make_binding(
@@ -326,11 +326,11 @@ impl LibraryManager {
         sym: Handle<Symbol>,
         value: Value,
         constant: bool,
-    ) -> Option<Handle<Gloc>> {
-        if let Some(_) = self.global_variable_ref(ctx, module, sym, true, false) {
-            return None;
+    ) -> ScmResult<Option<Handle<Gloc>>> {
+        if let Some(_) = self.global_variable_ref(ctx, module, sym, true, false)? {
+            return Ok(None);
         } else {
-            Some(self.make_binding(
+            Ok(Some(self.make_binding(
                 module,
                 sym,
                 value,
@@ -339,7 +339,7 @@ impl LibraryManager {
                 } else {
                     GlocFlag::BindingMut
                 },
-            ))
+            )))
         }
     }
 
@@ -349,17 +349,17 @@ impl LibraryManager {
         sym: Handle<Symbol>,
         create: bool,
         silent: bool,
-    ) -> Option<Handle<Library>> {
+    ) -> ScmResult<Option<Handle<Library>>> {
         if create {
 
             let (_created, m) = self.lookup_module_create(sym);
 
-            Some(m)
+            Ok(Some(m))
         } else {
             let m = self.lookup_module(sym);
 
             if let Some(m) = m {
-                Some(m)
+                Ok(Some(m))
             } else {
                 if !silent {
                     let exc = Exception::eval(
@@ -368,10 +368,10 @@ impl LibraryManager {
                         &[Value::new(sym)],
                         SourcePosition::unknown(),
                     );
-                    ctx.error(exc);
+                    ctx.error(exc)?;
                 }
 
-                None
+                Ok(None)
             }
         }
     }
@@ -382,13 +382,13 @@ impl LibraryManager {
         mut module: Handle<Library>,
         imported: Value,
         prefix: Value,
-    ) -> Value {
+    ) -> ScmResult {
         let imp;
         if imported.is_handle_of::<Library>() {
             imp = imported.get_handle_of::<Library>();
         } else if imported.is_symbol() {
             imp = self
-                .find_module(ctx, imported.get_symbol(), false, false)
+                .find_module(ctx, imported.get_symbol(), false, false)?
                 .unwrap();
         } else {
             let exc = Exception::custom(
@@ -398,7 +398,7 @@ impl LibraryManager {
                 &[imported],
                 SourcePosition::unknown(),
             );
-            ctx.error(exc);
+            return ctx.error(exc);
         }
 
         if prefix.is_symbol() {
@@ -441,7 +441,7 @@ impl LibraryManager {
         }
         drop(modules);
 
-        Value::new(p)
+        Ok(Value::new(p))
     }
 
 
@@ -539,7 +539,7 @@ impl LibraryManager {
         ctx: &mut Context,
         mut module: Handle<Library>,
         specs: Value,
-    ) -> Value {
+    ) -> ScmResult {
         let mut lp;
         //let overwritten = Value::nil();
 
@@ -556,7 +556,7 @@ impl LibraryManager {
                     && spec.cddr().car().is_symbol()))
             {
                 let err = Exception::custom(ctx, "evaluation error", "Invalid export-spec; a symbol or (rename <symbol> <symbol>) is expected, but got $0", &[spec], SourcePosition::unknown());
-                ctx.error(err);
+                ctx.error(err)?;
             }
         });
 
@@ -573,7 +573,7 @@ impl LibraryManager {
             } else {
                 name = spec.cadr().get_symbol();
                 exported_name = spec.cddr().car().get_symbol();
-                println!("{} -> {}", name.to_string(), exported_name.to_string());
+                
             }
 
             match module.external.entry(exported_name) {
@@ -593,7 +593,7 @@ impl LibraryManager {
                         name,
                         mcopy,
                         Value::encode_undefined_value(),
-                    ));
+                    )); 
 
                     
                     *vacant.insert(Value::new(gloc))
@@ -604,7 +604,7 @@ impl LibraryManager {
 
         drop(modules);
 
-        Value::encode_undefined_value()
+        Ok(Value::encode_undefined_value())
     }
 
     pub fn add_definition<'a>(

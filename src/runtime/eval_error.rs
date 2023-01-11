@@ -136,6 +136,7 @@ pub enum EvalError {
     UnsupportedDocType,
     ExpectedTextBlockStyleAttribute,
     UnknownTextBlockStyleAttribute,
+    SymbolAlreadyExists,
 }
 
 impl EvalError {
@@ -190,6 +191,7 @@ impl EvalError {
             CannotExpandImportSet => "cannot expand import set: $,0",
             DefineSyntaxInLocalEnv => "syntax definition of $0 in local environment",
             CannotModifyLibraryEnv => "cannot modify environment of library $,0 dynamically",
+            SymbolAlreadyExists => "symbol $0 is already defined",
             CannotEnterProtectedBlockTwice => {
                 "attempt to invoke expression protected by unwind-protect twice"
             }

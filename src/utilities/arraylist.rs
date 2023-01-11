@@ -81,8 +81,9 @@ impl<T: Object> RawArray<T> {
 
 impl<T: Object> Object for RawArray<T> {
     fn trace_range(&self, from: usize, to: usize, visitor: &mut dyn rsgc::system::traits::Visitor) {
+        //println!("RAW ARRAY({}) trace: {}->{}", std::any::type_name::<T>(), from, to);
         for val in self.as_slice()[from..to].iter() {
-            val.trace(visitor);
+            unsafe { val.assume_init_ref().trace(visitor); }
         }
     }
 }
@@ -230,9 +231,9 @@ impl<T: Object + Allocation> ArrayList<T> {
             return None;
         }
 
-        if needs_write_barrier::<T>() {
+        //if needs_write_barrier::<T>() {
             thread.write_barrier(self.array);
-        }
+        //}
         let old_val = unsafe { self.array.as_ref().as_slice()[idx].assume_init_read() };
         self.array.as_mut().as_slice_mut()[idx] = MaybeUninit::new(val);
         Some(old_val)

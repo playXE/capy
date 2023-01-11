@@ -4,12 +4,12 @@ use super::{
 };
 use crate::{
     data::special_form::SpecialForm,
-    prelude::*,
+    prelude::{*, eval_error::EvalError},
     runtime::Runtime,
     utilities::{arraylist::ArrayList, string_builder::StringBuilder},
 };
 use core::fmt;
-use std::{collections::HashSet, fmt::Debug};
+use std::{collections::HashSet, fmt::Debug, intrinsics::likely};
 #[derive(Copy, Clone, Debug)]
 pub struct Value(pub(crate) EncodedValueDescriptor);
 #[derive(Clone, Copy)]
@@ -1123,6 +1123,8 @@ impl Value {
                     val.raw() as *mut u8,
                     val.get_handle_of::<Gloc>().value.to_string(escape)
                 )
+            } else if val.is_handle_of::<Exception>() {
+                format!("#<exception {}>", val.get_handle_of::<Exception>().inline_description())
             } else {
                 format!("#<unknown {:p}>", val.raw() as *mut u8)
             }
@@ -1133,23 +1135,24 @@ impl Value {
         string_repr_of(&mut visited, &mut obj_id, self.clone(), escape)
     }
 
-    pub fn assert_type(&self, ctx: &mut Context, pos: SourcePosition, types: &[Type]) {
+    #[inline]
+    pub fn assert_type(&self, ctx: &mut Context, pos: SourcePosition, types: &[Type]) -> ScmResult<()> {
         for typ in types {
             if let Some(subtypes) = typ.included() {
                 for subtype in subtypes {
-                    if *subtype == self.typ() {
-                        return;
+                    if likely(*subtype == self.typ()) {
+                        return Ok(())
                     }
                 }
             }
 
-            if self.typ() == *typ {
-                return;
+            if likely(self.typ() == *typ) {
+                return Ok(());
             }
         }
 
         let exc = Exception::type_error(ctx, types, *self, pos);
-        ctx.error(exc);
+        ctx.error(exc)
     }
 }
 
@@ -1180,8 +1183,8 @@ pub enum GlocFlag {
     BindingMut,
     BindingConst,
     BindingCustom(
-        Option<fn(&mut Context, Handle<Gloc>) -> Value>,
-        Option<fn(&mut Context, Handle<Gloc>, Value)>,
+        Option<fn(&mut Context, Handle<Gloc>) -> ScmResult>,
+        Option<fn(&mut Context, Handle<Gloc>, Value) -> ScmResult<()>>,
     ),
 }
 
@@ -1189,8 +1192,8 @@ pub struct Gloc {
     name: Handle<Symbol>,
     module: Handle<Library>,
     pub(crate) value: Value,
-    get: Option<fn(&mut Context, Handle<Gloc>) -> Value>,
-    set: Option<fn(&mut Context, Handle<Gloc>, Value)>,
+    get: Option<fn(&mut Context, Handle<Gloc>) -> ScmResult>,
+    set: Option<fn(&mut Context, Handle<Gloc>, Value) -> ScmResult<()>>,
 }
 
 impl Gloc {
@@ -1217,8 +1220,9 @@ impl Gloc {
                 self.get = None;
                 self.set = Some({
                     #[allow(unused_variables)]
-                    fn set(ctx: &mut Context, gloc: Handle<Gloc>, value: Value) {
-                        todo!()
+                    fn set(ctx: &mut Context, gloc: Handle<Gloc>, value: Value) -> ScmResult<()> {
+                        let exc = Exception::eval(ctx, EvalError::BindingImmutable, &[Value::new(gloc.name)], SourcePosition::unknown());
+                        ctx.error(exc)
                     }
 
                     set
@@ -1230,19 +1234,20 @@ impl Gloc {
         }
     }
 
-    pub fn get(ctx: &mut Context, gloc: Handle<Gloc>) -> Value {
+    pub fn get(ctx: &mut Context, gloc: Handle<Gloc>) -> ScmResult {
         if let Some(get) = gloc.get {
             get(ctx, gloc)
         } else {
-            gloc.value
+            Ok(gloc.value)
         }
     }
 
-    pub fn set(ctx: &mut Context, mut gloc: Handle<Gloc>, value: Value) {
+    pub fn set(ctx: &mut Context, mut gloc: Handle<Gloc>, value: Value) -> ScmResult<()> {
         if let Some(set) = gloc.set {
             set(ctx, gloc, value)
         } else {
             gloc.value = value;
+            Ok(())
         }
     }
 }
@@ -1252,6 +1257,13 @@ impl Object for Gloc {
         self.value.trace(visitor);
         self.name.trace(visitor);
         self.module.trace(visitor);
+       // println!("TRACE GLOC {:p}", self);
+    }
+}
+
+impl Drop for Gloc {
+    fn drop(&mut self) {
+        //println!("DROP GLOC {:p}", self);
     }
 }
 

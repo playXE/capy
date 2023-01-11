@@ -1,4 +1,4 @@
-use crate::prelude::{Context, Type, Value};
+use crate::{prelude::{Context, Type, Value, Identifier}, ScmResult};
 
 use super::exception::SourcePosition;
 
@@ -9,18 +9,18 @@ pub enum NumberPair {
 }
 
 impl NumberPair {
-    pub fn new(ctx: &mut Context, x: Value, y: Value) -> Self {
-        if x.is_int32() && y.is_int32() {
+    pub fn new(ctx: &mut Context, x: Value, y: Value) -> ScmResult<Self> {
+        Ok(if x.is_int32() && y.is_int32() {
             Self::Fixnum(x.get_int32(), y.get_int32())
         } else if x.is_double() && y.is_double() {
             Self::Flonum(x.get_double(), y.get_double())
         } else if x.is_number() && y.is_number() {
             Self::Flonum(x.get_number(), y.get_number())
         } else {
-            x.assert_type(ctx, SourcePosition::unknown(), &[Type::Number]);
-            y.assert_type(ctx, SourcePosition::unknown(), &[Type::Number]);
+            x.assert_type(ctx, SourcePosition::unknown(), &[Type::Number])?;
+            y.assert_type(ctx, SourcePosition::unknown(), &[Type::Number])?;
             unreachable!()
-        }
+        })
     }
 
     pub fn eq(&self) -> Value {
@@ -80,20 +80,15 @@ pub fn eqv(_ctx: &mut Context, lhs: Value, rhs: Value) -> bool {
         return lhs.get_double() == rhs.get_double();
     }
 
-    if lhs.is_pair() && rhs.is_pair() {
-        return lhs.raw() == rhs.raw();
-        //return eqv(ctx, lhs.car(), rhs.car()) && eqv(ctx, lhs.cdr(), rhs.cdr());
-    }
-
-    if lhs.is_bytes() && rhs.is_bytes() {
-        let b1 = lhs.get_bytes();
-        let b2 = rhs.get_bytes();
-
-        return b1.as_ptr() == b2.as_ptr();
-    }
-
     if lhs.is_string() && rhs.is_string() {
-        return lhs.get_string() == rhs.get_string();
+        return lhs.get_string() == rhs.get_string()
+    }
+
+    if lhs.is_handle_of::<Identifier>() && rhs.is_handle_of::<Identifier>() {
+        let lhs = lhs.get_handle_of::<Identifier>();
+        let rhs = rhs.get_handle_of::<Identifier>();
+        
+        return eqv(_ctx, lhs.name, rhs.name) && lhs.module.as_ptr() == rhs.module.as_ptr()
     }
 
     lhs.raw() == rhs.raw()
@@ -121,8 +116,7 @@ pub fn equal(ctx: &mut Context, lhs: Value, rhs: Value) -> bool {
     }
 
     if lhs.is_pair() && rhs.is_pair() {
-       
-        return eqv(ctx, lhs.car(), rhs.car()) && eqv(ctx, lhs.cdr(), rhs.cdr());
+        return equal(ctx, lhs.car(), rhs.car()) && equal(ctx, lhs.cdr(), rhs.cdr());
     }
 
     if lhs.is_vector() && rhs.is_vector() {
@@ -183,6 +177,14 @@ pub fn eq(_ctx: &mut Context, lhs: Value, rhs: Value) -> bool {
         return lhs.get_double() == rhs.get_double();
     }
 
-   
+    if lhs.is_string() && rhs.is_string() {
+        return lhs.get_string() == rhs.get_string()
+    }
+    if lhs.is_handle_of::<Identifier>() && rhs.is_handle_of::<Identifier>() {
+        let lhs = lhs.get_handle_of::<Identifier>();
+        let rhs = rhs.get_handle_of::<Identifier>();
+        
+        return eq(_ctx, lhs.name, rhs.name) && lhs.module.as_ptr() == rhs.module.as_ptr()
+    }
     lhs.raw() == rhs.raw()
 }

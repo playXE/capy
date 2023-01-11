@@ -62,7 +62,18 @@ impl Exception {
         }
 
         if self.calltrace.is_none() {
-            //self.calltrace = ctx.get_call_trace(current, None);
+            match ctx.get_call_trace(current, None) {
+                Some(ct) => {
+                    let mut calltrace = ArrayList::with_capacity(ctx.mutator(), ct.len());
+
+                    for proc in ct.iter() {
+                        let ct = Str::new(ctx.mutator(), proc.to_string(false));
+                        calltrace.push(ctx.mutator(), ct);
+                    }
+                    self.calltrace = Some(calltrace);
+                }
+                _ => ()
+            }
         }
     }
 
@@ -210,8 +221,17 @@ impl Exception {
 
     pub fn inline_description(&self) -> String {
         let msg = self.message();
-
-        format!("{}: {}", self.descriptor.type_description(), msg)
+        if self.pos.is_unknown() {
+            format!("{}: {}", self.descriptor.type_description(), msg)
+        } else {
+            format!(
+                "{}: {} at {}:{}",
+                self.descriptor.type_description(),
+                msg,
+                self.pos.position.line,
+                self.pos.position.col
+            )
+        }
     }
 
     fn replace_placeholders(template: &str, values: &[Value], used: &mut HashSet<i32>) -> String {

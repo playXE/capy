@@ -39,7 +39,7 @@ pub(crate) fn core_library(rt: &mut Runtime) {
     manager.add_definition(
         thr,
         base,
-        ("null?", Implementation::Native1(is_null)),
+        ("null?", Form::Primitive(compile_is_null)),
         true,
         true,
     );
@@ -47,7 +47,7 @@ pub(crate) fn core_library(rt: &mut Runtime) {
     manager.add_definition(
         thr,
         base,
-        ("pair?", Implementation::Native1(is_pair)),
+        ("pair?", Form::Primitive(compile_is_pair)),
         true,
         true,
     );
@@ -108,37 +108,19 @@ pub(crate) fn core_library(rt: &mut Runtime) {
         true,
     );
 
-    manager.add_definition(
-        thr,
-        base,
-        ("car", Implementation::Native1(car)),
-        true,
-        true,
-    );
+    manager.add_definition(thr, base, ("car", Form::Primitive(compile_car)), true, true);
+
+    manager.add_definition(thr, base, ("cdr", Form::Primitive(compile_cdr)), true, true);
 
     manager.add_definition(
         thr,
         base,
-        ("cdr", Implementation::Native1(cdr)),
+        ("cons", Form::Primitive(compile_cons)),
         true,
         true,
     );
 
-    manager.add_definition(
-        thr,
-        base,
-        ("cons", Implementation::Native2(cons)),
-        true,
-        true,
-    );
-
-    manager.add_definition(
-        thr,
-        base,
-        ("eq?", Implementation::Native2(eq)),
-        true,
-        true,
-    );
+    manager.add_definition(thr, base, ("eq?", Implementation::Native2(eq)), true, true);
 
     manager.add_definition(
         thr,
@@ -217,16 +199,31 @@ pub(crate) fn core_library(rt: &mut Runtime) {
         true,
         true,
     );
+
+    manager.add_definition(
+        thr,
+        keywords,
+        ("define-syntax", Form::Primitive(compile_define_syntax)),
+        true,
+        true,
+    );
+    manager.add_definition(
+        thr,
+        keywords,
+        ("set!", Form::Primitive(compile_set)),
+        true,
+        true,
+    );
 }
 
 pub fn compile_and_eval_first(
     ctx: &mut Context,
     args: &Arguments,
-) -> (Handle<Procedure>, ArrayList<Value>) {
+) -> ScmResult<(Handle<Procedure>, ArrayList<Value>)> {
     if args.len() != 3 {
         let ls = Value::make_list_slice(ctx, args, Value::nil());
         let exc = Exception::argument_count(ctx, None, 3, 3, ls, SourcePosition::unknown());
-        ctx.error(exc);
+        return ctx.error(exc);
     }
 
     let form = args[0];
@@ -245,7 +242,7 @@ pub fn compile_and_eval_first(
         library_manager().user_module.get_handle_of::<Library>()
     };
 
-    let code = Compiler::build(ctx, form, library, source_dir);
+    let code = Compiler::build(ctx, form, library, source_dir)?;
 
     let named = ClosureType::Named(Str::new(ctx.mutator(), "<loader>"));
     let upvals = Array::new(ctx.mutator(), 0, |_, _| unreachable!());
@@ -255,14 +252,17 @@ pub fn compile_and_eval_first(
         module: library,
     };
     let args = ArrayList::new(ctx.mutator());
-    (ctx.mutator().allocate(proc), args)
+    Ok((ctx.mutator().allocate(proc), args))
 }
 
-pub fn load(ctx: &mut Context, args: &Arguments) -> (Handle<Procedure>, ArrayList<Value>) {
+pub fn load(
+    ctx: &mut Context,
+    args: &Arguments,
+) -> ScmResult<(Handle<Procedure>, ArrayList<Value>)> {
     if args.len() != 1 || args.len() != 2 {
         let ls = Value::make_list_slice(ctx, args, Value::nil());
         let exc = Exception::argument_count(ctx, None, 1, 2, ls, SourcePosition::unknown());
-        ctx.error(exc);
+        return ctx.error(exc);
     }
 
     let path = args.first().unwrap().to_string(false);
@@ -296,7 +296,7 @@ pub fn load(ctx: &mut Context, args: &Arguments) -> (Handle<Procedure>, ArrayLis
                 &[args[0]],
                 SourcePosition::unknown(),
             );
-            ctx.error(exc);
+            return ctx.error(exc);
         }
     };
     let mut i = NoIntern;
@@ -322,7 +322,7 @@ pub fn load(ctx: &mut Context, args: &Arguments) -> (Handle<Procedure>, ArrayLis
                         },
                     );
 
-                    ctx.error(exc);
+                    return ctx.error(exc);
                 }
 
                 ParseError::Syntax(pos, syntax) => {
@@ -336,7 +336,7 @@ pub fn load(ctx: &mut Context, args: &Arguments) -> (Handle<Procedure>, ArrayLis
                         },
                     );
 
-                    ctx.error(exc);
+                    return ctx.error(exc);
                 }
             },
         }
@@ -354,10 +354,15 @@ pub fn load(ctx: &mut Context, args: &Arguments) -> (Handle<Procedure>, ArrayLis
     args.push(ctx.mutator(), Value::new(dir));
     args.push(ctx.mutator(), Value::new(library));
 
-    (loader, args)
+    Ok((loader, args))
 }
 
-pub fn compile_lambda(cc: &mut Compiler, ctx: &mut Context, form: Value, _: bool) -> bool {
+pub fn compile_lambda(
+    cc: &mut Compiler,
+    ctx: &mut Context,
+    form: Value,
+    _: bool,
+) -> ScmResult<bool> {
     let (form, _) = Compiler::desyntax(form);
     if form.is_pair() {
         let rest = form.cdr();
@@ -371,18 +376,23 @@ pub fn compile_lambda(cc: &mut Compiler, ctx: &mut Context, form: Value, _: bool
                 false,
                 false,
                 false,
-            );
+            )?;
 
-            return false;
+            return Ok(false);
         }
     }
     let exc = Exception::argument_count(ctx, Some("lambda"), 1, 0, form, SourcePosition::unknown());
-    ctx.error(exc);
+    ctx.error(exc)
 }
 
-pub fn compile_define(cc: &mut Compiler, ctx: &mut Context, form: Value, _: bool) -> bool {
+pub fn compile_define(
+    cc: &mut Compiler,
+    ctx: &mut Context,
+    form: Value,
+    _: bool,
+) -> ScmResult<bool> {
     let (form, pos) = Compiler::desyntax(form);
-    cc.check_toplevel(ctx, form, pos);
+    cc.check_toplevel(ctx, form, pos)?;
 
     if form.is_pair() {
         let (rest, _) = Compiler::desyntax(form.cdr());
@@ -391,13 +401,12 @@ pub fn compile_define(cc: &mut Compiler, ctx: &mut Context, form: Value, _: bool
             let (def, _) = Compiler::desyntax(rest.cdr());
 
             if sig.is_symbol() {
-                let ix = cc.add_constant(ctx, sig);
                 if def.is_pair() && def.cdr().is_null() {
-                    cc.compile(ctx, def.car(), false);
+                    cc.compile(ctx, def.car(), false)?;
                 } else {
                     let ls = ctx.make_pair(def, Value::nil());
                     let exc = Exception::eval(ctx, EvalError::MalformedDefinition, &[ls], pos);
-                    ctx.error(exc);
+                    return ctx.error(exc);
                 }
 
                 library_manager().insert_binding(
@@ -406,34 +415,49 @@ pub fn compile_define(cc: &mut Compiler, ctx: &mut Context, form: Value, _: bool
                     sig.get_symbol(),
                     Value::UNDEFINED,
                     false,
-                );
+                )?;
+
+                let identifier = Value::new(cc.make_identifier(ctx, sig.get_symbol()));
+
+                let ix = cc.add_constant(ctx, identifier);
+
                 cc.emit(ctx, Ins::DefineGlobal(ix as _, false));
-                return false;
+                return Ok(false);
             } else if sig.is_pair() {
                 let (sym, _) = Compiler::desyntax(sig.car());
                 let (arglist, _) = Compiler::desyntax(sig.cdr());
 
                 let ix = cc.add_constant(ctx, sym);
-                cc.compile_lambda(ctx, Some(ix), arglist, def, false, false, false, false);
+                cc.compile_lambda(ctx, Some(ix), arglist, def, false, false, false, false)?;
                 library_manager().insert_binding(
                     ctx,
                     cc.library,
                     sym.get_symbol(),
                     Value::UNDEFINED,
                     false,
-                );
+                )?;
+
+                let identifier = cc.make_identifier(ctx, sym.get_symbol());
+
+                let ix = cc.add_constant(ctx, Value::new(identifier));
+
                 cc.emit(ctx, Ins::DefineGlobal(ix as _, false));
-                return false;
+                return Ok(false);
             }
         }
     }
     let exc = Exception::argument_count(ctx, Some("define"), 2, 2, form, pos);
-    ctx.error(exc);
+    ctx.error(exc)
 }
 
-pub fn compile_define_const(cc: &mut Compiler, ctx: &mut Context, form: Value, _: bool) -> bool {
+pub fn compile_define_const(
+    cc: &mut Compiler,
+    ctx: &mut Context,
+    form: Value,
+    _: bool,
+) -> ScmResult<bool> {
     let (form, pos) = Compiler::desyntax(form);
-    cc.check_toplevel(ctx, form, pos);
+    cc.check_toplevel(ctx, form, pos)?;
 
     if form.is_pair() {
         let (rest, _) = Compiler::desyntax(form.cdr());
@@ -442,13 +466,12 @@ pub fn compile_define_const(cc: &mut Compiler, ctx: &mut Context, form: Value, _
             let (def, _) = Compiler::desyntax(rest.cdr());
 
             if sig.is_symbol() {
-                let ix = cc.add_constant(ctx, sig);
                 if def.is_pair() && def.cdr().is_null() {
-                    cc.compile(ctx, def.car(), false);
+                    cc.compile(ctx, def.car(), false)?;
                 } else {
                     let ls = ctx.make_pair(def, Value::nil());
                     let exc = Exception::eval(ctx, EvalError::MalformedDefinition, &[ls], pos);
-                    ctx.error(exc);
+                    return ctx.error(exc);
                 }
 
                 library_manager().insert_binding(
@@ -457,32 +480,46 @@ pub fn compile_define_const(cc: &mut Compiler, ctx: &mut Context, form: Value, _
                     sig.get_symbol(),
                     Value::UNDEFINED,
                     true,
-                );
+                )?;
+
+                let identifier = cc.make_identifier(ctx, sig.get_symbol());
+
+                let ix = cc.add_constant(ctx, identifier);
                 cc.emit(ctx, Ins::DefineGlobal(ix as _, true));
-                return false;
+                return Ok(false);
             } else if sig.is_pair() {
                 let (sym, _) = Compiler::desyntax(sig.car());
                 let (arglist, _) = Compiler::desyntax(sig.cdr());
 
                 let ix = cc.add_constant(ctx, sym);
-                cc.compile_lambda(ctx, Some(ix), arglist, def, false, false, false, false);
+                cc.compile_lambda(ctx, Some(ix), arglist, def, false, false, false, false)?;
                 library_manager().insert_binding(
                     ctx,
                     cc.library,
                     sym.get_symbol(),
                     Value::UNDEFINED,
                     true,
-                );
+                )?;
+
+                let identifier = cc.make_identifier(ctx, sym.get_symbol());
+
+                let ix = cc.add_constant(ctx, identifier);
+
                 cc.emit(ctx, Ins::DefineGlobal(ix as _, true));
-                return false;
+                return Ok(false);
             }
         }
     }
     let exc = Exception::argument_count(ctx, Some("define"), 2, 2, form, pos);
-    ctx.error(exc);
+    ctx.error(exc)
 }
 
-pub fn compile_quote(cc: &mut Compiler, ctx: &mut Context, form: Value, _tail: bool) -> bool {
+pub fn compile_quote(
+    cc: &mut Compiler,
+    ctx: &mut Context,
+    form: Value,
+    _tail: bool,
+) -> ScmResult<bool> {
     let form = Compiler::desyntax_rec(ctx, form);
     if form.is_pair() {
         let rest = form.cdr();
@@ -490,15 +527,20 @@ pub fn compile_quote(cc: &mut Compiler, ctx: &mut Context, form: Value, _tail: b
             let quote = rest.car();
             let ix = cc.add_constant(ctx, quote);
             cc.emit(ctx, Ins::PushConstant(ix as _));
-            return false;
+            return Ok(false);
         }
     }
     let exc = Exception::argument_count(ctx, Some("quote"), 1, 1, form, SourcePosition::unknown());
-    ctx.error(exc);
+    ctx.error(exc)
 }
 
-pub fn compile_define_library(cc: &mut Compiler, ctx: &mut Context, form: Value, _: bool) -> bool {
-    cc.check_toplevel(ctx, form, SourcePosition::unknown());
+pub fn compile_define_library(
+    cc: &mut Compiler,
+    ctx: &mut Context,
+    form: Value,
+    _: bool,
+) -> ScmResult<bool> {
+    cc.check_toplevel(ctx, form, SourcePosition::unknown())?;
     if form.is_pair() {
         let rest = form.cdr();
         if rest.is_pair() {
@@ -507,7 +549,7 @@ pub fn compile_define_library(cc: &mut Compiler, ctx: &mut Context, form: Value,
             let name = library_manager().module_name(ctx, name);
             let name = ctx.runtime().symbol_table().intern(name);
             let library = library_manager()
-                .find_module(ctx, name, true, true)
+                .find_module(ctx, name, true, true)?
                 .unwrap();
 
             let mut decls = ArrayList::new(ctx.mutator());
@@ -525,7 +567,7 @@ pub fn compile_define_library(cc: &mut Compiler, ctx: &mut Context, form: Value,
                     &[lsdecls],
                     SourcePosition::unknown(),
                 );
-                ctx.error(exc);
+                return ctx.error(exc);
             }
 
             for decl in decls.iter() {
@@ -540,26 +582,26 @@ pub fn compile_define_library(cc: &mut Compiler, ctx: &mut Context, form: Value,
                             &[sig],
                             SourcePosition::unknown(),
                         );
-                        ctx.error(exc);
+                        return ctx.error(exc);
                     }
 
                     let sig = sig.get_symbol();
 
                     if &*sig.identifier() == "export" {
-                        library_manager().export_symbols(ctx, library, spec);
+                        library_manager().export_symbols(ctx, library, spec)?;
                     } else if &*sig.identifier() == "import" {
                         let mut imports = spec;
                         while imports.is_pair() {
                             let import = imports.car();
                             if let Some(imported_library) =
-                                library_manager().lookup_import(ctx, import)
+                                library_manager().lookup_import(ctx, import)?
                             {
                                 library_manager().import_module(
                                     ctx,
                                     library,
                                     Value::new(imported_library),
                                     Value::nil(),
-                                );
+                                )?;
                             } else {
                                 let exc = Exception::eval(
                                     ctx,
@@ -567,7 +609,7 @@ pub fn compile_define_library(cc: &mut Compiler, ctx: &mut Context, form: Value,
                                     &[import],
                                     SourcePosition::unknown(),
                                 );
-                                ctx.error(exc)
+                                return ctx.error(exc);
                             }
                             imports = imports.cdr();
                         }
@@ -575,7 +617,15 @@ pub fn compile_define_library(cc: &mut Compiler, ctx: &mut Context, form: Value,
                         let body = spec;
                         cc.with_library(library, ctx, |ctx, cc| {
                             cc.compile_body(ctx, body, Value::nil(), true)
-                        });
+                        })?;
+
+                        /*match ctx.compile_and_eval(
+                            body,
+                            library
+                        ) {
+                            Ok(_) => (),
+                            Err(err) => ctx.error(err),
+                        }*/
                     }
                 } else {
                     let exc = Exception::eval(
@@ -584,11 +634,11 @@ pub fn compile_define_library(cc: &mut Compiler, ctx: &mut Context, form: Value,
                         &[*decl],
                         SourcePosition::unknown(),
                     );
-                    ctx.error(exc);
+                    return ctx.error(exc);
                 }
             }
 
-            return false;
+            return Ok(false);
         }
     }
 
@@ -603,11 +653,16 @@ pub fn compile_define_library(cc: &mut Compiler, ctx: &mut Context, form: Value,
     ctx.error(exc)
 }
 
-pub fn compile_values(cc: &mut Compiler, ctx: &mut Context, form: Value, _tail: bool) -> bool {
+pub fn compile_values(
+    cc: &mut Compiler,
+    ctx: &mut Context,
+    form: Value,
+    _tail: bool,
+) -> ScmResult<bool> {
     if form.is_pair() {
         let cdr = form.cdr();
 
-        match cc.compile_exprs(ctx, cdr) {
+        match cc.compile_exprs(ctx, cdr)? {
             0 => {
                 cc.emit(ctx, Ins::PushVoid);
             }
@@ -617,7 +672,7 @@ pub fn compile_values(cc: &mut Compiler, ctx: &mut Context, form: Value, _tail: 
             }
         }
 
-        return false;
+        return Ok(false);
     }
 
     let exc = Exception::argument_count(ctx, Some("values"), 1, 1, form, SourcePosition::unknown());
@@ -634,8 +689,8 @@ pub fn compile_define_values(
     ctx: &mut Context,
     form: Value,
     _tail: bool,
-) -> bool {
-    cc.check_toplevel(ctx, form, SourcePosition::unknown());
+) -> ScmResult<bool> {
+    cc.check_toplevel(ctx, form, SourcePosition::unknown())?;
 
     if form.is_pair()
         && form.cdr().is_pair()
@@ -647,18 +702,24 @@ pub fn compile_define_values(
         let value = rest.cdr().car();
 
         if sig.is_null() {
-            cc.compile(ctx, value, false);
+            cc.compile(ctx, value, false)?;
             cc.emit(ctx, Ins::Unpack(0, false));
             cc.emit(ctx, Ins::PushVoid);
-            return false;
+            return Ok(false);
         } else if sig.is_symbol() {
             let index = cc.add_constant(ctx, sig);
+            cc.compile(ctx, value, false)?;
             cc.emit(ctx, Ins::Unpack(0, true));
-            cc.emit(ctx, Ins::DefineGlobal(index as _, false));
+
+            let identifier = cc.make_identifier(ctx, sig.get_symbol());
+
+            let ix = cc.add_constant(ctx, identifier);
+
+            cc.emit(ctx, Ins::DefineGlobal(ix as _, false));
             cc.emit(ctx, Ins::PushConstant(index as _));
-            return false;
+            return Ok(false);
         } else if sig.is_pair() {
-            cc.compile(ctx, value, false);
+            cc.compile(ctx, value, false)?;
             let mut syms = ArrayList::new(ctx.mutator());
 
             let mut vars = sig;
@@ -673,7 +734,7 @@ pub fn compile_define_values(
                         &[Value::new(sym), sig],
                         SourcePosition::unknown(),
                     );
-                    ctx.error(exc);
+                    return ctx.error(exc);
                 }
 
                 syms.push(ctx.mutator(), sym);
@@ -695,7 +756,7 @@ pub fn compile_define_values(
                     &[ls],
                     SourcePosition::unknown(),
                 );
-                ctx.error(exc);
+                return ctx.error(exc);
             }
 
             let mut res = Value::nil();
@@ -707,8 +768,11 @@ pub fn compile_define_values(
                     Value::UNDEFINED,
                     GlocFlag::BindingMut,
                 );
-                let index = cc.add_constant(ctx, Value::new(*sym));
-                cc.emit(ctx, Ins::DefineGlobal(index as _, false));
+                //let index = cc.add_constant(ctx, Value::new(*sym));
+                let identifier = cc.make_identifier(ctx, *sym);
+
+                let ix = cc.add_constant(ctx, identifier);
+                cc.emit(ctx, Ins::DefineGlobal(ix as _, false));
                 res = ctx.make_pair(Value::new(*sym), res);
             }
 
@@ -723,7 +787,7 @@ pub fn compile_define_values(
             let index = cc.add_constant(ctx, res);
             cc.emit(ctx, Ins::PushConstant(index as _));
         }
-        false
+        Ok(false)
     } else {
         let exc = Exception::argument_count(
             ctx,
@@ -733,86 +797,257 @@ pub fn compile_define_values(
             form,
             SourcePosition::unknown(),
         );
-        ctx.error(exc);
+        ctx.error(exc)
     }
 }
 
-pub fn is_null(_: &mut Context, val: Value) -> Value {
-    Value::new(val.is_null())
+pub fn is_null(_: &mut Context, val: Value) -> ScmResult {
+    Ok(Value::new(val.is_null()))
 }
 
-pub fn is_pair(_: &mut Context, val: Value) -> Value {
-    Value::new(val.is_pair())
+pub fn is_pair(_: &mut Context, val: Value) -> ScmResult {
+    Ok(Value::new(val.is_pair()))
 }
 
-pub fn is_symbol(_: &mut Context, val: Value) -> Value {
-    Value::new(val.is_symbol())
+pub fn is_symbol(_: &mut Context, val: Value) -> ScmResult {
+    Ok(Value::new(val.is_symbol()))
 }
 
-pub fn is_string(_: &mut Context, val: Value) -> Value {
-    Value::new(val.is_string())
+pub fn is_string(_: &mut Context, val: Value) -> ScmResult {
+    Ok(Value::new(val.is_string()))
 }
 
-pub fn is_fixnum(_: &mut Context, val: Value) -> Value {
-    Value::new(val.is_int32())
+pub fn is_fixnum(_: &mut Context, val: Value) -> ScmResult {
+    Ok(Value::new(val.is_int32()))
 }
 
-pub fn is_flonum(_: &mut Context, val: Value) -> Value {
-    Value::new(val.is_double())
+pub fn is_flonum(_: &mut Context, val: Value) -> ScmResult {
+    Ok(Value::new(val.is_double()))
 }
 
-pub fn is_list(_: &mut Context, val: Value) -> Value {
-    Value::new(val.is_list_recsafe())
+pub fn is_list(_: &mut Context, val: Value) -> ScmResult {
+    Ok(Value::new(val.is_list_recsafe()))
 }
 
-pub fn is_vector(_: &mut Context, val: Value) -> Value {
-    Value::new(val.is_vector())
+pub fn is_vector(_: &mut Context, val: Value) -> ScmResult {
+    Ok(Value::new(val.is_vector()))
 }
 
-pub fn length(ctx: &mut Context, val: Value) -> Value {
-    val.assert_type(ctx, SourcePosition::unknown(), &[Type::List]);
-    Value::new(val.length_recsafe().1 as i32)
+pub fn length(ctx: &mut Context, val: Value) -> ScmResult {
+    val.assert_type(ctx, SourcePosition::unknown(), &[Type::List])?;
+    Ok(Value::new(val.length_recsafe().1 as i32))
 }
 
-pub fn car(ctx: &mut Context, val: Value) -> Value {
-    val.assert_type(ctx, SourcePosition::unknown(), &[Type::Pair]);
+pub fn car(ctx: &mut Context, val: Value) -> ScmResult {
+    val.assert_type(ctx, SourcePosition::unknown(), &[Type::Pair])?;
 
-    val.car()
+    Ok(val.car())
 }
 
-pub fn cdr(ctx: &mut Context, val: Value) -> Value {
-    val.assert_type(ctx, SourcePosition::unknown(), &[Type::Pair]);
+pub fn cdr(ctx: &mut Context, val: Value) -> ScmResult {
+    val.assert_type(ctx, SourcePosition::unknown(), &[Type::Pair])?;
 
-    val.cdr()
+    Ok(val.cdr())
 }
 
-pub fn cons(ctx: &mut Context, car: Value, cdr: Value) -> Value {
-    ctx.make_pair(car, cdr)
+pub fn cons(ctx: &mut Context, car: Value, cdr: Value) -> ScmResult {
+    Ok(ctx.make_pair(car, cdr))
 }
 
-pub fn eq(ctx: &mut Context, a: Value, b: Value) -> Value {
-    crate::data::equality::eq(ctx, a, b).into()
+pub fn eq(ctx: &mut Context, a: Value, b: Value) -> ScmResult {
+    Ok(crate::data::equality::eq(ctx, a, b).into())
 }
 
-pub fn eqv(ctx: &mut Context, a: Value, b: Value) -> Value {
-    crate::data::equality::eqv(ctx, a, b).into()
+pub fn eqv(ctx: &mut Context, a: Value, b: Value) -> ScmResult {
+    Ok(crate::data::equality::eqv(ctx, a, b).into())
 }
 
-pub fn equal(ctx: &mut Context, a: Value, b: Value) -> Value {
-    crate::data::equality::equal(ctx, a, b).into()
+pub fn equal(ctx: &mut Context, a: Value, b: Value) -> ScmResult {
+    Ok(crate::data::equality::equal(ctx, a, b).into())
 }
 
-
-pub fn identity(_: &mut Context, val: Value) -> Value {
-    val
+pub fn identity(_: &mut Context, val: Value) -> ScmResult {
+    Ok(val)
 }
 
-pub fn dbg(_: &mut Context, args: &Arguments) -> Value {
-
+pub fn dbg(_: &mut Context, args: &Arguments) -> ScmResult {
     for arg in args.iter() {
         print!("{} ", arg.to_string(true));
     }
     println!();
 
-    Value::void()
+    Ok(Value::void())
+}
+
+#[allow(unused_variables, unused_assignments)]
+pub fn compile_define_syntax(
+    cc: &mut Compiler,
+    ctx: &mut Context,
+    form: Value,
+    _tail: bool,
+) -> ScmResult<bool> {
+    cc.check_toplevel(ctx, form, SourcePosition::unknown())?;
+    let kword;
+    let transformer;
+    let doc;
+    if form.is_pair() {
+        if form.cdr().is_pair() && form.cdr().cdr().is_pair() && form.cdr().cdr().cdr().is_null() {
+            kword = form.cdr().car();
+            transformer = form.cdr().cdr().car();
+            doc = None;
+        } else if form.cdr().is_pair()
+            && form.cdr().cdr().is_pair()
+            && form.cdr().cdr().car().is_string()
+            && form.cdr().cdr().cdr().is_pair()
+            && form.cdr().cdr().cdr().cdr().is_null()
+        {
+            kword = form.cdr().car();
+            transformer = form.cdr().cdr().cdr().car();
+            doc = Some(form.cdr().cdr().car().get_string());
+        } else {
+            let exc = Exception::argument_count(
+                ctx,
+                Some("define-syntax"),
+                2,
+                3,
+                form,
+                SourcePosition::unknown(),
+            );
+            return ctx.error(exc);
+        }
+
+        if kword.is_symbol() {
+            let sym = kword.get_symbol();
+
+            //let index = cc.add_constant(ctx, kword);
+            let old_syntax_sym = cc.syntax_sym;
+            cc.syntax_sym = kword;
+            cc.compile(ctx, transformer, false)?;
+            cc.syntax_sym = old_syntax_sym;
+
+            let env = cc.library;
+
+            library_manager().insert_binding(ctx, env, sym, Value::UNDEFINED, false)?;
+
+            let identifier = cc.make_identifier(ctx, kword.get_symbol());
+
+            let index = cc.add_constant(ctx, identifier);
+
+            cc.emit(ctx, Ins::MakeSyntax(index as _));
+            cc.emit(ctx, Ins::DefineGlobal(index as _, false));
+            cc.emit(ctx, Ins::PushConstant(index as _));
+
+            return Ok(false);
+        }
+    }
+
+    let exc = Exception::argument_count(
+        ctx,
+        Some("define-syntax"),
+        2,
+        3,
+        form,
+        SourcePosition::unknown(),
+    );
+    ctx.error(exc)
+}
+
+pub fn compile_set(cc: &mut Compiler, ctx: &mut Context, form: Value, _: bool) -> ScmResult<bool> {
+    if form.is_pair()
+        && form.cdr().is_pair()
+        && form.cdr().car().is_symbol()
+        && form.cdr().cdr().is_pair()
+        && form.cdr().cdr().cdr().is_null()
+    {
+        let sym = form.cdr().car().get_symbol();
+        let val = form.cdr().cdr().car();
+
+        cc.compile(ctx, val, false)?;
+        cc.set_value_of(ctx, sym)?;
+        cc.emit(ctx, Ins::PushVoid);
+        return Ok(false);
+    }
+
+    let exc = Exception::argument_count(ctx, Some("set!"), 2, 2, form, SourcePosition::unknown());
+    ctx.error(exc)
+}
+
+pub fn compile_is_null(
+    cc: &mut Compiler,
+    ctx: &mut Context,
+    form: Value,
+    _: bool,
+) -> ScmResult<bool> {
+    if form.is_pair() && form.cdr().cdr().is_null() {
+        cc.compile(ctx, form.cdr().car(), false)?;
+        cc.emit(ctx, Ins::IsNull);
+        Ok(false)
+    } else {
+        let exc =
+            Exception::argument_count(ctx, Some("null?"), 1, 1, form, SourcePosition::unknown());
+
+        ctx.error(exc)
+    }
+}
+
+pub fn compile_is_pair(
+    cc: &mut Compiler,
+    ctx: &mut Context,
+    form: Value,
+    _: bool,
+) -> ScmResult<bool> {
+    if form.is_pair() && form.cdr().cdr().is_null() {
+        cc.compile(ctx, form.cdr().car(), false)?;
+        cc.emit(ctx, Ins::IsPair);
+        Ok(false)
+    } else {
+        let exc =
+            Exception::argument_count(ctx, Some("pair?"), 1, 1, form, SourcePosition::unknown());
+
+        ctx.error(exc)
+    }
+}
+
+pub fn compile_car(cc: &mut Compiler, ctx: &mut Context, form: Value, _: bool) -> ScmResult<bool> {
+    if form.is_pair() && form.cdr().cdr().is_null() {
+        cc.compile(ctx, form.cdr().car(), false)?;
+        cc.emit(ctx, Ins::Car);
+        Ok(false)
+    } else {
+        let exc =
+            Exception::argument_count(ctx, Some("car"), 1, 1, form, SourcePosition::unknown());
+
+        ctx.error(exc)
+    }
+}
+
+pub fn compile_cdr(cc: &mut Compiler, ctx: &mut Context, form: Value, _: bool) -> ScmResult<bool> {
+    if form.is_pair() && form.cdr().cdr().is_null() {
+        cc.compile(ctx, form.cdr().car(), false)?;
+        cc.emit(ctx, Ins::Cdr);
+        Ok(false)
+    } else {
+        let exc =
+            Exception::argument_count(ctx, Some("cdr"), 1, 1, form, SourcePosition::unknown());
+
+        ctx.error(exc)
+    }
+}
+
+pub fn compile_cons(cc: &mut Compiler, ctx: &mut Context, form: Value, _: bool) -> ScmResult<bool> {
+    // Pair(_, Pair(car, Pair(cons, nil)))
+    if form.is_pair() && form.cdr().is_pair() && form.cdr().cdr().is_pair()
+    && form.cdr().cdr().cdr().is_null() {
+        let car = form.cdr().car();
+        let cdr = form.cdr().cdr().car();
+        cc.compile(ctx, car, false)?;
+        cc.compile(ctx, cdr, false)?;
+        cc.emit(ctx, Ins::Cons);
+        Ok(false)
+    } else {
+        let exc =
+            Exception::argument_count(ctx, Some("cons"), 1, 1, form, SourcePosition::unknown());
+
+        ctx.error(exc)
+    }
 }

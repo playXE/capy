@@ -111,7 +111,8 @@ impl Object for Code {
         self.instructions.trace(visitor);
         self.constants.trace(visitor);
         self.fragments.trace(visitor);
-
+        self.module.trace(visitor);
+        self.captures.trace(visitor);
         if let Some(arity) = self.arity.get() {
             arity.trace(visitor);
         }
@@ -158,7 +159,7 @@ pub enum Ins {
 
     Compile,
 
-    MakeSyntax(u16),
+    MakeSyntax(i32),
     MakePromise,
     MakeStream,
     Force,
@@ -210,4 +211,95 @@ pub enum Ins {
 impl Object for Ins {}
 impl Allocation for Ins {
     const NO_HEAP_PTRS: bool = true;
+}
+
+
+impl Code {
+    pub fn dump(&self) {
+        println!("code at {:p}:", self);
+        println!("constants: ");
+        for (i, c) in self.constants.iter().enumerate() {
+            println!(" {:04}: {}", i, c.to_string(false));
+        }
+
+        println!("instructions: ");
+        for (i, ins) in self.instructions.iter().enumerate() {
+            print!(" {:04}: ",i);
+            match *ins {
+                Ins::Pop => print!("pop"),
+                Ins::Dup => print!("dup"),
+                Ins::Swap => print!("swap"),
+                Ins::Alloc(n) => print!("alloc {}", n),
+                Ins::AllocBelow(n) => print!("alloc-below {}", n),
+                Ins::Reset(n, i) => print!("reset {} {}", n, i),
+                Ins::PushUndef => print!("push-undef"),
+                Ins::PushVoid => print!("push-void"),
+                Ins::PushEof => print!("push-eof"),
+                Ins::PushNull => print!("push-null"),
+                Ins::PushTrue => print!("push-true"),
+                Ins::PushFalse => print!("push-false"),
+                Ins::PushFixnum(n) => print!("push-fixnum {}", n),
+                Ins::PushConstant(n) => print!("push-constant {} ; => {}", n, self.constants[n as usize].to_string(false)),
+                Ins::PushGlobal(n) => print!("push-global {} ; => {}", n, self.constants[n as usize].to_string(false)),
+                Ins::SetGlobal(n) => print!("set-global {} ; => {}", n, self.constants[n as usize].to_string(false)),
+                Ins::PushLocal(n) => print!("push-local {}", n),
+                Ins::PushProcedure(n) => print!("push-procedure {}", n),
+
+                Ins::Pack(n) => print!("pack {}", n),
+                Ins::Unpack(n, overflow) => print!("unpack {} {}", n, overflow),
+                Ins::Flatpack(n) => print!("flatpack {}", n),
+
+                Ins::PushFragment(n) => print!("push-fragment {}", n),
+                Ins::MakeClosure(n, i, j) => print!("make-closure {} {} {}", n, i, j),
+                Ins::MakeTaggedClosure(n, i, j) => print!("make-tagged-closure {} {} {}", n, i, j),
+                
+                Ins::MakeFrame => print!("make-frame"),
+                Ins::InjectFrame => print!("inject-frame"),
+                
+                Ins::Call(n) => print!("call {}", n),
+                Ins::TailCall(n) => print!("tail-call {}", n),
+                Ins::Return => print!("return"),
+                Ins::Apply(n) => print!("apply {}", n),
+                Ins::AssertArgCount(n) => print!("assert-arg-count {}", n),
+                Ins::AssertMinArgCount(n) => print!("assert-min-arg-count {}", n),
+                Ins::CollectRest(n) => print!("collect-rest {}", n),
+                
+                Ins::Compile => print!("compile"),
+
+                Ins::MakeSyntax(n) => print!("make-syntax {}", n),
+                Ins::SetLocal(n) => print!("set-local {}", n),
+                Ins::PushCaptured(n) => print!("push-captured {}", n),
+                Ins::SetCaptured(n) => print!("set-captured {}", n),
+
+                Ins::Branch(off) => {
+                    let to = i as i32 + off;
+                    print!("branch {} ; => {:04}", off, to)
+                }
+
+                Ins::BranchIf(off) => {
+                    let to = i as i32 + off;
+                    print!("branch-if {} ; => {:04}", off, to)
+                }
+
+                Ins::BranchIfNot(off) => {
+                    let to = i as i32 + off;
+                    print!("branch-if-not {} ; => {:04}", off, to)
+                }
+
+                Ins::KeepOrBranchIfNot(off) => {
+                    let to = i as i32 + off;
+                    print!("keep-or-branch-if-not {} ; => {:04}", off, to)
+                }
+
+                Ins::BranchIfArgMismatch(off, n) => {
+                    let to = i as i32 + off;
+                    print!("branch-if-arg-mismatch {} {} ; => {:04}", off, n, to)
+                }
+
+                _ => print!("{:?}", ins)
+            }
+            println!();
+        }
+
+    }
 }

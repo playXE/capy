@@ -2,7 +2,8 @@ use std::sync::atomic::AtomicUsize;
 
 use crate::{
     compiler::Compiler,
-    prelude::{code::Code, syntax_rules::SyntaxRules, *}, utilities::arraylist::ArrayList,
+    prelude::{code::Code, libraries::control_flow::Continuation, syntax_rules::SyntaxRules, *},
+    utilities::arraylist::ArrayList,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -69,7 +70,7 @@ impl Procedure {
                 Implementation::Native1R(_) => &[Arity::AtLeast(1)],
                 Implementation::Native2R(_) => &[Arity::AtLeast(2)],
                 Implementation::Native3R(_) => &[Arity::AtLeast(3)],
-                Implementation::Apply(_) | Implementation::Eval(_) => &[Arity::AtLeast(0)]
+                Implementation::Apply(_) | Implementation::Eval(_) => &[Arity::AtLeast(0)],
             },
 
             ProcedureKind::Closure(ClosureType::Continuation, _, _, _) => &[Arity::Exact(1)],
@@ -97,8 +98,13 @@ impl Allocation for Procedure {}
 pub enum ProcedureKind {
     Primitive(Handle<Str>, Implementation, Option<FormCompiler>),
     Parameter(Handle<Pair>),
-    Closure(ClosureType, Value, Handle<Array<Handle<Upvalue>>>, Handle<Code>),
-    RawContinuation(SavedState),
+    Closure(
+        ClosureType,
+        Value,
+        Handle<Array<Handle<Upvalue>>>,
+        Handle<Code>,
+    ),
+    RawContinuation(Handle<Continuation>),
     Transformer(Handle<SyntaxRules>),
 }
 
@@ -110,10 +116,10 @@ impl Object for ProcedureKind {
             ProcedureKind::Closure(ty, proc, free_vars, code) => {
                 if let ClosureType::Named(name) = ty {
                     name.trace(visitor);
-                    proc.trace(visitor);
-                    free_vars.trace(visitor);
-                    code.trace(visitor);
                 }
+                proc.trace(visitor);
+                free_vars.trace(visitor);
+                code.trace(visitor);
             }
             ProcedureKind::RawContinuation(state) => state.trace(visitor),
             ProcedureKind::Transformer(rules) => rules.trace(visitor),
@@ -133,107 +139,109 @@ pub enum ClosureType {
 }
 
 pub enum Implementation {
-    Apply(fn(&mut Context, &Arguments) -> (Handle<Procedure>, ArrayList<Value>)),
-    Eval(fn(&mut Context, &Arguments) -> Handle<Code>),
-    Native0(fn(&mut Context) -> Value),
-    Native1(fn(&mut Context, Value) -> Value),
-    Native2(fn(&mut Context, Value, Value) -> Value),
-    Native3(fn(&mut Context, Value, Value, Value) -> Value),
-    Native4(fn(&mut Context, Value, Value, Value, Value) -> Value),
-    Native0O(fn(&mut Context, Option<Value>) -> Value),
-    Native1O(fn(&mut Context, Value, Option<Value>) -> Value),
-    Native2O(fn(&mut Context, Value, Value, Option<Value>) -> Value),
-    Native3O(fn(&mut Context, Value, Value, Value, Option<Value>) -> Value),
-    Native0OO(fn(&mut Context, Option<Value>, Option<Value>) -> Value),
-    Native1OO(fn(&mut Context, Value, Option<Value>, Option<Value>) -> Value),
-    Native2OO(fn(&mut Context, Value, Value, Option<Value>, Option<Value>) -> Value),
-    Native3OO(fn(&mut Context, Value, Value, Value, Option<Value>, Option<Value>) -> Value),
-    Native0R(fn(&mut Context, &Arguments) -> Value),
-    Native1R(fn(&mut Context, Value, &Arguments) -> Value),
-    Native2R(fn(&mut Context, Value, Value, &Arguments) -> Value),
-    Native3R(fn(&mut Context, Value, Value, Value, &Arguments) -> Value),
+    Apply(fn(&mut Context, &Arguments) -> ScmResult<(Handle<Procedure>, ArrayList<Value>)>),
+    Eval(fn(&mut Context, &Arguments) -> ScmResult<Handle<Code>>),
+    Native0(fn(&mut Context) -> ScmResult),
+    Native1(fn(&mut Context, Value) -> ScmResult),
+    Native2(fn(&mut Context, Value, Value) -> ScmResult),
+    Native3(fn(&mut Context, Value, Value, Value) -> ScmResult),
+    Native4(fn(&mut Context, Value, Value, Value, Value) -> ScmResult),
+    Native0O(fn(&mut Context, Option<Value>) -> ScmResult),
+    Native1O(fn(&mut Context, Value, Option<Value>) -> ScmResult),
+    Native2O(fn(&mut Context, Value, Value, Option<Value>) -> ScmResult),
+    Native3O(fn(&mut Context, Value, Value, Value, Option<Value>) -> ScmResult),
+    Native0OO(fn(&mut Context, Option<Value>, Option<Value>) -> ScmResult),
+    Native1OO(fn(&mut Context, Value, Option<Value>, Option<Value>) -> ScmResult),
+    Native2OO(fn(&mut Context, Value, Value, Option<Value>, Option<Value>) -> ScmResult),
+    Native3OO(fn(&mut Context, Value, Value, Value, Option<Value>, Option<Value>) -> ScmResult),
+    Native0R(fn(&mut Context, &Arguments) -> ScmResult),
+    Native1R(fn(&mut Context, Value, &Arguments) -> ScmResult),
+    Native2R(fn(&mut Context, Value, Value, &Arguments) -> ScmResult),
+    Native3R(fn(&mut Context, Value, Value, Value, &Arguments) -> ScmResult),
 }
 
-impl Into<Implementation> for fn(&mut Context, &Arguments) -> (Handle<Procedure>, ArrayList<Value>) {
+impl Into<Implementation>
+    for fn(&mut Context, &Arguments) -> ScmResult<(Handle<Procedure>, ArrayList<Value>)>
+{
     fn into(self) -> Implementation {
         Implementation::Apply(self)
     }
 }
 
-impl Into<Implementation> for fn(&mut Context, &Arguments) -> Handle<Code> {
+impl Into<Implementation> for fn(&mut Context, &Arguments) -> ScmResult<Handle<Code>> {
     fn into(self) -> Implementation {
         Implementation::Eval(self)
     }
 }
 
-impl Into<Implementation> for fn(&mut Context) -> Value {
+impl Into<Implementation> for fn(&mut Context) -> ScmResult {
     fn into(self) -> Implementation {
         Implementation::Native0(self)
     }
 }
 
-impl Into<Implementation> for fn(&mut Context, Value) -> Value {
+impl Into<Implementation> for fn(&mut Context, Value) -> ScmResult {
     fn into(self) -> Implementation {
         Implementation::Native1(self)
     }
 }
 
-impl Into<Implementation> for fn(&mut Context, Value, Value) -> Value {
+impl Into<Implementation> for fn(&mut Context, Value, Value) -> ScmResult {
     fn into(self) -> Implementation {
         Implementation::Native2(self)
     }
 }
 
-impl Into<Implementation> for fn(&mut Context, Value, Value, Value) -> Value {
+impl Into<Implementation> for fn(&mut Context, Value, Value, Value) -> ScmResult {
     fn into(self) -> Implementation {
         Implementation::Native3(self)
     }
 }
 
-impl Into<Implementation> for fn(&mut Context, Value, Value, Value, Value) -> Value {
+impl Into<Implementation> for fn(&mut Context, Value, Value, Value, Value) -> ScmResult {
     fn into(self) -> Implementation {
         Implementation::Native4(self)
     }
 }
 
-impl Into<Implementation> for fn(&mut Context, Option<Value>) -> Value {
+impl Into<Implementation> for fn(&mut Context, Option<Value>) -> ScmResult {
     fn into(self) -> Implementation {
         Implementation::Native0O(self)
     }
 }
 
-impl Into<Implementation> for fn(&mut Context, Value, Option<Value>) -> Value {
+impl Into<Implementation> for fn(&mut Context, Value, Option<Value>) -> ScmResult {
     fn into(self) -> Implementation {
         Implementation::Native1O(self)
     }
 }
 
-impl Into<Implementation> for fn(&mut Context, Value, Value, Option<Value>) -> Value {
+impl Into<Implementation> for fn(&mut Context, Value, Value, Option<Value>) -> ScmResult {
     fn into(self) -> Implementation {
         Implementation::Native2O(self)
     }
 }
 
-impl Into<Implementation> for fn(&mut Context, Value, Value, Value, Option<Value>) -> Value {
+impl Into<Implementation> for fn(&mut Context, Value, Value, Value, Option<Value>) -> ScmResult {
     fn into(self) -> Implementation {
         Implementation::Native3O(self)
     }
 }
 
-impl Into<Implementation> for fn(&mut Context, Option<Value>, Option<Value>) -> Value {
+impl Into<Implementation> for fn(&mut Context, Option<Value>, Option<Value>) -> ScmResult {
     fn into(self) -> Implementation {
         Implementation::Native0OO(self)
     }
 }
 
-impl Into<Implementation> for fn(&mut Context, Value, Option<Value>, Option<Value>) -> Value {
+impl Into<Implementation> for fn(&mut Context, Value, Option<Value>, Option<Value>) -> ScmResult {
     fn into(self) -> Implementation {
         Implementation::Native1OO(self)
     }
 }
 
 impl Into<Implementation>
-    for fn(&mut Context, Value, Value, Option<Value>, Option<Value>) -> Value
+    for fn(&mut Context, Value, Value, Option<Value>, Option<Value>) -> ScmResult
 {
     fn into(self) -> Implementation {
         Implementation::Native2OO(self)
@@ -241,32 +249,32 @@ impl Into<Implementation>
 }
 
 impl Into<Implementation>
-    for fn(&mut Context, Value, Value, Value, Option<Value>, Option<Value>) -> Value
+    for fn(&mut Context, Value, Value, Value, Option<Value>, Option<Value>) -> ScmResult
 {
     fn into(self) -> Implementation {
         Implementation::Native3OO(self)
     }
 }
 
-impl Into<Implementation> for fn(&mut Context, &Arguments) -> Value {
+impl Into<Implementation> for fn(&mut Context, &Arguments) -> ScmResult {
     fn into(self) -> Implementation {
         Implementation::Native0R(self)
     }
 }
 
-impl Into<Implementation> for fn(&mut Context, Value, &Arguments) -> Value {
+impl Into<Implementation> for fn(&mut Context, Value, &Arguments) -> ScmResult {
     fn into(self) -> Implementation {
         Implementation::Native1R(self)
     }
 }
 
-impl Into<Implementation> for fn(&mut Context, Value, Value, &Arguments) -> Value {
+impl Into<Implementation> for fn(&mut Context, Value, Value, &Arguments) -> ScmResult {
     fn into(self) -> Implementation {
         Implementation::Native2R(self)
     }
 }
 
-impl Into<Implementation> for fn(&mut Context, Value, Value, Value, &Arguments) -> Value {
+impl Into<Implementation> for fn(&mut Context, Value, Value, Value, &Arguments) -> ScmResult {
     fn into(self) -> Implementation {
         Implementation::Native3R(self)
     }
@@ -298,4 +306,4 @@ impl ArgumentsExt for Arguments {
     }
 }
 
-pub type FormCompiler = fn(&mut Compiler, &mut Context, Value, bool) -> bool;
+pub type FormCompiler = fn(&mut Compiler, &mut Context, Value, bool) -> ScmResult<bool>;

@@ -1,4 +1,4 @@
-use std::{panic::AssertUnwindSafe, ptr::null_mut};
+use std::{panic::AssertUnwindSafe, ptr::null_mut, any::Any};
 
 use dashmap::DashMap;
 use rsgc::heap::{
@@ -7,7 +7,7 @@ use rsgc::heap::{
 
 use crate::{prelude::*, utilities::arraylist::ArrayList};
 
-use self::{file_manager::FileManager, source_manager::SourceManager};
+use self::{file_manager::FileManager, source_manager::SourceManager, libraries::control_flow::Continuation};
 
 pub mod code;
 pub mod context;
@@ -73,7 +73,6 @@ impl Runtime {
         }
     }
 
-    
     pub fn new(heap: &'static mut Heap) -> &'static mut Self {
         let thr = Thread::current();
 
@@ -105,6 +104,7 @@ impl Runtime {
             .add_root(SimpleRoot::new("Scheme Runtime", "ScmRT", |processor| {
                 assert!(SafepointSynchronize::is_at_safepoint());
                 let rt = Runtime::get();
+                
                 unsafe {
                     // lock without safepoint check because we're already in safepoint.
                     //
@@ -135,6 +135,9 @@ impl Runtime {
                 rt.symtab.trace(processor.visitor());
                 rt.loader.trace(processor.visitor());
                 rt.identity.trace(processor.visitor());
+                rt.empty_array.trace(processor.visitor());
+                rt.empty_arraylist.trace(processor.visitor());
+
                 for node in rt.documentation.iter() {
                     processor.visitor().visit(*node.key() as *const u8);
                 }
@@ -143,6 +146,7 @@ impl Runtime {
         let _ = library_manager();
         libraries::core::core_library(this);
         libraries::control_flow::control_flow(this);
+        libraries::math::math_library();
         this
     }
 
@@ -155,18 +159,37 @@ impl Runtime {
     }
 }
 
-pub fn scm_main_thread<R>(f: impl Fn(&mut Context) -> R) -> R {
+
+pub enum ScmThreadResult<R> {
+    Ok(R),
+    UncapturedContinuation(Handle<Continuation>),
+    Panic(Box<dyn Any + Send>),
+}
+
+pub fn scm_main_thread<R>(f: impl Fn(&mut Context) -> R) -> ScmThreadResult<R> {
     let args = HeapArguments::from_env();
     let f = AssertUnwindSafe(f);
     match rsgc::thread::main_thread(args, move |heap| unsafe {
         heap.add_core_root_set();
-        let rt = Runtime::new(rsgc::heap::heap::heap());
-        let main_ctx = Context::new(rt, 1024, Thread::current());
-        let res = f(main_ctx);
+        let result = std::panic::catch_unwind(|| {
+            let rt = Runtime::new(rsgc::heap::heap::heap());
+            let main_ctx = Context::new(rt, 1024, Thread::current());
+            let res = f(main_ctx);
 
-        let _ = Box::from_raw(main_ctx);
+            let _ = Box::from_raw(main_ctx);
+            res
+        });
 
-        Ok(res)
+        match result {
+            Ok(val) => Ok(ScmThreadResult::Ok(val)),
+            Err(err) => {
+                if let Some(cont) = err.downcast_ref::<Handle<Continuation>>() {
+                    return Ok(ScmThreadResult::UncapturedContinuation(*cont));
+                } else {
+                    return Ok(ScmThreadResult::Panic(err));
+                }
+            }
+        }
     }) {
         Err(_) => unreachable!(),
         Ok(val) => val,

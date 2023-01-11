@@ -191,3 +191,18 @@ pub fn gensym(prefix: Option<impl AsRef<str>>) -> Handle<Symbol> {
     let sym = Symbol::Uninterned(Str::new(Thread::current(), name));
     Thread::current().allocate(sym)
 }
+
+pub struct Identifier {
+    pub name: Value,
+    pub module: Handle<Library>,
+    pub env: Option<Handle<crate::compiler::Environment>>
+}
+
+impl Allocation for Identifier {}
+impl Object for Identifier {
+    fn trace(&self, visitor: &mut dyn Visitor) {
+        self.name.trace(visitor);
+        self.module.trace(visitor);
+        self.env.trace(visitor);
+    }
+}

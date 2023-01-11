@@ -1,6 +1,8 @@
 
 #![feature(const_refs_to_cell, core_intrinsics)]
 
+use prelude::Value;
+
 
 #[macro_export]
 macro_rules! scm_for_each {
@@ -40,6 +42,7 @@ pub mod prelude {
         },
         thread::*,
     };
+    pub use super::ScmResult;
 }
 
-
+pub type ScmResult<T = Value> = Result<T, Value>;

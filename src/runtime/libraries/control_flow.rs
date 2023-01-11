@@ -31,7 +31,7 @@ pub(crate) fn control_flow(_: &mut Runtime) {
         true,
         true,
     );
-    manager.add_definition(
+    /*manager.add_definition(
         thr,
         base,
         (
@@ -40,16 +40,38 @@ pub(crate) fn control_flow(_: &mut Runtime) {
         ),
         true,
         true,
-    );
+    );*/
     manager.add_definition(
         thr,
         base,
         ("continuation?", Implementation::Native1(is_continuation)),
-        false,
-        false,
+        true,
+        true,
     );
 
     manager.add_definition(
+        thr,
+        base,
+        (
+            "call/cc",
+            Implementation::Native1(call_with_current_continuation),
+        ),
+        true,
+        true,
+    );
+
+    manager.add_definition(
+        thr,
+        base,
+        (
+            "call-with-current-continuation",
+            Implementation::Native1(call_with_current_continuation),
+        ),
+        true,
+        true,
+    );
+
+    /*manager.add_definition(
         thr,
         base,
         ("_wind-down", Implementation::Native0(wind_down)),
@@ -97,7 +119,7 @@ pub(crate) fn control_flow(_: &mut Runtime) {
         false,
     );
 
-
+    */
     let keywords = manager.keyword_module.get_handle_of::<Library>();
 
     manager.add_definition(
@@ -197,7 +219,12 @@ pub(crate) fn control_flow(_: &mut Runtime) {
     );
 }
 
-pub fn compile_begin(cc: &mut Compiler, ctx: &mut Context, form: Value, tail: bool) -> bool {
+pub fn compile_begin(
+    cc: &mut Compiler,
+    ctx: &mut Context,
+    form: Value,
+    tail: bool,
+) -> ScmResult<bool> {
     if form.is_pair() {
         let exprs = form.cdr();
 
@@ -209,12 +236,12 @@ pub fn compile_begin(cc: &mut Compiler, ctx: &mut Context, form: Value, tail: bo
             &[form],
             SourcePosition::unknown(),
         );
-        ctx.error(exc);
+        ctx.error(exc)
     }
 }
 
 #[allow(dead_code)]
-fn split_bindings(ctx: &mut Context, bindings_list: Value) -> (Value, Value) {
+fn split_bindings(ctx: &mut Context, bindings_list: Value) -> ScmResult<(Value, Value)> {
     let mut symbols = ArrayList::new(ctx.mutator());
     let mut exprs = ArrayList::new(ctx.mutator());
 
@@ -241,7 +268,7 @@ fn split_bindings(ctx: &mut Context, bindings_list: Value) -> (Value, Value) {
                 SourcePosition::unknown(),
             );
 
-            ctx.error(exc);
+            return ctx.error(exc);
         }
 
         bindings = rest;
@@ -250,10 +277,15 @@ fn split_bindings(ctx: &mut Context, bindings_list: Value) -> (Value, Value) {
     let fst = Value::make_list_arraylist(ctx, &symbols, Value::nil());
     let snd = Value::make_list_arraylist(ctx, &exprs, Value::nil());
 
-    (fst, snd)
+    Ok((fst, snd))
 }
 
-pub fn compile_let(cc: &mut Compiler, ctx: &mut Context, form: Value, tail: bool) -> bool {
+pub fn compile_let(
+    cc: &mut Compiler,
+    ctx: &mut Context,
+    form: Value,
+    tail: bool,
+) -> ScmResult<bool> {
     if form.is_pair() {
         let rest = form.cdr();
         if rest.is_pair() {
@@ -266,18 +298,18 @@ pub fn compile_let(cc: &mut Compiler, ctx: &mut Context, form: Value, tail: bool
                 return cc.compile_seq(ctx, body, tail, true, None);
             } else if first.is_pair() {
                 let lenv = cc.env;
-                let group = cc.compile_bindings(ctx, first, lenv, true, false, false);
+                let group = cc.compile_bindings(ctx, first, lenv, true, false, false)?;
 
                 let old = cc.env;
                 cc.env = group;
-                res = cc.compile_seq(ctx, body, tail, false, None);
+                res = cc.compile_seq(ctx, body, tail, false, None)?;
                 cc.env = old;
             } else if first.is_symbol() {
                 let sym = first.get_symbol();
                 if body.is_pair() {
                     let bindings = body.car();
                     let rest = body.cdr();
-                    let (params, exprs) = split_bindings(ctx, bindings);
+                    let (params, exprs) = split_bindings(ctx, bindings)?;
 
                     let group = LocalEnv {
                         vars: HashMap::with_hasher(RandomState::new()),
@@ -306,7 +338,7 @@ pub fn compile_let(cc: &mut Compiler, ctx: &mut Context, form: Value, tail: bool
                         false,
                         false,
                         false,
-                    );
+                    )?;
                     cc.env = old;
                     cc.emit(ctx, Ins::SetLocal(index as _));
 
@@ -314,7 +346,7 @@ pub fn compile_let(cc: &mut Compiler, ctx: &mut Context, form: Value, tail: bool
                     cc.emit(ctx, Ins::PushLocal(index as _));
                     let old = cc.env;
                     cc.env = env;
-                    let exprs = cc.compile_exprs(ctx, exprs);
+                    let exprs = cc.compile_exprs(ctx, exprs)?;
                     cc.env = old;
                     if cc.call(ctx, exprs, tail) {
                         cc.code[push_frame_ip] = Ins::NoOp;
@@ -331,7 +363,7 @@ pub fn compile_let(cc: &mut Compiler, ctx: &mut Context, form: Value, tail: bool
                         form,
                         SourcePosition::unknown(),
                     );
-                    ctx.error(exc);
+                    return ctx.error(exc);
                 }
             } else {
                 todo!()
@@ -346,15 +378,20 @@ pub fn compile_let(cc: &mut Compiler, ctx: &mut Context, form: Value, tail: bool
                 );
             }
             cc.num_locals = initial_locals;
-            return res;
+            return Ok(res);
         }
     }
 
     let exc = Exception::argument_count(ctx, Some("let"), 1, 1, form, SourcePosition::unknown());
-    ctx.error(exc);
+    ctx.error(exc)
 }
 
-pub fn compile_letstar(cc: &mut Compiler, ctx: &mut Context, form: Value, tail: bool) -> bool {
+pub fn compile_letstar(
+    cc: &mut Compiler,
+    ctx: &mut Context,
+    form: Value,
+    tail: bool,
+) -> ScmResult<bool> {
     if form.is_pair() {
         let rest = form.cdr();
         if rest.is_pair() {
@@ -367,11 +404,11 @@ pub fn compile_letstar(cc: &mut Compiler, ctx: &mut Context, form: Value, tail: 
                 return cc.compile_seq(ctx, body, tail, true, None);
             } else if first.is_pair() {
                 let lenv = cc.env;
-                let group = cc.compile_bindings(ctx, first, lenv, false, false, false);
+                let group = cc.compile_bindings(ctx, first, lenv, false, false, false)?;
 
                 let old = cc.env;
                 cc.env = group;
-                res = cc.compile_seq(ctx, body, tail, false, None);
+                res = cc.compile_seq(ctx, body, tail, false, None)?;
                 cc.env = old;
             } else {
                 todo!()
@@ -386,15 +423,20 @@ pub fn compile_letstar(cc: &mut Compiler, ctx: &mut Context, form: Value, tail: 
                 );
             }
             cc.num_locals = initial_locals;
-            return res;
+            return Ok(res);
         }
     }
 
     let exc = Exception::argument_count(ctx, Some("let*"), 1, 1, form, SourcePosition::unknown());
-    ctx.error(exc);
+    ctx.error(exc)
 }
 
-pub fn compile_letrec(cc: &mut Compiler, ctx: &mut Context, form: Value, tail: bool) -> bool {
+pub fn compile_letrec(
+    cc: &mut Compiler,
+    ctx: &mut Context,
+    form: Value,
+    tail: bool,
+) -> ScmResult<bool> {
     if form.is_pair() {
         let rest = form.cdr();
         if rest.is_pair() {
@@ -407,11 +449,11 @@ pub fn compile_letrec(cc: &mut Compiler, ctx: &mut Context, form: Value, tail: b
                 return cc.compile_seq(ctx, body, tail, true, None);
             } else if first.is_pair() {
                 let lenv = cc.env;
-                let group = cc.compile_bindings(ctx, first, lenv, true, true, true);
+                let group = cc.compile_bindings(ctx, first, lenv, true, true, true)?;
 
                 let old = cc.env;
                 cc.env = group;
-                res = cc.compile_seq(ctx, body, tail, false, None);
+                res = cc.compile_seq(ctx, body, tail, false, None)?;
                 cc.env = old;
             } else {
                 todo!()
@@ -426,15 +468,20 @@ pub fn compile_letrec(cc: &mut Compiler, ctx: &mut Context, form: Value, tail: b
                 );
             }
             cc.num_locals = initial_locals;
-            return res;
+            return Ok(res);
         }
     }
 
     let exc = Exception::argument_count(ctx, Some("letrec"), 1, 1, form, SourcePosition::unknown());
-    ctx.error(exc);
+    ctx.error(exc)
 }
 
-pub fn compile_letrecstar(cc: &mut Compiler, ctx: &mut Context, form: Value, tail: bool) -> bool {
+pub fn compile_letrecstar(
+    cc: &mut Compiler,
+    ctx: &mut Context,
+    form: Value,
+    tail: bool,
+) -> ScmResult<bool> {
     if form.is_pair() {
         let rest = form.cdr();
         if rest.is_pair() {
@@ -447,11 +494,11 @@ pub fn compile_letrecstar(cc: &mut Compiler, ctx: &mut Context, form: Value, tai
                 return cc.compile_seq(ctx, body, tail, true, None);
             } else if first.is_pair() {
                 let lenv = cc.env;
-                let group = cc.compile_bindings(ctx, first, lenv, true, true, false);
+                let group = cc.compile_bindings(ctx, first, lenv, true, true, false)?;
 
                 let old = cc.env;
                 cc.env = group;
-                res = cc.compile_seq(ctx, body, tail, false, None);
+                res = cc.compile_seq(ctx, body, tail, false, None)?;
                 cc.env = old;
             } else {
                 todo!()
@@ -466,16 +513,21 @@ pub fn compile_letrecstar(cc: &mut Compiler, ctx: &mut Context, form: Value, tai
                 );
             }
             cc.num_locals = initial_locals;
-            return res;
+            return Ok(res);
         }
     }
 
     let exc =
         Exception::argument_count(ctx, Some("letrec*"), 1, 1, form, SourcePosition::unknown());
-    ctx.error(exc);
+    ctx.error(exc)
 }
 
-pub fn compile_let_values(cc: &mut Compiler, ctx: &mut Context, form: Value, tail: bool) -> bool {
+pub fn compile_let_values(
+    cc: &mut Compiler,
+    ctx: &mut Context,
+    form: Value,
+    tail: bool,
+) -> ScmResult<bool> {
     if form.is_pair() {
         let rest = form.cdr();
         if rest.is_pair() {
@@ -488,11 +540,11 @@ pub fn compile_let_values(cc: &mut Compiler, ctx: &mut Context, form: Value, tai
                 return cc.compile_seq(ctx, body, tail, true, None);
             } else if first.is_pair() {
                 let lenv = cc.env;
-                let group = cc.compile_multi_bindings(ctx, first, lenv, true, false);
+                let group = cc.compile_multi_bindings(ctx, first, lenv, true, false)?;
 
                 let old = cc.env;
                 cc.env = group;
-                res = cc.compile_seq(ctx, body, tail, false, None);
+                res = cc.compile_seq(ctx, body, tail, false, None)?;
                 cc.env = old;
             } else {
                 todo!()
@@ -507,7 +559,7 @@ pub fn compile_let_values(cc: &mut Compiler, ctx: &mut Context, form: Value, tai
                 );
             }
             cc.num_locals = initial_locals;
-            return res;
+            return Ok(res);
         }
     }
 
@@ -519,7 +571,7 @@ pub fn compile_let_values(cc: &mut Compiler, ctx: &mut Context, form: Value, tai
         form,
         SourcePosition::unknown(),
     );
-    ctx.error(exc);
+    ctx.error(exc)
 }
 
 pub fn compile_letstar_values(
@@ -527,7 +579,7 @@ pub fn compile_letstar_values(
     ctx: &mut Context,
     form: Value,
     tail: bool,
-) -> bool {
+) -> ScmResult<bool> {
     if form.is_pair() {
         let rest = form.cdr();
         if rest.is_pair() {
@@ -540,11 +592,11 @@ pub fn compile_letstar_values(
                 return cc.compile_seq(ctx, body, tail, true, None);
             } else if first.is_pair() {
                 let lenv = cc.env;
-                let group = cc.compile_multi_bindings(ctx, first, lenv, false, false);
+                let group = cc.compile_multi_bindings(ctx, first, lenv, false, false)?;
 
                 let old = cc.env;
                 cc.env = group;
-                res = cc.compile_seq(ctx, body, tail, false, None);
+                res = cc.compile_seq(ctx, body, tail, false, None)?;
                 cc.env = old;
             } else {
                 todo!()
@@ -559,7 +611,7 @@ pub fn compile_letstar_values(
                 );
             }
             cc.num_locals = initial_locals;
-            return res;
+            return Ok(res);
         }
     }
 
@@ -571,7 +623,7 @@ pub fn compile_letstar_values(
         form,
         SourcePosition::unknown(),
     );
-    ctx.error(exc);
+    ctx.error(exc)
 }
 
 pub fn compile_letrec_values(
@@ -579,7 +631,7 @@ pub fn compile_letrec_values(
     ctx: &mut Context,
     form: Value,
     tail: bool,
-) -> bool {
+) -> ScmResult<bool> {
     if form.is_pair() {
         let rest = form.cdr();
         if rest.is_pair() {
@@ -592,11 +644,11 @@ pub fn compile_letrec_values(
                 return cc.compile_seq(ctx, body, tail, true, None);
             } else if first.is_pair() {
                 let lenv = cc.env;
-                let group = cc.compile_multi_bindings(ctx, first, lenv, false, true);
+                let group = cc.compile_multi_bindings(ctx, first, lenv, false, true)?;
 
                 let old = cc.env;
                 cc.env = group;
-                res = cc.compile_seq(ctx, body, tail, false, None);
+                res = cc.compile_seq(ctx, body, tail, false, None)?;
                 cc.env = old;
             } else {
                 todo!()
@@ -611,7 +663,7 @@ pub fn compile_letrec_values(
                 );
             }
             cc.num_locals = initial_locals;
-            return res;
+            return Ok(res);
         }
     }
 
@@ -623,10 +675,15 @@ pub fn compile_letrec_values(
         form,
         SourcePosition::unknown(),
     );
-    ctx.error(exc);
+    ctx.error(exc)
 }
 
-pub fn compile_if(cc: &mut Compiler, ctx: &mut Context, form: Value, tail: bool) -> bool {
+pub fn compile_if(
+    cc: &mut Compiler,
+    ctx: &mut Context,
+    form: Value,
+    tail: bool,
+) -> ScmResult<bool> {
     if form.is_pair() && form.cdr().is_pair() {
         let cond = form.cdr().car();
         let rest = form.cdr().cdr();
@@ -640,23 +697,23 @@ pub fn compile_if(cc: &mut Compiler, ctx: &mut Context, form: Value, tail: bool)
                 Value::nil()
             };
 
-            cc.compile(ctx, cond, false);
+            cc.compile(ctx, cond, false)?;
             let else_jump_ip = cc.emit(ctx, Ins::Branch(0));
 
-            if cc.compile(ctx, elsep, tail) {
+            if cc.compile(ctx, elsep, tail)? {
                 cc.code[else_jump_ip] = Ins::BranchIf(cc.offset_to_next(else_jump_ip as _) as _);
                 return cc.compile(ctx, thenp, true);
             }
 
             let exit_jump_ip = cc.emit(ctx, Ins::Branch(0));
             cc.code[else_jump_ip] = Ins::BranchIf(cc.offset_to_next(else_jump_ip as _) as _);
-            if cc.compile(ctx, thenp, tail) {
+            if cc.compile(ctx, thenp, tail)? {
                 cc.code[exit_jump_ip] = Ins::Return;
-                return true;
+                return Ok(true);
             }
 
             cc.code[exit_jump_ip] = Ins::Branch(cc.offset_to_next(exit_jump_ip as _) as _);
-            return false;
+            return Ok(false);
         }
     }
     let exc = Exception::argument_count(
@@ -667,26 +724,31 @@ pub fn compile_if(cc: &mut Compiler, ctx: &mut Context, form: Value, tail: bool)
         Value::nil(),
         SourcePosition::unknown(),
     );
-    ctx.error(exc);
+    ctx.error(exc)
 }
 
-pub fn compile_unless(cc: &mut Compiler, ctx: &mut Context, form: Value, tail: bool) -> bool {
+pub fn compile_unless(
+    cc: &mut Compiler,
+    ctx: &mut Context,
+    form: Value,
+    tail: bool,
+) -> ScmResult<bool> {
     if form.is_pair() && form.cdr().is_pair() {
         let cond = form.car().car();
         let exprs = form.car().cdr();
 
-        cc.compile(ctx, cond, false);
+        cc.compile(ctx, cond, false)?;
         let else_jump_ip = cc.emit(ctx, Ins::Branch(0));
         cc.emit(ctx, Ins::PushVoid);
         let exit_jump_ip = cc.emit(ctx, Ins::Branch(0));
         cc.code[else_jump_ip] = Ins::BranchIfNot(cc.offset_to_next(else_jump_ip as _) as _);
-        if cc.compile_seq(ctx, exprs, tail, false, None) {
+        if cc.compile_seq(ctx, exprs, tail, false, None)? {
             cc.code[exit_jump_ip] = Ins::Return;
-            return true;
+            return Ok(true);
         }
 
         cc.code[exit_jump_ip] = Ins::Branch(cc.offset_to_next(exit_jump_ip as _) as _);
-        return false;
+        return Ok(false);
     }
     let exc = Exception::argument_count(
         ctx,
@@ -696,26 +758,31 @@ pub fn compile_unless(cc: &mut Compiler, ctx: &mut Context, form: Value, tail: b
         Value::nil(),
         SourcePosition::unknown(),
     );
-    ctx.error(exc);
+    ctx.error(exc)
 }
 
-pub fn compile_when(cc: &mut Compiler, ctx: &mut Context, form: Value, tail: bool) -> bool {
+pub fn compile_when(
+    cc: &mut Compiler,
+    ctx: &mut Context,
+    form: Value,
+    tail: bool,
+) -> ScmResult<bool> {
     if form.is_pair() && form.cdr().is_pair() {
         let cond = form.car().car();
         let exprs = form.car().cdr();
 
-        cc.compile(ctx, cond, false);
+        cc.compile(ctx, cond, false)?;
         let else_jump_ip = cc.emit(ctx, Ins::Branch(0));
         cc.emit(ctx, Ins::PushVoid);
         let exit_jump_ip = cc.emit(ctx, Ins::Branch(0));
         cc.code[else_jump_ip] = Ins::BranchIf(cc.offset_to_next(else_jump_ip as _) as _);
-        if cc.compile_seq(ctx, exprs, tail, false, None) {
+        if cc.compile_seq(ctx, exprs, tail, false, None)? {
             cc.code[exit_jump_ip] = Ins::Return;
-            return true;
+            return Ok(true);
         }
 
         cc.code[exit_jump_ip] = Ins::Branch(cc.offset_to_next(exit_jump_ip as _) as _);
-        return false;
+        return Ok(false);
     }
     let exc = Exception::argument_count(
         ctx,
@@ -725,10 +792,15 @@ pub fn compile_when(cc: &mut Compiler, ctx: &mut Context, form: Value, tail: boo
         Value::nil(),
         SourcePosition::unknown(),
     );
-    ctx.error(exc);
+    ctx.error(exc)
 }
 
-pub fn compile_do(cc: &mut Compiler, ctx: &mut Context, form: Value, tail: bool) -> bool {
+pub fn compile_do(
+    cc: &mut Compiler,
+    ctx: &mut Context,
+    form: Value,
+    tail: bool,
+) -> ScmResult<bool> {
     if form.is_pair() && form.cdr().is_pair() {
         let binding_list = form.cdr().car();
         if form.cdr().cdr().is_pair() {
@@ -764,7 +836,7 @@ pub fn compile_do(cc: &mut Compiler, ctx: &mut Context, form: Value, tail: bool)
                         let start = binding.cdr().car();
                         let opt_step = binding.cdr().cdr();
 
-                        cc.compile(ctx, start, false);
+                        cc.compile(ctx, start, false)?;
 
                         let index = group.add_binding(ctx, sym, || cc.next_local_index());
 
@@ -783,7 +855,7 @@ pub fn compile_do(cc: &mut Compiler, ctx: &mut Context, form: Value, tail: bool)
                                     &[binding, binding_list],
                                     SourcePosition::unknown(),
                                 );
-                                ctx.error(exc);
+                                ctx.error(exc)?;
                             }
 
                             prev_index = index as isize;
@@ -794,7 +866,7 @@ pub fn compile_do(cc: &mut Compiler, ctx: &mut Context, form: Value, tail: bool)
                                 &[binding, binding_list],
                                 SourcePosition::unknown(),
                             );
-                            ctx.error(exc);
+                            ctx.error(exc)?;
                         }
                     } else {
                         let exc = Exception::eval(
@@ -804,7 +876,7 @@ pub fn compile_do(cc: &mut Compiler, ctx: &mut Context, form: Value, tail: bool)
                             SourcePosition::unknown(),
                         );
 
-                        ctx.error(exc);
+                        ctx.error(exc)?;
                     }
 
                     bindings = rest;
@@ -818,20 +890,20 @@ pub fn compile_do(cc: &mut Compiler, ctx: &mut Context, form: Value, tail: bool)
                         SourcePosition::unknown(),
                     );
 
-                    ctx.error(exc);
+                    ctx.error(exc)?;
                 }
 
                 let test_ip = cc.offset_to_next(0);
                 let old = cc.env;
                 cc.env = group;
-                cc.compile(ctx, test, false);
+                cc.compile(ctx, test, false)?;
                 let exit_jump_ip = cc.emit(ctx, Ins::Branch(0));
 
-                cc.compile_seq(ctx, body, false, false, None);
+                cc.compile_seq(ctx, body, false, false, None)?;
                 cc.emit(ctx, Ins::Pop);
 
                 for step in step_exprs.iter() {
-                    cc.compile(ctx, *step, false);
+                    cc.compile(ctx, *step, false)?;
                 }
 
                 for ix in do_bindings.iter().rev() {
@@ -840,7 +912,7 @@ pub fn compile_do(cc: &mut Compiler, ctx: &mut Context, form: Value, tail: bool)
 
                 cc.emit(ctx, Ins::Branch((-cc.offset_to_next(test_ip)) as _));
                 cc.code[exit_jump_ip] = Ins::BranchIf(cc.offset_to_next(exit_jump_ip as _) as _);
-                let res = cc.compile_seq(ctx, terminal, tail, false, None);
+                let res = cc.compile_seq(ctx, terminal, tail, false, None)?;
                 if !res && cc.num_locals > initial_locals {
                     cc.emit(
                         ctx,
@@ -849,7 +921,7 @@ pub fn compile_do(cc: &mut Compiler, ctx: &mut Context, form: Value, tail: bool)
                 }
                 cc.num_locals = initial_locals;
                 cc.env = old;
-                return false;
+                return Ok(false);
             } else {
                 let exc = Exception::eval(
                     ctx,
@@ -857,7 +929,7 @@ pub fn compile_do(cc: &mut Compiler, ctx: &mut Context, form: Value, tail: bool)
                     &[exit],
                     SourcePosition::unknown(),
                 );
-                ctx.error(exc);
+                ctx.error(exc)?;
             }
         }
     }
@@ -871,21 +943,21 @@ pub fn compile_do(cc: &mut Compiler, ctx: &mut Context, form: Value, tail: bool)
         SourcePosition::unknown(),
     );
 
-    ctx.error(exc);
+    ctx.error(exc)
 }
 
-pub fn make_values(_: &mut Context, val: Value) -> Value {
-    if val.is_null() {
+pub fn make_values(_: &mut Context, val: Value) -> ScmResult {
+    Ok(if val.is_null() {
         Value::void()
     } else if val.is_pair() && val.cdr().is_null() {
         val.car()
     } else {
         val
-    }
+    })
 }
 
-pub fn is_continuation(_: &mut Context, val: Value) -> Value {
-    Value::new(if val.is_handle_of::<Procedure>() {
+pub fn is_continuation(_: &mut Context, val: Value) -> ScmResult {
+    Ok(Value::new(if val.is_handle_of::<Procedure>() {
         let proc = val.get_handle_of::<Procedure>();
 
         match proc.kind {
@@ -895,7 +967,7 @@ pub fn is_continuation(_: &mut Context, val: Value) -> Value {
         }
     } else {
         false
-    })
+    }))
 }
 
 pub fn compile_continuation(
@@ -903,12 +975,12 @@ pub fn compile_continuation(
     ctx: &mut Context,
     form: Value,
     _tail: bool,
-) -> bool {
+) -> ScmResult<bool> {
     if form.is_pair() && form.cdr().is_pair() {
         let arglist = form.cdr().car();
         let body = form.cdr().cdr();
-        cc.compile_lambda(ctx, None, arglist, body, false, false, false, true);
-        false
+        cc.compile_lambda(ctx, None, arglist, body, false, false, false, true)?;
+        Ok(false)
     } else {
         let exc = Exception::argument_count(
             ctx,
@@ -918,15 +990,16 @@ pub fn compile_continuation(
             form,
             SourcePosition::unknown(),
         );
-        ctx.error(exc);
+        ctx.error(exc)
     }
 }
-
+/*
 pub fn call_with_unprotected_continuation(
     ctx: &mut Context,
     args: &Arguments,
 ) -> (Handle<Procedure>, ArrayList<Value>) {
     if args.len() != 1 {
+
         let ls = Value::make_list_slice(ctx, args, Value::nil());
         let exc = Exception::argument_count(
             ctx,
@@ -1041,5 +1114,55 @@ pub fn wind_up_raise(ctx: &mut Context, before: Value, after: Value) -> Value {
         }
 
         None => Value::new(false)
+    }
+}*/
+
+pub struct Continuation {
+    pub argument: Value,
+}
+
+impl Object for Continuation {
+    fn trace(&self, visitor: &mut dyn Visitor) {
+        self.argument.trace(visitor);
+    }
+}
+
+impl Allocation for Continuation {}
+
+pub fn call_with_current_continuation(ctx: &mut Context, proc: Value) -> ScmResult {
+    proc.assert_type(ctx, SourcePosition::unknown(), &[Type::Procedure])?;
+    let proc = proc.get_handle_of::<Procedure>();
+
+    let cont = Continuation {
+        argument: Value::nil(),
+    };
+
+    let cont = ctx.mutator().allocate(cont);
+    let cont_proc = Procedure {
+        id: Procedure::new_id(),
+        kind: ProcedureKind::RawContinuation(cont),
+        module: proc.module,
+    };
+    let cont_proc = ctx.mutator().allocate(cont_proc);
+    let registers = ctx.registers;
+    let sp = ctx.sp;
+    let ls = ctx.make_pair(cont_proc.into(), Value::nil());
+
+    let result = ctx.apply(Value::new(proc), Value::new(ls));
+    match result {
+        Ok(result) => Ok(result),
+        Err(err) => {
+            if err.is_handle_of::<Continuation>() {
+                let econt = err.get_handle_of::<Continuation>();
+
+                if econt.as_ptr() == cont.as_ptr() {
+                    ctx.registers = registers;
+                    ctx.sp = sp;
+                    return Ok(econt.argument);
+                }
+            }
+
+            return Err(err);
+        }
     }
 }

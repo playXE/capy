@@ -1,11 +1,12 @@
 #![allow(dead_code)]
 use std::{
     cell::Cell,
+    fmt::Display,
     hash::Hash,
-    intrinsics::likely,
-    panic::{AssertUnwindSafe, RefUnwindSafe, UnwindSafe},
+    intrinsics::{likely, unlikely},
+    panic::{RefUnwindSafe, UnwindSafe},
     ptr::null_mut,
-    sync::atomic::{AtomicUsize, AtomicI32},
+    sync::atomic::{AtomicI32, AtomicUsize},
 };
 
 use r7rs_parser::{
@@ -15,8 +16,11 @@ use r7rs_parser::{
 use rsgc::heap::root_processor::ThreadRootProcessor;
 
 use crate::{
-    compiler::r7rs_to_value,
-    data::exception::{Exception, SourcePosition},
+    compiler::{r7rs_to_value, Compiler},
+    data::{
+        exception::{Exception, SourcePosition},
+        special_form::{Form, SpecialForm},
+    },
     prelude::*,
     utilities::arraylist::ArrayList,
 };
@@ -32,7 +36,7 @@ use super::{
 pub struct Context {
     pub(crate) stack: Vec<Value>,
     pub(crate) sp: usize,
-    registers: Registers,
+    pub(crate) registers: Registers,
     pub(crate) winders: Option<Handle<Winder>>,
     rt: &'static mut Runtime,
     limit_sp: usize,
@@ -74,7 +78,6 @@ impl Context {
         }));
         let ptr = this as *mut Self;
         this.rt.add_context(ptr);
-
         {
             CURRENT_CONTEXT.with(|cur| {
                 cur.set(ptr);
@@ -145,13 +148,32 @@ impl Context {
 
                 return Ok(exprs);
             }
-            Err(_) => {
-                todo!("error");
+            Err(err) => {
+                todo!("error: {:?}", err);
             }
         }
     }
 
-    pub fn eval_path(&mut self, path: &str, fold_case: bool) -> Result<Value, Handle<Exception>> {
+    pub fn compile_and_eval(&mut self, expr: Value, library: Handle<Library>) -> ScmResult {
+        self.try_catch(move |ctx| {
+            let code = ctx.make_pair(expr, Value::nil());
+
+            let code = Compiler::build(ctx, code, library, None)?;
+
+            let empty = Array::new(ctx.mutator(), 0, |_, _| unreachable!());
+            let proc = Procedure {
+                kind: ProcedureKind::Closure(ClosureType::Anonymous, Value::nil(), empty, code),
+                id: Procedure::new_id(),
+                module: library,
+            };
+
+            let proc = Value::new(ctx.mutator().allocate(proc));
+
+            ctx.apply(proc, Value::nil())
+        })
+    }
+
+    pub fn eval_path(&mut self, path: &str, fold_case: bool) -> ScmResult {
         let exprs = self.parse(path, fold_case)?;
 
         let source_dir = std::path::Path::new(path).parent().unwrap();
@@ -168,7 +190,7 @@ impl Context {
         path: &str,
         fold_case: bool,
         lib: Handle<Library>,
-    ) -> Result<Value, Handle<Exception>> {
+    ) -> ScmResult {
         let exprs = self.parse(path, fold_case)?;
 
         let source_dir = std::path::Path::new(path).parent().unwrap();
@@ -181,15 +203,16 @@ impl Context {
     }
 
     #[inline(always)]
-    pub fn push(&mut self, v: Value) {
+    pub fn push(&mut self, v: Value) -> ScmResult<()> {
         if self.sp < self.stack.len() {
             unsafe {
                 *self.stack.get_unchecked_mut(self.sp as usize) = v;
             }
         } else {
-            self.push_slow(v);
+            self.push_slow(v)?;
         }
         self.sp += 1;
+        Ok(())
     }
 
     #[inline(always)]
@@ -204,14 +227,14 @@ impl Context {
     }
 
     #[cold]
-    fn push_slow(&mut self, _: Value) {
+    fn push_slow(&mut self, _: Value) -> ScmResult<()> {
         let exc = Exception::eval(
             self,
             EvalError::StackOverflow,
             &[],
             SourcePosition::unknown(),
         );
-        self.error(exc);
+        self.error(exc)
     }
 
     #[inline]
@@ -233,9 +256,8 @@ impl Context {
 
     pub(crate) fn roots(&self, processor: &mut ThreadRootProcessor) {
         let visitor = processor.visitor();
-        for i in 0..self.sp {
-            let v = unsafe { *self.stack.get_unchecked(i as usize) };
-            v.trace(visitor);
+        for val in self.stack.iter() {
+            val.trace(visitor);
         }
         self.registers.trace(visitor);
         self.open_upvalues.trace(visitor);
@@ -266,12 +288,12 @@ impl Context {
 
     /// Pushes the given list of arguments onto the stack and returns the number of arguments pushed
     /// onto the stack.
-    fn push_arguments(&mut self, arglist: Value) -> usize {
+    fn push_arguments(&mut self, arglist: Value) -> ScmResult<usize> {
         let mut args = arglist;
         let mut n = 0;
         while args.is_pair() {
             let arg = args.car();
-            self.push(arg);
+            self.push(arg)?;
             n += 1;
             args = args.cdr();
         }
@@ -283,79 +305,44 @@ impl Context {
                 &[arglist],
                 SourcePosition::unknown(),
             );
-            self.error(exc);
+            self.error(exc)?;
         }
 
-        n
+        Ok(n)
     }
 
     pub fn try_catch<R>(
         &mut self,
-        closure: impl FnOnce(&mut Self) -> R,
-    ) -> Result<R, Handle<Exception>> {
-        let res = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            let res = closure(self);
-            res
-        }));
-
-        res.map_err(|err| {
-            if let Some(exc) = err.downcast_ref::<Handle<Exception>>() {
-                exc.clone()
-            } else {
-                std::panic::resume_unwind(err);
-            }
-        })
+        closure: impl FnOnce(&mut Self) -> ScmResult<R>,
+    ) -> ScmResult<R> {
+        closure(self)
     }
 
     pub fn try_finally<T, R>(
         &mut self,
         data: &mut T,
-        closure: impl FnOnce(&mut Self, &mut T) -> R,
-        finally: impl FnOnce(&mut Self, &mut T),
-    ) -> R {
-        let res = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            let res = closure(self, data);
-            res
-        }));
+        closure: impl FnOnce(&mut Self, &mut T) -> ScmResult<R>,
+        finally: impl FnOnce(&mut Self, &mut T) -> ScmResult<()>,
+    ) -> ScmResult<R> {
+        let result = closure(self, data);
+        finally(self, data)?;
 
-        let finally_res = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            finally(self, data);
-        }));
-
-        let val = res.unwrap_or_else(|err| {
-            if let Some(exc) = err.downcast_ref::<Handle<Exception>>() {
-                self.error(exc.clone());
-            } else {
-                std::panic::resume_unwind(err);
-            }
-        });
-
-        finally_res.unwrap_or_else(|err| {
-            if let Some(exc) = err.downcast_ref::<Handle<Exception>>() {
-                self.error(exc.clone());
-            } else {
-                std::panic::resume_unwind(err);
-            }
-        });
-
-        val
+        result
     }
 
-    pub fn apply(&mut self, fun: Value, args: Value) -> Result<Value, Handle<Exception>> {
+    pub fn apply(&mut self, fun: Value, args: Value) -> ScmResult {
         self.try_catch(|ctx| unsafe {
-            ctx.push(fun);
+            ctx.push(fun)?;
 
-            let mut n = ctx.push_arguments(args); // throws
+            let mut n = ctx.push_arguments(args)?; // throws
 
-            let proc = ctx.invoke(&mut n, 1); // throws
+            let proc = ctx.invoke(&mut n, 1)?; // throws
 
             match proc.kind {
                 ProcedureKind::Closure(_, _, ref captured, ref code) => {
                     ctx.execute_catch(*code, n, *captured) // throws
                 }
-                ProcedureKind::RawContinuation(_) => {
-                    ctx.execute() // throws
-                }
+
                 ProcedureKind::Transformer(ref rules) => {
                     let rules = *rules;
 
@@ -368,558 +355,105 @@ impl Context {
                             args,
                             SourcePosition::unknown(),
                         );
-                        ctx.error(exc);
+                        ctx.error(exc)?;
                     }
                     let arg = ctx.pop();
                     let res = rules.expand(ctx, arg);
 
                     ctx.pop();
-                    res
+                    Ok(res)
+                }
+
+                ProcedureKind::RawContinuation(ref cont) => {
+                    let mut cont = *cont;
+                    cont.argument = super::libraries::control_flow::make_values(ctx, args)?;
+
+                    std::panic::resume_unwind(Box::new(cont));
                 }
                 // native function executed
-                _ => ctx.pop(),
+                _ => Ok(ctx.pop()),
             }
         })
     }
 
-    fn invoke(&mut self, n: &mut usize, overhead: usize) -> Handle<Procedure> {
-        let p = self.stack[self.sp - *n - 1];
+    fn invoke(&mut self, n: &mut usize, overhead: usize) -> ScmResult<Handle<Procedure>> {
+        let p = unsafe { *self.stack.get_unchecked(self.sp - *n - 1) }; //[self.sp - *n - 1];
 
-        if !p.is_handle_of::<Procedure>() {
+        if unlikely(!p.is_handle_of::<Procedure>()) {
             let exc = Exception::eval(
                 self,
                 EvalError::NonApplicativeValue,
                 &[p],
                 SourcePosition::unknown(),
             );
-            self.error(exc);
+            self.error(exc)?;
         }
 
         let mut proc = p.get_handle_of::<Procedure>();
+        if matches!(proc.kind, ProcedureKind::Closure(_, _, _, _)) {
+            return Ok(proc);
+        }
+        let mut res = || -> ScmResult<Option<Handle<Procedure>>> {
+            loop {
+                if let ProcedureKind::Primitive(_, ref imp, _) = proc.kind {
+                    match imp {
+                        Implementation::Eval(eval) => {
+                            let this = unsafe { &mut *(self as *const Self as *mut Self) };
+                            let generated = eval(self, &this.stack[this.sp - *n..this.sp])?;
+                            self.popn(*n + 1);
 
-        let res = AssertUnwindSafe(|| loop {
-            if let ProcedureKind::Primitive(_, ref imp, _) = proc.kind {
-                match imp {
-                    Implementation::Eval(eval) => {
-                        let this = unsafe { &mut *(self as *const Self as *mut Self) };
-                        let generated = eval(self, &this.stack[this.sp - *n..this.sp]);
-                        self.popn(*n + 1);
+                            let proc = Procedure {
+                                kind: ProcedureKind::Closure(
+                                    ClosureType::Anonymous,
+                                    Value::nil(),
+                                    Array::new(self.mutator(), 0, |_, _| unreachable!()),
+                                    generated,
+                                ),
+                                id: Procedure::new_id(),
+                                module: generated.module,
+                            };
 
-                        let proc = Procedure {
-                            kind: ProcedureKind::Closure(
-                                ClosureType::Anonymous,
-                                Value::nil(),
-                                Array::new(self.mutator(), 0, |_, _| unreachable!()),
-                                generated,
-                            ),
-                            id: Procedure::new_id(),
-                            module: generated.module,
-                        };
+                            let proc = self.mutator().allocate(proc);
+                            self.push(Value::new(proc))?;
 
-                        let proc = self.mutator().allocate(proc);
-                        self.push(Value::new(proc));
-
-                        *n = 0;
-                        return Some(proc);
-                    }
-                    Implementation::Apply(apply) => {
-                        let this = unsafe { &mut *(self as *const Self as *mut Self) };
-                        let (next, args) = apply(self, &this.stack[this.sp - *n..this.sp]);
-                        self.popn(*n + 1);
-                        self.push(Value::new(next));
-                        for i in 0..args.len() {
-                            self.push(args[i]);
+                            *n = 0;
+                            return Ok(Some(proc));
                         }
-                        *n = args.len();
-                        proc = next;
-                        continue;
-                    }
-                    Implementation::Native0(exec) => {
-                        if *n != 0 {
-                            let args = self.pop_as_list(*n as _);
-                            let exc = Exception::argument_count(
-                                self,
-                                None,
-                                0,
-                                0,
-                                args,
-                                SourcePosition::unknown(),
-                            );
-                            self.error(exc);
+                        Implementation::Apply(apply) => {
+                            let this = unsafe { &mut *(self as *const Self as *mut Self) };
+                            let (next, args) = apply(self, &this.stack[this.sp - *n..this.sp])?;
+                            self.popn(*n + 1);
+                            self.push(Value::new(next))?;
+                            for i in 0..args.len() {
+                                self.push(args[i])?;
+                            }
+                            *n = args.len();
+                            proc = next;
+                            continue;
                         }
-
-                        self.popn(overhead);
-                        let res = exec(self);
-                        self.push(res);
-                        *n = 0;
-                        return Some(proc);
-                    }
-
-                    Implementation::Native1(exec) => {
-                        if *n != 1 {
-                            let args = self.pop_as_list(*n as _);
-                            let exc = Exception::argument_count(
-                                self,
-                                None,
-                                1,
-                                1,
-                                args,
-                                SourcePosition::unknown(),
-                            );
-                            self.error(exc);
-                        }
-                        let arg = self.pop();
-                        self.popn(overhead);
-                        
-                        let res = exec(self, arg);
-                        self.push(res);
-                        *n = 0;
-                        return Some(proc);
-                    }
-
-                    Implementation::Native2(exec) => {
-                        if *n != 2 {
-                            let args = self.pop_as_list(*n as _);
-                            let exc = Exception::argument_count(
-                                self,
-                                None,
-                                2,
-                                2,
-                                args,
-                                SourcePosition::unknown(),
-                            );
-                            self.error(exc);
-                        }
-                        let arg2 = self.pop();
-                        let arg1 = self.pop();
-                        self.popn(overhead);
-                        let res = exec(self, arg1, arg2);
-                        self.push(res);
-                        *n = 0;
-                        return Some(proc);
-                    }
-
-                    Implementation::Native3(exec) => {
-                        if *n != 3 {
-                            let args = self.pop_as_list(*n as _);
-                            let exc = Exception::argument_count(
-                                self,
-                                None,
-                                3,
-                                3,
-                                args,
-                                SourcePosition::unknown(),
-                            );
-                            self.error(exc);
-                        }
-                        let arg3 = self.pop();
-                        let arg2 = self.pop();
-                        let arg1 = self.pop();
-                        self.popn(overhead);
-                        
-                        let res = exec(self, arg1, arg2, arg3);
-                        self.push(res);
-                        *n = 0;
-                        return Some(proc);
-                    }
-
-                    Implementation::Native4(exec) => {
-                        if *n != 4 {
-                            let args = self.pop_as_list(*n as _);
-                            let exc = Exception::argument_count(
-                                self,
-                                None,
-                                4,
-                                4,
-                                args,
-                                SourcePosition::unknown(),
-                            );
-                            self.error(exc);
-                        }
-                        let arg4 = self.pop();
-                        let arg3 = self.pop();
-                        let arg2 = self.pop();
-                        let arg1 = self.pop();
-                        self.popn(overhead);
-                        
-                        let res = exec(self, arg1, arg2, arg3, arg4);
-                        self.push(res);
-                        *n = 0;
-                        return Some(proc);
-                    }
-
-                    Implementation::Native0O(exec) => {
-                        if *n == 0 {
-                            self.popn(overhead as _);
-                            let res = exec(self, None);
-                            self.push(res);
-                        } else if *n == 1 {
-                            self.popn(overhead);
-                            let arg = self.pop();
-                            
-                            let res = exec(self, Some(arg));
-                            self.push(res);
-                        } else {
-                            let args = self.pop_as_list(*n as _);
-                            let exc = Exception::argument_count(
-                                self,
-                                None,
-                                0,
-                                1,
-                                args,
-                                SourcePosition::unknown(),
-                            );
-                            self.error(exc);
-                        }
-                        return Some(proc);
-                    }
-
-                    Implementation::Native1O(exec) => {
-                        if *n == 1 {
-                            let arg = self.pop();
-                            self.popn(overhead);
-                            let res = exec(self, arg, None);
-                            self.push(res);
-                        } else if *n == 2 {
-                            let arg2 = self.pop();
-                            let arg1 = self.pop();
-                            self.popn(overhead);
-                            let res = exec(self, arg1, Some(arg2));
-                            self.push(res);
-                        } else {
-                            let args = self.pop_as_list(*n as _);
-                            let exc = Exception::argument_count(
-                                self,
-                                None,
-                                1,
-                                2,
-                                args,
-                                SourcePosition::unknown(),
-                            );
-                            self.error(exc);
-                        }
-                        return Some(proc);
-                    }
-
-                    Implementation::Native2O(exec) => {
-                        if *n == 2 {
-                            let arg2 = self.pop();
-                            let arg1 = self.pop();
-                            self.popn(overhead);
-                            let res = exec(self, arg1, arg2, None);
-                            self.push(res);
-                        } else if *n == 3 {
-                            let arg3 = self.pop();
-                            let arg2 = self.pop();
-                            let arg1 = self.pop();
-                            self.popn(overhead);
-                            let res = exec(self, arg1, arg2, Some(arg3));
-                            self.push(res);
-                        } else {
-                            let args = self.pop_as_list(*n as _);
-                            let exc = Exception::argument_count(
-                                self,
-                                None,
-                                2,
-                                3,
-                                args,
-                                SourcePosition::unknown(),
-                            );
-                            self.error(exc);
-                        }
-                        return Some(proc);
-                    }
-
-                    Implementation::Native3O(exec) => {
-                        if *n == 3 {
-                            let arg3 = self.pop();
-                            let arg2 = self.pop();
-                            let arg1 = self.pop();
-                            self.popn(overhead);
-                            let res = exec(self, arg1, arg2, arg3, None);
-                            self.push(res);
-                        } else if *n == 4 {
-                            let arg4 = self.pop();
-                            let arg3 = self.pop();
-                            let arg2 = self.pop();
-                            let arg1 = self.pop();
-                            self.popn(overhead);
-                            let res = exec(self, arg1, arg2, arg3, Some(arg4));
-                            self.push(res);
-                        } else {
-                            let args = self.pop_as_list(*n as _);
-                            let exc = Exception::argument_count(
-                                self,
-                                None,
-                                3,
-                                4,
-                                args,
-                                SourcePosition::unknown(),
-                            );
-                            self.error(exc);
-                        }
-                        return Some(proc);
-                    }
-
-                    Implementation::Native0OO(exec) => {
-                        if *n == 0 {
-                            self.popn(overhead as _);
-                            let res = exec(self, None, None);
-                            self.push(res);
-                        } else if *n == 1 {
-                            let arg = self.pop();
-                            self.popn(overhead);
-                            let res = exec(self, Some(arg), None);
-                            self.push(res);
-                        } else if *n == 2 {
-                            let arg2 = self.pop();
-                            let arg1 = self.pop();
-                            self.popn(overhead);
-                            let res = exec(self, Some(arg1), Some(arg2));
-                            self.push(res);
-                        } else {
-                            let args = self.pop_as_list(*n as _);
-                            let exc = Exception::argument_count(
-                                self,
-                                None,
-                                0,
-                                2,
-                                args,
-                                SourcePosition::unknown(),
-                            );
-                            self.error(exc);
-                        }
-                        return Some(proc);
-                    }
-
-                    Implementation::Native1OO(exec) => {
-                        if *n == 1 {
-                            let arg = self.pop();
-                            self.popn(overhead);
-                            let res = exec(self, arg, None, None);
-                            self.push(res);
-                        } else if *n == 2 {
-                            let arg2 = self.pop();
-                            let arg1 = self.pop();
-                            self.popn(overhead);
-                            let res = exec(self, arg1, Some(arg2), None);
-                            self.push(res);
-                        } else if *n == 3 {
-                            let arg3 = self.pop();
-                            let arg2 = self.pop();
-                            let arg1 = self.pop();
-                            self.popn(overhead);
-                            let res = exec(self, arg1, Some(arg2), Some(arg3));
-                            self.push(res);
-                        } else {
-                            let args = self.pop_as_list(*n as _);
-                            let exc = Exception::argument_count(
-                                self,
-                                None,
-                                1,
-                                3,
-                                args,
-                                SourcePosition::unknown(),
-                            );
-                            self.error(exc);
-                        }
-
-                        return Some(proc);
-                    }
-
-                    Implementation::Native2OO(exec) => {
-                        if *n == 2 {
-                            let arg2 = self.pop();
-                            let arg1 = self.pop();
-                            self.popn(overhead);
-                            let res = exec(self, arg1, arg2, None, None);
-                            self.push(res);
-                        } else if *n == 3 {
-                            let arg3 = self.pop();
-                            let arg2 = self.pop();
-                            let arg1 = self.pop();
-                            self.popn(overhead);
-                            let res = exec(self, arg1, arg2, Some(arg3), None);
-                            self.push(res);
-                        } else if *n == 4 {
-                            let arg4 = self.pop();
-                            let arg3 = self.pop();
-                            let arg2 = self.pop();
-                            let arg1 = self.pop();
-                            self.popn(overhead);
-                            let res = exec(self, arg1, arg2, Some(arg3), Some(arg4));
-                            self.push(res);
-                        } else {
-                            let args = self.pop_as_list(*n as _);
-                            let exc = Exception::argument_count(
-                                self,
-                                None,
-                                2,
-                                4,
-                                args,
-                                SourcePosition::unknown(),
-                            );
-                            self.error(exc);
-                        }
-
-                        return Some(proc);
-                    }
-
-                    Implementation::Native3OO(exec) => {
-                        if *n == 3 {
-                            let arg3 = self.pop();
-                            let arg2 = self.pop();
-                            let arg1 = self.pop();
-                            self.popn(overhead);
-                            let res = exec(self, arg1, arg2, arg3, None, None);
-                            self.push(res);
-                        } else if *n == 4 {
-                            let arg4 = self.pop();
-                            let arg3 = self.pop();
-                            let arg2 = self.pop();
-                            let arg1 = self.pop();
-                            self.popn(overhead);
-                            let res = exec(self, arg1, arg2, arg3, Some(arg4), None);
-                            self.push(res);
-                        } else if *n == 5 {
-                            let arg5 = self.pop();
-                            let arg4 = self.pop();
-                            let arg3 = self.pop();
-                            let arg2 = self.pop();
-                            let arg1 = self.pop();
-                            self.popn(overhead);
-                            let res = exec(self, arg1, arg2, arg3, Some(arg4), Some(arg5));
-                            self.push(res);
-                        } else {
-                            let args = self.pop_as_list(*n as _);
-                            let exc = Exception::argument_count(
-                                self,
-                                None,
-                                3,
-                                5,
-                                args,
-                                SourcePosition::unknown(),
-                            );
-                            self.error(exc);
-                        }
-
-                        return Some(proc);
-                    }
-
-                    Implementation::Native0R(exec) => {
-                        let this = unsafe { &mut *(self as *const Self as *mut Self) };
-                        let args = &self.stack[(self.sp - *n)..self.sp];
-                        let res = exec(this, args);
-                        self.popn(*n as usize + overhead as usize);
-                        self.push(res);
-
-                        return Some(proc);
-                    }
-
-                    Implementation::Native1R(exec) => {
-                        let this = unsafe { &mut *(self as *const Self as *mut Self) };
-                        if *n >= 1 {
-                            let arg0 = self.stack[self.sp - *n];
-                            let args = &self.stack[(self.sp - *n + 1)..self.sp];
-
-                            let res = exec(this, arg0, args);
-                            self.popn(*n as usize + overhead as usize);
-                            self.push(res);
-                        } else {
-                            let args = self.pop_as_list(*n as _);
-                            let exc = Exception::argument_count(
-                                self,
-                                None,
-                                1,
-                                0,
-                                args,
-                                SourcePosition::unknown(),
-                            );
-                            self.error(exc);
-                        }
-
-                        return Some(proc);
-                    }
-
-                    Implementation::Native2R(exec) => {
-                        let this = unsafe { &mut *(self as *const Self as *mut Self) };
-                        if *n >= 2 {
-                            let arg0 = self.stack[self.sp - *n];
-                            let arg1 = self.stack[self.sp - *n + 1];
-                            let args = &self.stack[(self.sp - *n + 2)..self.sp];
-                            let res = exec(this, arg0, arg1, args);
-                            self.popn(*n as usize + overhead as usize);
-                            self.push(res);
-                        } else {
-                            let args = self.pop_as_list(*n as _);
-                            let exc = Exception::argument_count(
-                                self,
-                                None,
-                                2,
-                                0,
-                                args,
-                                SourcePosition::unknown(),
-                            );
-                            self.error(exc);
-                        }
-
-                        return Some(proc);
-                    }
-
-                    Implementation::Native3R(exec) => {
-                        let this = unsafe { &mut *(self as *const Self as *mut Self) };
-                        if *n >= 3 {
-                            let arg0 = self.stack[self.sp - *n];
-                            let arg1 = self.stack[self.sp - *n + 1];
-                            let arg2 = self.stack[self.sp - *n + 2];
-                            let args = &self.stack[(self.sp - *n + 3)..self.sp];
-
-                            let res = exec(this, arg0, arg1, arg2, args);
-                            self.popn(*n as usize + overhead as usize);
-                            self.push(res);
-                        } else {
-                            let args = self.pop_as_list(*n as _);
-                            let exc = Exception::argument_count(
-                                self,
-                                None,
-                                3,
-                                0,
-                                args,
-                                SourcePosition::unknown(),
-                            );
-                            self.error(exc);
-                        }
-                        return Some(proc);
-                    }
-                }
-            } else {
-                return None;
-            }
-        });
-
-        let result = std::panic::catch_unwind(|| res());
-
-        match result {
-            Ok(exec) => {
-                if let Some(proc) = exec {
-                    return proc;
-                } else {
-                    match proc.kind {
-                        ProcedureKind::RawContinuation(ref vm_state) => {
-                            if vm_state.registers.rid != self.registers.rid {
-                                let exc = Exception::eval(
+                        Implementation::Native0(exec) => {
+                            if unlikely(*n != 0) {
+                                let args = self.pop_as_list(*n as _);
+                                let exc = Exception::argument_count(
                                     self,
-                                    EvalError::IllegalContinuationApplication,
-                                    &[
-                                        Value::new(proc),
-                                        Value::encode_int32(self.registers.rid as _),
-                                    ],
+                                    None,
+                                    0,
+                                    0,
+                                    args,
                                     SourcePosition::unknown(),
                                 );
-                                self.error(exc);
+                                self.error(exc)?;
                             }
 
-                            if *n != 1 {
+                            self.popn(overhead);
+                            let res = exec(self)?;
+                            self.push(res)?;
+                            *n = 0;
+                            return Ok(Some(proc));
+                        }
+
+                        Implementation::Native1(exec) => {
+                            if unlikely(*n != 1) {
                                 let args = self.pop_as_list(*n as _);
                                 let exc = Exception::argument_count(
                                     self,
@@ -929,28 +463,464 @@ impl Context {
                                     args,
                                     SourcePosition::unknown(),
                                 );
-                                self.error(exc);
+                                self.error(exc)?;
                             }
                             let arg = self.pop();
-                            // todo: push identity function and resume execution
-                            self.restore_state(&vm_state);
-                            self.push(Runtime::get().identity);
-                            self.push(arg);
+                            self.popn(overhead);
 
-                           
-                            return proc;
+                            let res = exec(self, arg)?;
+                            self.push(res)?;
+                            *n = 0;
+                            return Ok(Some(proc));
                         }
-                        _ => return proc,
+
+                        Implementation::Native2(exec) => {
+                            if unlikely(*n != 2) {
+                                let args = self.pop_as_list(*n as _);
+                                let exc = Exception::argument_count(
+                                    self,
+                                    None,
+                                    2,
+                                    2,
+                                    args,
+                                    SourcePosition::unknown(),
+                                );
+                                self.error(exc)?;
+                            }
+                            let arg2 = self.pop();
+                            let arg1 = self.pop();
+                            self.popn(overhead);
+                            let res = exec(self, arg1, arg2)?;
+                            self.push(res)?;
+                            *n = 0;
+                            return Ok(Some(proc));
+                        }
+
+                        Implementation::Native3(exec) => {
+                            if unlikely(*n != 3) {
+                                let args = self.pop_as_list(*n as _);
+                                let exc = Exception::argument_count(
+                                    self,
+                                    None,
+                                    3,
+                                    3,
+                                    args,
+                                    SourcePosition::unknown(),
+                                );
+                                self.error(exc)?;
+                            }
+                            let arg3 = self.pop();
+                            let arg2 = self.pop();
+                            let arg1 = self.pop();
+                            self.popn(overhead);
+
+                            let res = exec(self, arg1, arg2, arg3)?;
+                            self.push(res)?;
+                            *n = 0;
+                            return Ok(Some(proc));
+                        }
+
+                        Implementation::Native4(exec) => {
+                            if unlikely(*n != 4) {
+                                let args = self.pop_as_list(*n as _);
+                                let exc = Exception::argument_count(
+                                    self,
+                                    None,
+                                    4,
+                                    4,
+                                    args,
+                                    SourcePosition::unknown(),
+                                );
+                                self.error(exc)?;
+                            }
+                            let arg4 = self.pop();
+                            let arg3 = self.pop();
+                            let arg2 = self.pop();
+                            let arg1 = self.pop();
+                            self.popn(overhead);
+
+                            let res = exec(self, arg1, arg2, arg3, arg4)?;
+                            self.push(res)?;
+                            *n = 0;
+                            return Ok(Some(proc));
+                        }
+
+                        Implementation::Native0O(exec) => {
+                            if *n == 0 {
+                                self.popn(overhead as _);
+                                let res = exec(self, None)?;
+                                self.push(res)?;
+                            } else if *n == 1 {
+                                self.popn(overhead);
+                                let arg = self.pop();
+
+                                let res = exec(self, Some(arg))?;
+                                self.push(res)?;
+                            } else {
+                                let args = self.pop_as_list(*n as _);
+                                let exc = Exception::argument_count(
+                                    self,
+                                    None,
+                                    0,
+                                    1,
+                                    args,
+                                    SourcePosition::unknown(),
+                                );
+                                self.error(exc)?;
+                            }
+                            return Ok(Some(proc));
+                        }
+
+                        Implementation::Native1O(exec) => {
+                            if *n == 1 {
+                                let arg = self.pop();
+                                self.popn(overhead);
+                                let res = exec(self, arg, None)?;
+                                self.push(res)?;
+                            } else if *n == 2 {
+                                let arg2 = self.pop();
+                                let arg1 = self.pop();
+                                self.popn(overhead);
+                                let res = exec(self, arg1, Some(arg2))?;
+                                self.push(res)?;
+                            } else {
+                                let args = self.pop_as_list(*n as _);
+                                let exc = Exception::argument_count(
+                                    self,
+                                    None,
+                                    1,
+                                    2,
+                                    args,
+                                    SourcePosition::unknown(),
+                                );
+                                self.error(exc)?;
+                            }
+                            return Ok(Some(proc));
+                        }
+
+                        Implementation::Native2O(exec) => {
+                            if *n == 2 {
+                                let arg2 = self.pop();
+                                let arg1 = self.pop();
+                                self.popn(overhead);
+                                let res = exec(self, arg1, arg2, None)?;
+                                self.push(res)?;
+                            } else if *n == 3 {
+                                let arg3 = self.pop();
+                                let arg2 = self.pop();
+                                let arg1 = self.pop();
+                                self.popn(overhead);
+                                let res = exec(self, arg1, arg2, Some(arg3))?;
+                                self.push(res)?;
+                            } else {
+                                let args = self.pop_as_list(*n as _);
+                                let exc = Exception::argument_count(
+                                    self,
+                                    None,
+                                    2,
+                                    3,
+                                    args,
+                                    SourcePosition::unknown(),
+                                );
+                                self.error(exc)?;
+                            }
+                            return Ok(Some(proc));
+                        }
+
+                        Implementation::Native3O(exec) => {
+                            if *n == 3 {
+                                let arg3 = self.pop();
+                                let arg2 = self.pop();
+                                let arg1 = self.pop();
+                                self.popn(overhead);
+                                let res = exec(self, arg1, arg2, arg3, None)?;
+                                self.push(res)?;
+                            } else if *n == 4 {
+                                let arg4 = self.pop();
+                                let arg3 = self.pop();
+                                let arg2 = self.pop();
+                                let arg1 = self.pop();
+                                self.popn(overhead);
+                                let res = exec(self, arg1, arg2, arg3, Some(arg4))?;
+                                self.push(res)?;
+                            } else {
+                                let args = self.pop_as_list(*n as _);
+                                let exc = Exception::argument_count(
+                                    self,
+                                    None,
+                                    3,
+                                    4,
+                                    args,
+                                    SourcePosition::unknown(),
+                                );
+                                self.error(exc)?;
+                            }
+                            return Ok(Some(proc));
+                        }
+
+                        Implementation::Native0OO(exec) => {
+                            if *n == 0 {
+                                self.popn(overhead as _);
+                                let res = exec(self, None, None)?;
+                                self.push(res)?;
+                            } else if *n == 1 {
+                                let arg = self.pop();
+                                self.popn(overhead);
+                                let res = exec(self, Some(arg), None)?;
+                                self.push(res)?;
+                            } else if *n == 2 {
+                                let arg2 = self.pop();
+                                let arg1 = self.pop();
+                                self.popn(overhead);
+                                let res = exec(self, Some(arg1), Some(arg2))?;
+                                self.push(res)?;
+                            } else {
+                                let args = self.pop_as_list(*n as _);
+                                let exc = Exception::argument_count(
+                                    self,
+                                    None,
+                                    0,
+                                    2,
+                                    args,
+                                    SourcePosition::unknown(),
+                                );
+                                self.error(exc)?;
+                            }
+                            return Ok(Some(proc));
+                        }
+
+                        Implementation::Native1OO(exec) => {
+                            if *n == 1 {
+                                let arg = self.pop();
+                                self.popn(overhead);
+                                let res = exec(self, arg, None, None)?;
+                                self.push(res)?;
+                            } else if *n == 2 {
+                                let arg2 = self.pop();
+                                let arg1 = self.pop();
+                                self.popn(overhead);
+                                let res = exec(self, arg1, Some(arg2), None)?;
+                                self.push(res)?;
+                            } else if *n == 3 {
+                                let arg3 = self.pop();
+                                let arg2 = self.pop();
+                                let arg1 = self.pop();
+                                self.popn(overhead);
+                                let res = exec(self, arg1, Some(arg2), Some(arg3))?;
+                                self.push(res)?;
+                            } else {
+                                let args = self.pop_as_list(*n as _);
+                                let exc = Exception::argument_count(
+                                    self,
+                                    None,
+                                    1,
+                                    3,
+                                    args,
+                                    SourcePosition::unknown(),
+                                );
+                                self.error(exc)?;
+                            }
+
+                            return Ok(Some(proc));
+                        }
+
+                        Implementation::Native2OO(exec) => {
+                            if *n == 2 {
+                                let arg2 = self.pop();
+                                let arg1 = self.pop();
+                                self.popn(overhead);
+                                let res = exec(self, arg1, arg2, None, None)?;
+                                self.push(res)?;
+                            } else if *n == 3 {
+                                let arg3 = self.pop();
+                                let arg2 = self.pop();
+                                let arg1 = self.pop();
+                                self.popn(overhead);
+                                let res = exec(self, arg1, arg2, Some(arg3), None)?;
+                                self.push(res)?;
+                            } else if *n == 4 {
+                                let arg4 = self.pop();
+                                let arg3 = self.pop();
+                                let arg2 = self.pop();
+                                let arg1 = self.pop();
+                                self.popn(overhead);
+                                let res = exec(self, arg1, arg2, Some(arg3), Some(arg4))?;
+                                self.push(res)?;
+                            } else {
+                                let args = self.pop_as_list(*n as _);
+                                let exc = Exception::argument_count(
+                                    self,
+                                    None,
+                                    2,
+                                    4,
+                                    args,
+                                    SourcePosition::unknown(),
+                                );
+                                self.error(exc)?;
+                            }
+
+                            return Ok(Some(proc));
+                        }
+
+                        Implementation::Native3OO(exec) => {
+                            if *n == 3 {
+                                let arg3 = self.pop();
+                                let arg2 = self.pop();
+                                let arg1 = self.pop();
+                                self.popn(overhead);
+                                let res = exec(self, arg1, arg2, arg3, None, None)?;
+                                self.push(res)?;
+                            } else if *n == 4 {
+                                let arg4 = self.pop();
+                                let arg3 = self.pop();
+                                let arg2 = self.pop();
+                                let arg1 = self.pop();
+                                self.popn(overhead);
+                                let res = exec(self, arg1, arg2, arg3, Some(arg4), None)?;
+                                self.push(res)?;
+                            } else if *n == 5 {
+                                let arg5 = self.pop();
+                                let arg4 = self.pop();
+                                let arg3 = self.pop();
+                                let arg2 = self.pop();
+                                let arg1 = self.pop();
+                                self.popn(overhead);
+                                let res = exec(self, arg1, arg2, arg3, Some(arg4), Some(arg5))?;
+                                self.push(res)?;
+                            } else {
+                                let args = self.pop_as_list(*n as _);
+                                let exc = Exception::argument_count(
+                                    self,
+                                    None,
+                                    3,
+                                    5,
+                                    args,
+                                    SourcePosition::unknown(),
+                                );
+                                self.error(exc)?;
+                            }
+
+                            return Ok(Some(proc));
+                        }
+
+                        Implementation::Native0R(exec) => {
+                            let this = unsafe { &mut *(self as *const Self as *mut Self) };
+                            let args = &self.stack[(self.sp - *n)..self.sp];
+                            let res = exec(this, args)?;
+                            self.popn(*n as usize + overhead as usize);
+                            self.push(res)?;
+
+                            return Ok(Some(proc));
+                        }
+
+                        Implementation::Native1R(exec) => {
+                            let this = unsafe { &mut *(self as *const Self as *mut Self) };
+                            if *n >= 1 {
+                                let arg0 = self.stack[self.sp - *n];
+                                let args = &self.stack[(self.sp - *n + 1)..self.sp];
+
+                                let res = exec(this, arg0, args)?;
+                                self.popn(*n as usize + overhead as usize);
+                                self.push(res)?;
+                            } else {
+                                let args = self.pop_as_list(*n as _);
+                                let exc = Exception::argument_count(
+                                    self,
+                                    None,
+                                    1,
+                                    0,
+                                    args,
+                                    SourcePosition::unknown(),
+                                );
+                                self.error(exc)?;
+                            }
+
+                            return Ok(Some(proc));
+                        }
+
+                        Implementation::Native2R(exec) => {
+                            let this = unsafe { &mut *(self as *const Self as *mut Self) };
+                            if *n >= 2 {
+                                let arg0 = self.stack[self.sp - *n];
+                                let arg1 = self.stack[self.sp - *n + 1];
+                                let args = &self.stack[(self.sp - *n + 2)..self.sp];
+                                let res = exec(this, arg0, arg1, args)?;
+                                self.popn(*n as usize + overhead as usize);
+                                self.push(res)?;
+                            } else {
+                                let args = self.pop_as_list(*n as _);
+                                let exc = Exception::argument_count(
+                                    self,
+                                    None,
+                                    2,
+                                    0,
+                                    args,
+                                    SourcePosition::unknown(),
+                                );
+                                self.error(exc)?;
+                            }
+
+                            return Ok(Some(proc));
+                        }
+
+                        Implementation::Native3R(exec) => {
+                            let this = unsafe { &mut *(self as *const Self as *mut Self) };
+                            if *n >= 3 {
+                                let arg0 = self.stack[self.sp - *n];
+                                let arg1 = self.stack[self.sp - *n + 1];
+                                let arg2 = self.stack[self.sp - *n + 2];
+                                let args = &self.stack[(self.sp - *n + 3)..self.sp];
+
+                                let res = exec(this, arg0, arg1, arg2, args)?;
+                                self.popn(*n as usize + overhead as usize);
+                                self.push(res)?;
+                            } else {
+                                let args = self.pop_as_list(*n as _);
+                                let exc = Exception::argument_count(
+                                    self,
+                                    None,
+                                    3,
+                                    0,
+                                    args,
+                                    SourcePosition::unknown(),
+                                );
+                                self.error(exc)?;
+                            }
+                            return Ok(Some(proc));
+                        }
+                    }
+                } else {
+                    return Ok(None);
+                }
+            }
+        };
+
+        let result = res();
+
+        match result {
+            Ok(exec) => {
+                if let Some(proc) = exec {
+                    return Ok(proc);
+                } else {
+                    match proc.kind {
+                        ProcedureKind::RawContinuation(ref cont) => {
+                            let mut cont = *cont;
+                            let values = self.pop_as_list(*n);
+                            cont.argument =
+                                super::libraries::control_flow::make_values(self, values)?;
+                            return Err(Value::new(cont));
+                        }
+                        _ => return Ok(proc),
                     }
                 }
             }
 
-            Err(mut e) => {
-                if let Some(e) = e.downcast_mut::<Handle<Exception>>() {
-                    e.attach_ctx(self, Some(proc));
-                    self.error(*e);
+            Err(e) => {
+                if e.is_handle_of::<Exception>() {
+                    e.get_handle_of::<Exception>().attach_ctx(self, Some(proc));
+                    return Err(Value::new(e));
                 } else {
-                    std::panic::resume_unwind(e);
+                    return Err(e)
                 }
             }
         }
@@ -972,7 +942,7 @@ impl Context {
 
     pub fn save_state(&mut self) -> SavedState {
         let mut stack = ArrayList::new(self.mutator());
-        for i in 0..self.sp {
+        for i in 0..self.sp - 2 {
             let val = self.stack[i];
             stack.push(self.mutator(), val);
         }
@@ -981,7 +951,7 @@ impl Context {
             stack,
             sp: self.sp - 2,
             registers: self.registers,
-            winders: self.winders
+            winders: self.winders,
         };
 
         state.registers.ip -= 1;
@@ -1023,6 +993,10 @@ impl Context {
         }
 
         stack_trace
+    }
+
+    pub fn get_call_trace_info(&mut self, current: Option<Handle<Procedure>>, cap: Option<usize>) -> Option<Vec<String>> {
+        Some(self.get_call_trace(current, cap)?.iter().map(|x| x.to_string(false)).collect())
     }
 
     pub fn get_call_trace(
@@ -1207,7 +1181,11 @@ impl Context {
         Array::new(self.thread, list.len(), |_, ix| list[ix])
     }*/
 
-    pub(crate) unsafe fn execute_named(&mut self, code: Handle<Code>, name: Handle<Str>) -> Value {
+    pub(crate) unsafe fn execute_named(
+        &mut self,
+        code: Handle<Code>,
+        name: Handle<Str>,
+    ) -> ScmResult {
         let empty = Array::new(self.mutator(), 0, |_, _| unreachable!());
         let proc = self.mutator().allocate(Procedure {
             id: Procedure::new_id(),
@@ -1215,12 +1193,17 @@ impl Context {
             module: code.module,
         });
 
-        self.push(Value::new(proc));
+        self.push(Value::new(proc))?;
 
         self.execute_catch(code, 0, empty)
     }
 
-    pub fn wind_up(&mut self, before: Handle<Procedure>, after: Handle<Procedure>, handlers: Option<Value>) {
+    pub fn wind_up(
+        &mut self,
+        before: Handle<Procedure>,
+        after: Handle<Procedure>,
+        handlers: Option<Value>,
+    ) {
         let winder = Winder::new(before, after, handlers, self.winders);
         self.winders = Some(self.mutator().allocate(winder));
     }
@@ -1243,7 +1226,7 @@ impl Context {
         winders?.handlers
     }
 
-    pub(crate) unsafe fn execute_unnamed(&mut self, code: Handle<Code>) -> Value {
+    pub(crate) unsafe fn execute_unnamed(&mut self, code: Handle<Code>) -> ScmResult {
         let empty = Array::new(self.mutator(), 0, |_, _| unreachable!());
         let proc = self.mutator().allocate(Procedure {
             id: Procedure::new_id(),
@@ -1251,8 +1234,7 @@ impl Context {
             module: code.module,
         });
 
-        self.push(Value::new(proc));
-
+        self.push(Value::new(proc))?;
         self.execute_catch(code, 0, empty)
     }
 
@@ -1261,7 +1243,7 @@ impl Context {
         code: Handle<Code>,
         args: usize,
         captured: Handle<Array<Handle<Upvalue>>>,
-    ) -> Value {
+    ) -> ScmResult {
         let saved_registers = self.registers;
         self.registers = Registers::new(
             code,
@@ -1271,17 +1253,19 @@ impl Context {
             !saved_registers.is_initialized(),
         );
 
-        let result = self.try_catch(|ctx| ctx.execute());
+        let result = self.execute();
 
         match result {
             Ok(value) => {
                 self.registers = saved_registers;
-                value
+                Ok(value)
             }
-            Err(mut err) => {
+            Err(err) => {
                 self.registers = saved_registers;
-                err.attach_ctx(self, None);
-                self.error(err);
+                if err.is_handle_of::<Exception>() {
+                    err.get_handle_of::<Exception>().attach_ctx(self, None);
+                }
+                return Err(err);
             }
         }
     }
@@ -1292,7 +1276,7 @@ impl Context {
         }
     }
 
-    pub(crate) unsafe fn execute(&mut self) -> Value {
+    pub(crate) unsafe fn execute(&mut self) -> ScmResult {
         loop {
             //rsgc::heap::heap::heap().request_gc();
             let ip = self.registers.ip;
@@ -1301,56 +1285,58 @@ impl Context {
             match *self.registers.code.instructions.get_unchecked(ip) {
                 Ins::NoOp => continue,
                 Ins::Pop => {
-                    
                     self.pop();
                 }
                 Ins::Dup => {
                     let top = self.top();
-                    self.push(top);
+                    self.push(top)?;
                 }
                 Ins::PushVoid => {
-                    self.push(Value::void());
+                    self.push(Value::void())?;
                 }
                 Ins::PushUndef => {
-                    self.push(Value::UNDEFINED);
+                    self.push(Value::UNDEFINED)?;
                 }
                 Ins::PushConstant(c) => {
-                    self.push(self.registers.code.constants[c as usize]);
+                    self.push(self.registers.code.constants[c as usize])?;
                 }
 
                 Ins::PushFixnum(n) => {
-                    self.push(Value::new(n));
+                    self.push(Value::new(n))?;
                 }
 
                 Ins::PushEof => {
-                    self.push(Value::eof());
+                    self.push(Value::eof())?;
                 }
 
                 Ins::PushTrue => {
-                    self.push(Value::new(true));
+                    self.push(Value::new(true))?;
                 }
 
                 Ins::PushFalse => {
-                    self.push(Value::new(false));
+                    self.push(Value::new(false))?;
                 }
 
                 Ins::PushNull => {
-                    self.push(Value::nil());
+                    self.push(Value::nil())?;
                 }
 
                 Ins::PushLocal(l) => {
-                    let val = self.stack[self.registers.fp + l as usize];
-                    self.push(val);
+                    let val = *self.stack.get_unchecked(self.registers.fp + l as usize); // [self.registers.fp + l as usize];
+                                                                                         //println!("{:04} push-local {} = {}",ip, l, val.to_string(false));
+                    self.push(val)?;
                 }
 
                 Ins::SetLocal(l) => {
                     let val = self.pop();
-                    self.stack[self.registers.fp + l as usize] = val;
+                    //println!("{:04} set-local {} = {}",ip, l, val.to_string(false));
+                    *self.stack.get_unchecked_mut(self.registers.fp + l as usize) = val;
+                    //self.stack[self.registers.fp + l as usize] = val;
                 }
 
                 Ins::PushCaptured(l) => {
                     let val = self.registers.captured[l as usize].get();
-                    self.push(val);
+                    self.push(val)?;
                 }
 
                 Ins::SetCaptured(l) => {
@@ -1366,6 +1352,341 @@ impl Context {
                     self.stack[self.registers.fp + n as usize] = val;
                 }
 
+                Ins::PushGlobal(ix) => {
+                    let mut v = *self.registers.code.constants.get_unchecked(ix as usize); //self.registers.code.constants[ix as usize];
+                    if likely(v.is_handle_of::<Gloc>()) {
+                        v = Gloc::get(self, v.get_handle_of::<Gloc>())?;
+                    } else {
+                        let mut gloc = None;
+                        let id = v.get_handle_of::<Identifier>();
+                        v = self.global_ref(id.module, id.name.get_symbol(), &mut gloc)?;
+
+                        if let Some(gloc) = gloc {
+                            let thread = Thread::current();
+                            self.registers
+                                .code
+                                .constants
+                                .set(thread, ix as _, Value::new(gloc));
+                        }
+                    }
+
+                    self.push(v)?;
+                }
+
+                Ins::SetGlobal(ix) => {
+                    let value = self.pop();
+
+                    let gloc = self.registers.code.constants[ix as usize];
+                    if likely(gloc.is_handle_of::<Gloc>()) {
+                        self.thread.write_barrier(gloc.get_handle());
+                        Gloc::set(self, gloc.get_handle_of::<Gloc>(), value)?;
+                    } else {
+                        let mut gloc_ = None;
+                        let id = gloc.get_handle_of::<Identifier>();
+                        self.global_set(id.module, id.name.get_symbol(), value, &mut gloc_)?;
+
+                        if let Some(gloc) = gloc_ {
+                            let thread = Thread::current();
+                            self.registers
+                                .code
+                                .constants
+                                .set(thread, ix as _, Value::new(gloc));
+                        }
+                    }
+                }
+
+                Ins::DefineGlobal(ix, constant) => {
+                    let lm = library_manager();
+                    let value = self.pop();
+                    let identifier =
+                        self.registers.code.constants[ix as usize].get_handle_of::<Identifier>();
+                    let sym = identifier.name.get_symbol();
+                    let library = identifier.module;
+
+                    if constant {
+                        lm.define_const(library, sym, value, false);
+                    } else {
+                        lm.define(library, sym, value, false);
+                    }
+
+                    self.push(Value::void())?;
+                }
+
+                Ins::MakeFrame => {
+                    //println!("{:04}: make-frame", ip);
+                    self.push(Value::encode_int32(self.registers.fp as i32))?;
+                    self.push(Value::UNDEFINED)?;
+                }
+
+                Ins::InjectFrame => {
+                    let top = self.top();
+                    self.push(Value::encode_int32(self.registers.fp as i32))?;
+                    self.push(Value::UNDEFINED)?;
+                    self.push(top)?;
+                }
+
+                Ins::Alloc(n) => {
+                    if self.sp + n as usize >= self.stack.len() {
+                        let exc = Exception::eval(
+                            self,
+                            EvalError::StackOverflow,
+                            &[],
+                            SourcePosition::unknown(),
+                        );
+                        self.error(exc)?;
+                    }
+
+                    self.sp += n as usize;
+                }
+
+                Ins::AllocBelow(n) => {
+                    let top = self.pop();
+
+                    if self.sp + n as usize >= self.stack.len() {
+                        let exc = Exception::eval(
+                            self,
+                            EvalError::StackOverflow,
+                            &[],
+                            SourcePosition::unknown(),
+                        );
+                        self.error(exc)?;
+                    }
+
+                    self.sp += n as usize;
+                    self.push(top)?;
+                }
+
+                Ins::CollectRest(n) => {
+                    let mut rest = Value::nil();
+
+                    while self.sp > self.registers.fp + n as usize {
+                        let val = self.pop();
+                        rest = self.make_pair(val, rest);
+                    }
+
+                    self.push(rest)?;
+                }
+
+                Ins::AssertArgCount(n) => {
+                    if unlikely(self.sp - n as usize != self.registers.fp) {
+                        let ls = self.pop_as_list(self.sp - self.registers.fp);
+                        let exc = Exception::argument_count(
+                            self,
+                            None,
+                            n as _,
+                            n as _,
+                            ls,
+                            SourcePosition::unknown(),
+                        );
+                        self.error(exc)?;
+                    }
+                }
+
+                Ins::AssertMinArgCount(n) => {
+                    if (self.sp - n as usize) < self.registers.fp {
+                        let ls = self.pop_as_list(self.sp - self.registers.fp);
+                        let exc = Exception::argument_count(
+                            self,
+                            None,
+                            n as _,
+                            usize::MAX,
+                            ls,
+                            SourcePosition::unknown(),
+                        );
+                        self.error(exc)?;
+                    }
+                }
+
+                Ins::Call(n) => {
+                    self.thread.safepoint();
+                    *self.stack.get_unchecked_mut(self.sp - n as usize - 2) = //[self.sp - n as usize - 2] =
+                        Value::encode_int32(self.registers.ip as _);
+                    let mut m = n as usize;
+
+                    if let ProcedureKind::Closure(_, _, ref newcaptured, ref newcode) =
+                        self.invoke(&mut m, 3)?.kind
+                    {
+                        self.registers.r#use(*newcode, *newcaptured, self.sp - m);
+                    }
+                }
+
+                Ins::TailCall(m) => {
+                    self.thread.safepoint();
+                    let mut n = m as usize;
+                    let after: *mut Value = &mut self.stack[self.registers.fp];
+                    self.close_upvalues(after);
+                    let proc = self.invoke(&mut n, 1)?;
+
+                    match proc.kind {
+                        ProcedureKind::Closure(_, _, ref newcaptured, ref newcode) => {
+                            self.registers
+                                .r#use(*newcode, *newcaptured, self.registers.fp);
+
+                            for i in 0..=n {
+                                self.stack[self.registers.fp - 1 + i] =
+                                    self.stack[self.sp - n - 1 + i];
+                            }
+
+                            self.sp = self.registers.fp + n;
+                        }
+                        ProcedureKind::RawContinuation(_) => (),
+                        _ => {
+                            if self.registers.top_level() {
+                                let res = self.pop();
+
+                                self.sp = self.registers.initial_fp - 1;
+                                return Ok(res);
+                            } else {
+                                self.exit_frame();
+                            }
+                        }
+                    }
+                }
+
+                Ins::Return => {
+                    let after: *mut Value = &mut self.stack[self.registers.fp];
+                    self.close_upvalues(after);
+                    if self.registers.top_level() {
+                        let res = self.pop();
+
+                        self.sp = self.registers.initial_fp - 1;
+                        return Ok(res);
+                    } else {
+                        self.exit_frame();
+                    }
+                }
+
+                Ins::Branch(offset) => {
+                    self.registers.ip = (self.registers.ip as i32 + offset - 1) as usize;
+                }
+
+                Ins::BranchIf(offset) => {
+                    let val = self.pop();
+                    if !val.is_false() {
+                        self.registers.ip = (self.registers.ip as i32 + offset - 1) as usize;
+                    }
+                }
+
+                Ins::BranchIfNot(offset) => {
+                    let val = self.pop();
+                    if val.is_false() {
+                        self.registers.ip = (self.registers.ip as i32 + offset - 1) as usize;
+                    }
+                    self.thread.safepoint();
+                }
+
+                Ins::KeepOrBranchIfNot(offset) => {
+                    let top = self.pop();
+                    if top.is_false() {
+                        self.registers.ip = (self.registers.ip as i32 + offset - 1) as usize;
+                    } else {
+                        self.push(top)?;
+                    }
+                    self.thread.safepoint();
+                }
+
+                Ins::BranchIfArgMismatch(offset, n) => {
+                    if self.sp - n as usize != self.registers.fp {
+                        self.registers.ip = (self.registers.ip as i32 + offset - 1) as usize;
+                    }
+                    self.thread.safepoint();
+                }
+
+                Ins::BranchIfMinArgMismatch(offset, n) => {
+                    if (self.sp - n as usize) < self.registers.fp {
+                        self.registers.ip = (self.registers.ip as i32 + offset - 1) as usize;
+                    }
+                    self.thread.safepoint();
+                }
+
+                Ins::Reset(index, n) => {
+                    let index = index as usize;
+                    let n = n as usize;
+
+                    let after: *mut Value = &mut self.stack[self.registers.fp + index as usize];
+                    self.close_upvalues(after);
+
+                    for i in (self.registers.fp + index)..(self.registers.fp + index + n) {
+                        self.stack[i] = Value::UNDEFINED;
+                    }
+                }
+
+                Ins::MakeSyntax(i) => {
+                    let transformer = self.pop();
+
+                    if transformer.is_handle_of::<Procedure>() {
+                        if i >= 0 {
+                            let sym = self.registers.code.constants[i as usize]
+                                .get_handle_of::<Identifier>()
+                                .name
+                                .get_symbol();
+                            let special = SpecialForm {
+                                kind: Form::Macro(transformer.get_handle_of()),
+                                original_name: Some(sym.identifier()),
+                            };
+                            let special = self.mutator().allocate(special);
+                            self.push(Value::new(special))?;
+                        } else {
+                            let special = SpecialForm {
+                                kind: Form::Macro(transformer.get_handle_of()),
+                                original_name: None,
+                            };
+                            let special = self.mutator().allocate(special);
+                            self.push(Value::new(special))?;
+                        }
+                    } else {
+                        let exc = Exception::eval(
+                            self,
+                            EvalError::MalformedTransformer,
+                            &[transformer],
+                            SourcePosition::unknown(),
+                        );
+                        self.error(exc)?;
+                    }
+                }
+
+                Ins::Cons => {
+                    let cdr = self.pop();
+                    let car = self.pop();
+                    let pair = self.make_pair(car, cdr);
+                    self.push(pair)?;
+                }
+
+                Ins::Car => {
+                    let pair = self.pop();
+                    if unlikely(pair.typ() != Type::Pair) {
+                        let exc = Exception::type_error(self, &[Type::Pair], pair, SourcePosition::unknown());
+                        return self.error(exc);
+                    }
+                    let car = pair.car();
+                    self.push(car)?;
+                }
+
+                Ins::Cdr => {
+                    let pair = self.pop();
+                    if unlikely(pair.typ() != Type::Pair) {
+                        let exc = Exception::type_error(self, &[Type::Pair], pair, SourcePosition::unknown());
+                        return self.error(exc);
+                    }
+                    let cdr = pair.cdr();
+                    self.push(cdr)?;
+                }
+
+                Ins::IsNull => {
+                    let val = self.pop();
+                    self.push(val.is_null().into())?;
+                }
+
+                Ins::IsPair => {
+                    let val = self.pop();
+                    self.push(val.is_pair().into())?;
+                }
+
+                Ins::IsVector => {
+                    let val = self.pop();
+                    self.push(val.is_vector().into())?;
+                }
+
                 Ins::Pack(n) => {
                     let mut list = Value::nil();
 
@@ -1375,7 +1696,7 @@ impl Context {
                     }
 
                     let values = self.mutator().allocate(Values(list));
-                    self.push(Value::new(values));
+                    self.push(Value::new(values))?;
                 }
 
                 Ins::Flatpack(_n) => {
@@ -1391,7 +1712,7 @@ impl Context {
                         if n == 0 {
                             self.pop();
                             if overflow {
-                                self.push(Value::nil());
+                                self.push(Value::nil())?;
                             }
                         } else {
                             let exc = Exception::eval(
@@ -1401,7 +1722,7 @@ impl Context {
                                 SourcePosition::unknown(),
                             );
 
-                            self.error(exc);
+                            self.error(exc)?;
                         }
                     } else if val.is_handle_of::<Values>() {
                         self.pop();
@@ -1424,11 +1745,11 @@ impl Context {
                                         SourcePosition::unknown(),
                                     );
 
-                                    self.error(exc);
+                                    self.error(exc)?;
                                 }
                             }
 
-                            self.push(value);
+                            self.push(value)?;
                             m -= 1;
                             next = rest;
                         }
@@ -1441,21 +1762,21 @@ impl Context {
                                 SourcePosition::unknown(),
                             );
 
-                            self.error(exc);
+                            self.error(exc)?;
                         }
 
                         if overflow {
-                            self.push(next);
+                            self.push(next)?;
                         }
                     } else {
                         if n == 1 {
                             if overflow {
-                                self.push(Value::nil());
+                                self.push(Value::nil())?;
                             }
                         } else if n == 0 && overflow {
                             let val = self.pop();
                             let pair = self.make_pair(val, Value::nil());
-                            self.push(pair);
+                            self.push(pair)?;
                         } else {
                             let pair = self.make_pair(self.top(), Value::nil());
                             let exc = Exception::eval(
@@ -1465,7 +1786,7 @@ impl Context {
                                 SourcePosition::unknown(),
                             );
 
-                            self.error(exc);
+                            self.error(exc)?;
                         }
                     }
                 }
@@ -1498,278 +1819,12 @@ impl Context {
 
                     let proc = self.mutator().allocate(proc);
 
-                    self.push(Value::new(proc));
-                }
-
-                Ins::PushGlobal(ix) => {
-                    let mut v = self.registers.code.constants[ix as usize];
-
-                    if likely(v.is_handle_of::<Gloc>()) {
-                        v = Gloc::get(self, v.get_handle_of::<Gloc>());
-                    } else {
-                        let mut gloc = None;
-                        v = self.global_ref(v.get_handle_of::<Symbol>(), &mut gloc);
-
-                        if let Some(gloc) = gloc {
-                            let thread = Thread::current();
-                            self.registers
-                                .code
-                                .constants
-                                .set(thread, ix as _, Value::new(gloc));
-                        }
-                    }
-
-                    self.push(v);
-                }
-
-                Ins::SetGlobal(ix) => {
-                    let value = self.pop();
-
-                    let gloc = self.registers.code.constants[ix as usize];
-                    if likely(gloc.is_handle_of::<Gloc>()) {
-                        self.thread.write_barrier(gloc.get_handle());
-                        Gloc::set(self, gloc.get_handle_of::<Gloc>(), value);
-                    } else {
-                        let mut gloc_ = None;
-                        self.global_set(gloc.get_handle_of::<Symbol>(), value, &mut gloc_);
-
-                        if let Some(gloc) = gloc_ {
-                            let thread = Thread::current();
-                            self.registers
-                                .code
-                                .constants
-                                .set(thread, ix as _, Value::new(gloc));
-                        }
-                    }
-                }
-
-                Ins::DefineGlobal(ix, constant) => {
-                    let lm = library_manager();
-                    let value = self.pop();
-                    let sym = self.registers.code.constants[ix as usize].get_handle_of::<Symbol>();
-
-                    if constant {
-                        lm.define_const(self.registers.module.get_handle_of(), sym, value, false);
-                    } else {
-                        lm.define(self.registers.module.get_handle_of(), sym, value, false);
-                    }
-
-                    self.push(Value::void());
-                }
-
-                Ins::MakeFrame => {
-                    self.push(Value::encode_int32(self.registers.fp as i32));
-                    self.push(Value::UNDEFINED);
-                }
-
-                Ins::InjectFrame => {
-                    let top = self.top();
-                    self.push(Value::encode_int32(self.registers.fp as i32));
-                    self.push(Value::UNDEFINED);
-                    self.push(top);
-                }
-
-                Ins::Alloc(n) => {
-                    if self.sp + n as usize > self.stack.len() {
-                        if self.sp + n as usize > self.limit_sp {
-                            let exc = Exception::eval(
-                                self,
-                                EvalError::StackOverflow,
-                                &[],
-                                SourcePosition::unknown(),
-                            );
-                            self.error(exc);
-                        }
-
-                        for _ in 0..(self.sp + n as usize - self.stack.len()) {
-                            self.push(Value::UNDEFINED);
-                        }
-                    }
-                    self.sp += n as usize;
-                }
-
-                Ins::AllocBelow(n) => {
-                    let top = self.pop();
-
-                    if self.sp + n as usize > self.stack.len() {
-                        if self.sp + n as usize > self.limit_sp {
-                            let exc = Exception::eval(
-                                self,
-                                EvalError::StackOverflow,
-                                &[],
-                                SourcePosition::unknown(),
-                            );
-                            self.error(exc);
-                        }
-
-                        for _ in 0..(self.sp + n as usize - self.stack.len()) {
-                            self.push(Value::UNDEFINED);
-                        }
-                    }
-
-                    self.sp += n as usize;
-                    self.push(top);
-                }
-
-                Ins::CollectRest(n) => {
-                    let mut rest = Value::nil();
-
-                    while self.sp > self.registers.fp + n as usize {
-                        let val = self.pop();
-                        rest = self.make_pair(val, rest);
-                    }   
-
-                    self.push(rest);
-                }
-
-                Ins::AssertArgCount(n) => {
-                    if self.sp - n as usize != self.registers.fp {
-                        let ls = self.pop_as_list(self.sp - self.registers.fp);
-                        let exc = Exception::argument_count(
-                            self,
-                            None,
-                            n as _,
-                            n as _,
-                            ls,
-                            SourcePosition::unknown(),
-                        );
-                        self.error(exc);
-                    }
-                }
-
-                Ins::AssertMinArgCount(n) => {
-                    if (self.sp - n as usize) < self.registers.fp {
-                        let ls = self.pop_as_list(self.sp - self.registers.fp);
-                        let exc = Exception::argument_count(
-                            self,
-                            None,
-                            n as _,
-                            usize::MAX,
-                            ls,
-                            SourcePosition::unknown(),
-                        );
-                        self.error(exc);
-                    }
-                }
-
-                Ins::Call(n) => {
-                    self.thread.safepoint();
-                    self.stack[self.sp - n as usize - 2] =
-                        Value::encode_int32(self.registers.ip as _);
-                    let mut m = n as usize;
-
-                    if let ProcedureKind::Closure(_, _, ref newcaptured, ref newcode) =
-                        self.invoke(&mut m, 3).kind
-                    {
-                        self.registers.r#use(*newcode, *newcaptured, self.sp - m);
-                    }
-                }
-
-                Ins::TailCall(m) => {
-                    self.thread.safepoint();
-                    let mut n = m as usize;
-                    let after: *mut Value = &mut self.stack[self.registers.fp];
-                    self.close_upvalues(after);
-                    let proc = self.invoke(&mut n, 1);
-
-                    match proc.kind {
-                        ProcedureKind::Closure(_, _, ref newcaptured, ref newcode) => {
-                            self.registers
-                                .r#use(*newcode, *newcaptured, self.registers.fp);
-
-                            for i in 0..=n {
-                                self.stack[self.registers.fp - 1 + i] =
-                                    self.stack[self.sp - n - 1 + i];
-                            }
-
-                            self.sp = self.registers.fp + n;
-                        }
-                        ProcedureKind::RawContinuation(_) => (),
-                        _ => {
-                            if self.registers.top_level() {
-                                let res = self.pop();
-
-                                self.sp = self.registers.initial_fp - 1;
-                                return res;
-                            } else {
-                                self.exit_frame();
-                            }
-                        }
-                    }
-                }
-
-                Ins::Return => {
-                    let after: *mut Value = &mut self.stack[self.registers.fp];
-                    self.close_upvalues(after);
-                    if self.registers.top_level() {
-                        let res = self.pop();
-
-                        self.sp = self.registers.initial_fp - 1;
-                        return res;
-                    } else {
-                        self.exit_frame();
-                    }
-                }
-
-                Ins::Branch(offset) => {
-                    self.registers.ip = (self.registers.ip as i32 + offset) as usize;
-                }
-
-                Ins::BranchIf(offset) => {
-                    let val = self.pop();
-                    if !val.is_false() {
-                        self.registers.ip = (self.registers.ip as i32 + offset) as usize;
-                    }
-                }
-
-                Ins::BranchIfNot(offset) => {
-                    let val = self.pop();
-                    if val.is_false() {
-                        self.registers.ip = (self.registers.ip as i32 + offset) as usize;
-                    }
-                    self.thread.safepoint();
-                }
-
-                Ins::KeepOrBranchIfNot(offset) => {
-                    let top = self.pop();
-                    if top.is_false() {
-                        self.registers.ip = (self.registers.ip as i32 + offset) as usize;
-                    } else {
-                        self.push(top);
-                    }
-                    self.thread.safepoint();
-                }
-
-                Ins::BranchIfArgMismatch(offset, n) => {
-                    if self.sp - n as usize != self.registers.fp {
-                        self.registers.ip = (self.registers.ip as i32 + offset) as usize;
-                    }
-                    self.thread.safepoint();
-                }
-
-                Ins::BranchIfMinArgMismatch(offset, n) => {
-                    if (self.sp - n as usize) < self.registers.fp {
-                        self.registers.ip = (self.registers.ip as i32 + offset) as usize;
-                    }
-                    self.thread.safepoint();
-                }
-
-                Ins::Reset(index, n) => {
-                    let index = index as usize;
-                    let n = n as usize;
-
-                    let after: *mut Value = &mut self.stack[self.registers.fp + index as usize];
-                    self.close_upvalues(after);
-
-                    for i in (self.registers.fp + index)..(self.registers.fp + index + n) {
-                        self.stack[i] = Value::UNDEFINED;
-                    }
+                    self.push(Value::new(proc))?;
                 }
 
                 ins => todo!("{:?}", ins),
             }
         }
-        
     }
 
     fn exit_frame(&mut self) {
@@ -1807,13 +1862,13 @@ impl Context {
         }
     }
 
-    fn global_ref(&mut self, id: Handle<Symbol>, gloc_out: &mut Option<Handle<Gloc>>) -> Value {
-        let binding = library_manager().find_binding(
-            self.registers.module.get_handle_of::<Library>(),
-            id,
-            false,
-            false,
-        );
+    fn global_ref(
+        &mut self,
+        library: Handle<Library>,
+        id: Handle<Symbol>,
+        gloc_out: &mut Option<Handle<Gloc>>,
+    ) -> ScmResult {
+        let binding = library_manager().find_binding(library, id, false, false);
 
         if let Some(binding) = binding {
             *gloc_out = Some(binding);
@@ -1828,26 +1883,23 @@ impl Context {
                 SourcePosition::unknown(),
             );
 
-            self.error(exc);
+            self.error(exc)
         }
     }
 
     fn global_set(
         &mut self,
+        lib: Handle<Library>,
         id: Handle<Symbol>,
         value: Value,
         gloc_out: &mut Option<Handle<Gloc>>,
-    ) {
-        let binding = library_manager().find_binding(
-            self.registers.module.get_handle_of::<Library>(),
-            id,
-            false,
-            false,
-        );
+    ) -> ScmResult<()> {
+        let binding = library_manager().find_binding(lib, id, false, false);
 
         if let Some(binding) = binding {
             *gloc_out = Some(binding);
-            Gloc::set(self, binding, value);
+            Gloc::set(self, binding, value)?;
+            Ok(())
         } else {
             let exc = Exception::custom(
                 self,
@@ -1857,13 +1909,13 @@ impl Context {
                 SourcePosition::unknown(),
             );
 
-            self.error(exc);
+            self.error(exc)
         }
     }
 
     #[cold]
-    pub fn error(&mut self, exception: Handle<Exception>) -> ! {
-        std::panic::resume_unwind(Box::new(exception))
+    pub fn error<R>(&mut self, exception: Handle<Exception>) -> ScmResult<R> {
+        Err(Value::new(exception))
     }
 }
 
@@ -1964,6 +2016,22 @@ impl Object for SavedState {
 
 impl Allocation for SavedState {}
 
+impl Display for SavedState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Saved Context State:")?;
+        writeln!(f, "  Stack(sp={}):", self.sp)?;
+        for (i, v) in self.stack.iter().enumerate() {
+            writeln!(f, "    {}: {}", i, v.to_string(false))?
+        }
+        writeln!(f, "  Registers:")?;
+        writeln!(f, "    ip: {}", self.registers.ip)?;
+        writeln!(f, "    fp: {}", self.registers.fp)?;
+        writeln!(f, "    rid: {}", self.registers.rid)?;
+        writeln!(f, "    code: {:p}", self.registers.code)?;
+        Ok(())
+    }
+}
+
 static WINDER_ID: AtomicI32 = AtomicI32::new(i32::MIN);
 
 pub struct Winder {
@@ -1986,12 +2054,12 @@ impl Winder {
             after,
             handlers,
             next,
-            id: WINDER_ID.fetch_add(1, std::sync::atomic::Ordering::AcqRel)
+            id: WINDER_ID.fetch_add(1, std::sync::atomic::Ordering::AcqRel),
         }
     }
 
     pub fn id(&self) -> i32 {
-        self.id 
+        self.id
     }
 
     pub fn count(&self) -> usize {

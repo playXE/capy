@@ -7,7 +7,7 @@ use std::{collections::hash_map::RandomState, ptr::null};
 use crate::{
     data::{
         exception::{Exception, SourcePosition},
-        special_form::{Form, Macro, SpecialForm},
+        special_form::{Form, Macro, SpecialForm}, equality::eq,
     },
     prelude::{
         code::{Code, Ins},
@@ -57,7 +57,7 @@ impl Object for LocalEnv {
 
 pub enum Access {
     Local(u16),
-    Global(Handle<Symbol>),
+    Global(Handle<Identifier>),
     Env(u16),
     Macro(Handle<Procedure>),
     Special(Handle<SpecialForm>),
@@ -114,7 +114,13 @@ impl Environment {
                         Value::UNDEFINED,
                         GlocFlag::BindingMut,
                     );
-                    Access::Global(sym)
+                    let id = Identifier {
+                        name: Value::new(sym),
+                        module: *library,
+                        env: None,
+                    };
+
+                    Access::Global(ctx.mutator().allocate(id))
                 } else {
                     let index = lenv.vars.len() as u16;
                     lenv.vars.put(ctx.mutator(), sym, Value::new(index as i32));
@@ -137,7 +143,7 @@ impl Environment {
         ctx: &mut Context,
         sym: Handle<Symbol>,
         mut captures: Handle<HashMap<Handle<Symbol>, Value>>,
-    ) -> Access {
+    ) -> ScmResult<Access> {
         let mut env = self;
         let initial = match env {
             Self::Global((_, lenv)) => lenv.cc,
@@ -149,11 +155,11 @@ impl Environment {
                     if let Some(index) = local.vars.get(&sym) {
                         if index.is_int32() {
                             if local.cc == initial {
-                                return Access::Local(index.get_int32() as u16);
+                                return Ok(Access::Local(index.get_int32() as u16));
                             } else {
                                 match captures.get(&sym) {
                                     Some(capture) => {
-                                        return Access::Env(capture.get_int32() as u16);
+                                        return Ok(Access::Env(capture.get_int32() as u16));
                                     }
 
                                     None => {
@@ -164,41 +170,51 @@ impl Environment {
                                             Value::new(capture as i32),
                                         );
 
-                                        return Access::Env(capture);
+                                        return Ok(Access::Env(capture));
                                     }
                                 }
                             }
                         } else {
-                            return Access::Macro(index.get_handle_of());
+                            return Ok(Access::Macro(index.get_handle_of()));
                         }
                     }
                     let gloc =
-                        library_manager().global_variable_ref(ctx, *library, sym, false, true);
+                        library_manager().global_variable_ref(ctx, *library, sym, false, true)?;
 
                     if gloc.is_none() {
-                        return Access::Global(sym);
+                        let id = Identifier {
+                            name: Value::new(sym),
+                            module: *library,
+                            env: None,
+                        };
+                        return Ok(Access::Global(ctx.mutator().allocate(id)));
                     }
 
                     let gloc = gloc.unwrap();
 
                     if gloc.is_handle_of::<Macro>() {
-                        return Access::Macro(gloc.get_handle_of::<Macro>().0);
+                        return Ok(Access::Macro(gloc.get_handle_of::<Macro>().0));
                     } else if gloc.is_handle_of::<SpecialForm>() {
-                        return Access::Special(gloc.get_handle_of::<SpecialForm>());
+                        return Ok(Access::Special(gloc.get_handle_of::<SpecialForm>()));
                     }
 
-                    return Access::Global(sym);
+                    let id = Identifier {
+                        name: Value::new(sym),
+                        module: *library,
+                        env: None,
+                    };
+                    return Ok(Access::Global(ctx.mutator().allocate(id)));
                 }
 
                 Self::Local(local) => {
                     if let Some(index) = local.vars.get(&sym) {
                         if index.is_int32() {
                             if local.cc == initial {
-                                return Access::Local(index.get_int32() as u16);
+                                return Ok(Access::Local(index.get_int32() as u16));
                             } else {
                                 match captures.get(&sym) {
                                     Some(capture) => {
-                                        return Access::Env(capture.get_int32() as u16);
+                                        return Ok(Access::Env(capture.get_int32() as u16));
                                     }
 
                                     None => {
@@ -209,12 +225,12 @@ impl Environment {
                                             Value::new(capture as i32),
                                         );
 
-                                        return Access::Env(capture);
+                                        return Ok(Access::Env(capture));
                                     }
                                 }
                             }
                         } else {
-                            return Access::Macro(index.get_handle_of());
+                            return Ok(Access::Macro(index.get_handle_of()));
                         }
                     }
 
@@ -238,15 +254,30 @@ pub struct Compiler {
     pub captures: Handle<HashMap<Handle<Symbol>, Value>>,
     pub capture_array: ArrayList<ArrayList<Capture>>,
     pub toplevel: bool,
+    pub syntax_sym: Value,
 }
 
 impl Compiler {
+    pub fn make_identifier(
+        &mut self,
+        ctx: &mut Context,
+        sym: Handle<Symbol>,
+    ) -> Handle<Identifier> {
+        let id = Identifier {
+            name: Value::new(sym),
+            module: self.library,
+            env: None, //self.env
+        };
+
+        ctx.mutator().allocate(id)
+    }
+
     pub fn with_library<R>(
         &mut self,
         library: Handle<Library>,
         ctx: &mut Context,
-        callback: impl FnOnce(&mut Context, &mut Self) -> R,
-    ) -> R {
+        callback: impl FnOnce(&mut Context, &mut Self) -> ScmResult<R>,
+    ) -> ScmResult<R> {
         let env = Environment::Global((
             library,
             LocalEnv {
@@ -256,6 +287,8 @@ impl Compiler {
                 cc: self as *const Self,
             },
         ));
+        let old = self.library;
+        self.library = library;
         let saved = self.env;
         self.env = ctx.mutator().allocate(env);
         ctx.try_finally(
@@ -263,13 +296,16 @@ impl Compiler {
             |ctx, cc| callback(ctx, cc),
             |_, cc| {
                 cc.env = saved;
+                cc.library = old;
+                Ok(())
             },
         )
     }
 
-    pub fn add_constant(&mut self, ctx: &mut Context, value: Value) -> usize {
+    pub fn add_constant(&mut self, ctx: &mut Context, value: impl Into<Value>) -> usize {
+        let value = value.into();
         for (i, constant) in self.constants.iter().enumerate() {
-            if constant.raw() == value.raw() {
+            if eq(ctx, value, *constant) {
                 return i;
             }
         }
@@ -291,12 +327,12 @@ impl Compiler {
         ip
     }
 
-    pub fn compile_exprs(&mut self, ctx: &mut Context, expr: Value) -> usize {
+    pub fn compile_exprs(&mut self, ctx: &mut Context, expr: Value) -> ScmResult<usize> {
         let mut n = 0;
         let (mut next, _) = Self::desyntax(expr);
 
         while next.is_pair() {
-            self.compile(ctx, next.car(), false);
+            self.compile(ctx, next.car(), false)?;
             n += 1;
             next = next.cdr();
         }
@@ -305,11 +341,11 @@ impl Compiler {
             panic!();
         }
 
-        n
+        Ok(n)
     }
 
     pub fn offset_to_next(&self, ip: isize) -> isize {
-        self.code.len() as isize - ip - 1
+        self.code.len() as isize - ip
     }
 
     pub fn next_local_index(&mut self) -> usize {
@@ -328,7 +364,7 @@ impl Compiler {
         lenv: Handle<Environment>,
         atomic: bool,
         predef: bool,
-    ) -> Handle<Environment> {
+    ) -> ScmResult<Handle<Environment>> {
         let lgroup = LocalEnv {
             vars: HashMap::with_hasher(RandomState::new()),
             captures: self.captures,
@@ -379,7 +415,7 @@ impl Compiler {
                     &[variables, bindings],
                     SourcePosition::unknown(),
                 );
-                ctx.error(exc);
+                ctx.error(exc)?;
             }
 
             let init = bindings.cdr().car();
@@ -387,7 +423,7 @@ impl Compiler {
 
             let old = self.env;
             self.env = env;
-            self.compile(ctx, init, false);
+            self.compile(ctx, init, false)?;
             self.env = old;
 
             let mut vars = variables;
@@ -411,7 +447,7 @@ impl Compiler {
                     &[variables, binding_list],
                     SourcePosition::unknown(),
                 );
-                ctx.error(exc);
+                ctx.error(exc)?;
             }
 
             for sym in syms.iter().rev() {
@@ -427,81 +463,12 @@ impl Compiler {
                         &[Value::new(*sym), binding_list],
                         SourcePosition::unknown(),
                     );
-                    ctx.error(exc);
+                    ctx.error(exc)?;
                 }
             }
 
             bindings = rest;
         }
-
-        /*println!("multi: {}", bindings.to_string(true));
-        while bindings.is_pair() {
-            let binding = bindings.car();
-            let rest = bindings.cdr();
-            println!("vars: {}",  binding.to_string(false));
-            println!("rest: {}", rest.to_string(false));
-            if binding.is_pair() && binding.cdr().is_pair() && binding.cdr().cdr().is_null() {
-                let variables = binding.car();
-
-                let expr = binding.cdr().car();
-                let old = self.env;
-                self.env = env;
-                self.compile(ctx, expr, false);
-                self.env = old;
-                let mut vars = variables;
-                let mut syms = ArrayList::new(ctx.mutator());
-                while vars.is_pair() && vars.car().is_symbol() {
-                    syms.push(ctx.mutator(), vars.car().get_symbol());
-                    vars = vars.cdr();
-                }
-
-                if vars.is_null() {
-                    self.emit(ctx, Ins::Unpack(syms.len() as _, false));
-                } else if vars.is_symbol() {
-                    self.emit(ctx, Ins::Unpack(syms.len() as _, true));
-                    let binding = group.add_binding(ctx, vars.get_symbol(), || self.next_local_index());
-                    self.emit(ctx, Ins::SetLocal(binding as _));
-                    prev_index = binding as _;
-                } else {
-
-                    let exc = Exception::eval(
-                        ctx,
-                        EvalError::MalformedBinding,
-                        &[binding, binding_list],
-                        SourcePosition::unknown(),
-                    );
-                    ctx.error(exc);
-                }
-
-                for sym in syms.iter().rev() {
-                    let binding = group.add_binding(ctx, *sym, || self.next_local_index());
-
-                    if predef || (binding as isize) > prev_index {
-                        self.emit(ctx, Ins::SetLocal(binding as _));
-                        prev_index = binding as _;
-                    } else {
-                        let exc = Exception::eval(
-                            ctx,
-                            EvalError::DuplicateBinding,
-                            &[Value::new(*sym), binding_list],
-                            SourcePosition::unknown(),
-                        );
-                        ctx.error(exc);
-                    }
-                }
-
-                bindings = rest;
-            } else {
-
-                let exc = Exception::eval(
-                    ctx,
-                    EvalError::MalformedBinding,
-                    &[binding, binding_list],
-                    SourcePosition::unknown(),
-                );
-                ctx.error(exc);
-            }
-        }*/
 
         if !bindings.is_null() {
             let exc = Exception::eval(
@@ -510,10 +477,10 @@ impl Compiler {
                 &[binding_list],
                 SourcePosition::unknown(),
             );
-            ctx.error(exc);
+            ctx.error(exc)?;
         }
 
-        group
+        Ok(group)
     }
 
     pub fn compile_bindings(
@@ -524,7 +491,7 @@ impl Compiler {
         atomic: bool,
         predef: bool,
         postset: bool,
-    ) -> Handle<Environment> {
+    ) -> ScmResult<Handle<Environment>> {
         let lgroup = LocalEnv {
             vars: HashMap::with_hasher(RandomState::new()),
             captures: self.captures,
@@ -575,7 +542,7 @@ impl Compiler {
 
                 let old = self.env;
                 self.env = env;
-                self.compile(ctx, expr, false);
+                self.compile(ctx, expr, false)?;
                 self.env = old;
                 let binding = group.add_binding(ctx, sym, || self.next_local_index());
 
@@ -587,7 +554,7 @@ impl Compiler {
                         &[Value::new(sym)],
                         SourcePosition::unknown(),
                     );
-                    ctx.error(exc);
+                    ctx.error(exc)?;
                 }
 
                 if postset {
@@ -608,14 +575,14 @@ impl Compiler {
                 &[binding_list],
                 SourcePosition::unknown(),
             );
-            ctx.error(exc);
+            ctx.error(exc)?;
         }
 
         for binding in definitions.drain(..).rev() {
             self.emit(ctx, Ins::SetLocal(binding as _));
         }
 
-        group
+        Ok(group)
     }
 
     pub fn build(
@@ -623,7 +590,7 @@ impl Compiler {
         form: Value,
         library: Handle<Library>,
         in_directory: Option<Handle<Str>>,
-    ) -> Handle<Code> {
+    ) -> ScmResult<Handle<Code>> {
         let captures = HashMap::with_hasher(RandomState::new());
         let local = LocalEnv {
             vars: HashMap::with_hasher(RandomState::new()),
@@ -645,6 +612,7 @@ impl Compiler {
             fragments,
             num_locals: 0,
             library,
+            syntax_sym: Value::nil(),
             max_locals: 0,
             captures,
             capture_array: ArrayList::new(ctx.mutator()),
@@ -652,7 +620,7 @@ impl Compiler {
         let p = &this as *const Compiler;
         this.env.bind_to_cc(p);
 
-        this.compile_body(ctx, form, Value::nil(), false);
+        this.compile_body(ctx, form, Value::nil(), false)?;
 
         let code = ctx.mutator().allocate(Code {
             instructions: this.code,
@@ -662,10 +630,11 @@ impl Compiler {
             module: library,
             captures: this.capture_array,
         });
-
+        println!("top-level code:\n");
+        code.dump();
         //println!("code: {:?}", code.instructions);
 
-        code
+        Ok(code)
     }
 
     pub fn bundle(self, ctx: &mut Context) -> Handle<Code> {
@@ -692,10 +661,10 @@ impl Compiler {
         tail: bool,
         _local_define: bool,
         in_directory: Option<Handle<Str>>,
-    ) -> bool {
+    ) -> ScmResult<bool> {
         if expr.is_null() {
             self.emit(ctx, Ins::PushVoid);
-            return false;
+            return Ok(false);
         }
 
         let old_dir = self.source_directory;
@@ -725,12 +694,13 @@ impl Compiler {
                         cc.emit(ctx, Ins::Pop);
                     }
 
-                    exit = cc.compile(ctx, exprs[i], tail && (i == exprs.len() - 1));
+                    exit = cc.compile(ctx, exprs[i], tail && (i == exprs.len() - 1))?;
                 }
-                exit
+                Ok(exit)
             },
             |_, cc| {
                 cc.source_directory = old_dir;
+                Ok(())
             },
         )
     }
@@ -741,14 +711,14 @@ impl Compiler {
         expr: Value,
         _optionals: Value,
         local_define: bool,
-    ) {
+    ) -> ScmResult<()> {
         if expr.is_null() {
             self.emit(ctx, Ins::PushVoid);
             self.emit(ctx, Ins::Return);
         } else {
             let reserve_local_ip = self.emit_placeholder(ctx);
 
-            if !self.compile_seq(ctx, expr, true, local_define, None) {
+            if !self.compile_seq(ctx, expr, true, local_define, None)? {
                 self.emit(ctx, Ins::Return);
             }
 
@@ -757,6 +727,7 @@ impl Compiler {
                 self.code[reserve_local_ip] = Ins::Alloc(n as _);
             }
         }
+        Ok(())
     }
 
     pub fn collect_arguments(
@@ -813,7 +784,7 @@ impl Compiler {
         _atomic: bool,
         tagged: bool,
         continuation: bool,
-    ) {
+    ) -> ScmResult<()> {
         let arguments = ArrayList::new(ctx.mutator());
         let captures = HashMap::with_hasher(RandomState::new());
         let mut closure_cc = Compiler {
@@ -831,6 +802,7 @@ impl Compiler {
             fragments: ArrayList::new(ctx.mutator()),
             library: self.library,
             num_locals: 0,
+            syntax_sym: Value::nil(),
             captures,
             max_locals: 0,
             capture_array: ArrayList::new(ctx.mutator()),
@@ -847,7 +819,7 @@ impl Compiler {
             ctx.mutator().write_barrier(closure_cc.arguments);
             closure_cc.arguments.replace(arglist);
             closure_cc.add_arguments_to_env(ctx);
-            closure_cc.compile_body(ctx, body, Value::nil(), true);
+            closure_cc.compile_body(ctx, body, Value::nil(), true)?;
         } else if next.is_symbol() {
             if arglist.len() > 0 {
                 closure_cc.emit(ctx, Ins::AssertMinArgCount(arglist.len() as _));
@@ -859,7 +831,7 @@ impl Compiler {
             closure_cc.arguments.replace(arglist);
             closure_cc.add_arguments_to_env(ctx);
 
-            closure_cc.compile_body(ctx, body, Value::nil(), true);
+            closure_cc.compile_body(ctx, body, Value::nil(), true)?;
         } else {
             // TODO: Optionals: (lambda x . y z) ; y is optional
             let exc = Exception::eval(
@@ -868,7 +840,7 @@ impl Compiler {
                 &[origarglist],
                 SourcePosition::unknown(),
             );
-            ctx.error(exc);
+            ctx.error(exc)?;
         }
 
         let code_index = self.fragments.len();
@@ -905,6 +877,8 @@ impl Compiler {
             let proc = Value::new(proc);
             let ix = self.add_constant(ctx, proc);
             self.emit(ctx, Ins::PushConstant(ix as _));
+
+            Ok(())
         } else {
             let code = closure_cc.bundle(ctx);
             self.fragments.push(ctx.mutator(), code);
@@ -912,7 +886,7 @@ impl Compiler {
             let mut capture_array = ArrayList::new(ctx.mutator());
 
             for (name, _) in captures.iter() {
-                match self.env.lookup(ctx, *name, self.captures) {
+                match self.env.lookup(ctx, *name, self.captures)? {
                     Access::Env(env) => capture_array.push(
                         ctx.mutator(),
                         Capture {
@@ -965,18 +939,55 @@ impl Compiler {
                     ),
                 );
             }
+
+            Ok(())
         }
     }
 
-    pub fn check_toplevel(&mut self, ctx: &mut Context, form: Value, pos: SourcePosition) {
-        if !self.toplevel {
+    pub fn check_toplevel(
+        &mut self,
+        ctx: &mut Context,
+        form: Value,
+        pos: SourcePosition,
+    ) -> ScmResult<()> {
+        if !self.toplevel && !matches!(&*self.env, Environment::Global(_)) {
             let exc = Exception::eval(ctx, EvalError::TopLevelForm, &[form], pos);
-            ctx.error(exc);
+            ctx.error(exc)?
+        } else {
+            Ok(())
         }
     }
 
-    pub fn push_lookup(&mut self, ctx: &mut Context, sym: Handle<Symbol>) {
-        match self.env.lookup(ctx, sym, self.captures) {
+    pub fn set_value_of(&mut self, ctx: &mut Context, sym: Handle<Symbol>) -> ScmResult<()> {
+        match self.env.lookup(ctx, sym, self.captures)? {
+            Access::Env(env) => {
+                self.emit(ctx, Ins::SetCaptured(env));
+            }
+
+            Access::Local(x) => {
+                self.emit(ctx, Ins::SetLocal(x));
+            }
+
+            Access::Global(x) => {
+                let c = self.add_constant(ctx, x);
+                self.emit(ctx, Ins::SetGlobal(c as _));
+            }
+
+            _ => {
+                let exc = Exception::eval(
+                    ctx,
+                    EvalError::UnboundVariable,
+                    &[Value::new(sym)],
+                    SourcePosition::unknown(),
+                );
+                ctx.error(exc)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn push_lookup(&mut self, ctx: &mut Context, sym: Handle<Symbol>) -> ScmResult<()> {
+        match self.env.lookup(ctx, sym, self.captures)? {
             Access::Env(x) => {
                 self.emit(ctx, Ins::PushCaptured(x as _));
             }
@@ -991,6 +1002,7 @@ impl Compiler {
 
             _ => todo!(),
         }
+        Ok(())
     }
 
     pub fn locals_len(&self) -> usize {
@@ -1035,14 +1047,14 @@ impl Compiler {
         }
     }
 
-    pub fn compile(&mut self, ctx: &mut Context, form: Value, tail: bool) -> bool {
+    pub fn compile(&mut self, ctx: &mut Context, form: Value, tail: bool) -> ScmResult<bool> {
         let sform = form;
         let (form, pos) = Self::desyntax(form);
 
         if form.is_pair() {
             if !form.is_list() {
                 let exc = Exception::eval(ctx, EvalError::ProperList, &[form], pos);
-                ctx.error(exc);
+                ctx.error(exc)?;
             }
 
             let (car, _) = Self::desyntax(form.car());
@@ -1050,58 +1062,62 @@ impl Compiler {
 
             if !car.is_symbol() {
                 self.emit(ctx, Ins::MakeFrame);
-                self.compile(ctx, car, false);
-                let nargs = self.compile_exprs(ctx, args);
-                return self.call(ctx, nargs, tail);
+                self.compile(ctx, car, false)?;
+                let nargs = self.compile_exprs(ctx, args)?;
+                return Ok(self.call(ctx, nargs, tail));
             }
 
-            match self.env.lookup(ctx, car.get_symbol(), self.captures) {
+            match self.env.lookup(ctx, car.get_symbol(), self.captures)? {
                 Access::Env(up) => {
                     self.emit(ctx, Ins::MakeFrame);
                     self.emit(ctx, Ins::PushCaptured(up));
-                    let nargs = self.compile_exprs(ctx, args);
-                    return self.call(ctx, nargs, tail);
+                    let nargs = self.compile_exprs(ctx, args)?;
+                    return Ok(self.call(ctx, nargs, tail));
                 }
                 Access::Local(index) => {
                     self.emit(ctx, Ins::MakeFrame);
                     self.emit(ctx, Ins::PushLocal(index));
-                    let nargs = self.compile_exprs(ctx, args);
-                    return self.call(ctx, nargs, tail);
+                    let nargs = self.compile_exprs(ctx, args)?;
+                    return Ok(self.call(ctx, nargs, tail));
                 }
 
                 Access::Global(sym) => {
                     self.emit(ctx, Ins::MakeFrame);
                     let ix = self.add_constant(ctx, Value::new(sym));
                     self.emit(ctx, Ins::PushGlobal(ix as _));
-                    let nargs = self.compile_exprs(ctx, args);
-                    return self.call(ctx, nargs, tail);
+                    let nargs = self.compile_exprs(ctx, args)?;
+                    return Ok(self.call(ctx, nargs, tail));
                 }
 
                 Access::Special(special) => match special.kind {
                     Form::Primitive(form_compiler) => {
                         return form_compiler(self, ctx, sform, false);
                     }
-                    _ => todo!("macro expansion"),
+                    Form::Macro(transformer) => {
+                        let ls = ctx.make_pair(form, Value::nil());
+                        let expanded = ctx.apply(transformer.into(), ls)?;
+                        return self.compile(ctx, expanded, tail);
+                    }
                 },
 
                 Access::Macro(_) => todo!("macro expansion"),
                 Access::Syntax(_) => todo!("syntax-rules expansion"),
             }
         } else if form.is_symbol() {
-            match self.env.lookup(ctx, form.get_symbol(), self.captures) {
+            match self.env.lookup(ctx, form.get_symbol(), self.captures)? {
                 Access::Env(up) => {
                     self.emit(ctx, Ins::PushCaptured(up));
-                    return false;
+                    return Ok(false);
                 }
                 Access::Local(index) => {
                     self.emit(ctx, Ins::PushLocal(index));
-                    return false;
+                    return Ok(false);
                 }
 
                 Access::Global(sym) => {
                     let ix = self.add_constant(ctx, Value::new(sym));
                     self.emit(ctx, Ins::PushGlobal(ix as _));
-                    return false;
+                    return Ok(false);
                 }
 
                 Access::Special(special) => match special.kind {
@@ -1134,7 +1150,7 @@ impl Compiler {
             self.emit(ctx, Ins::PushConstant(ix as _));
         }
 
-        false
+        Ok(false)
     }
 
     pub fn call(&mut self, ctx: &mut Context, n: usize, tail: bool) -> bool {
