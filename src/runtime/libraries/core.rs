@@ -146,6 +146,22 @@ pub(crate) fn core_library(rt: &mut Runtime) {
         true,
     );
 
+    manager.add_definition(
+        thr,
+        base,
+        ("set-car!", Implementation::Native2(set_car)),
+        true,
+        true,
+    );
+
+    manager.add_definition(
+        thr,
+        base,
+        ("set-cdr!", Implementation::Native2(set_cdr)),
+        true,
+        true,
+    );
+
     let keywords = manager.keyword_module.get_handle_of::<Library>();
     manager.add_definition(
         thr,
@@ -872,7 +888,7 @@ pub fn identity(_: &mut Context, val: Value) -> ScmResult {
 
 pub fn dbg(_: &mut Context, args: &Arguments) -> ScmResult {
     for arg in args.iter() {
-        print!("{} ", arg.to_string(true));
+        print!("{} ", arg.to_string(false));
     }
     println!();
 
@@ -919,7 +935,6 @@ pub fn compile_define_syntax(
         if kword.is_symbol() {
             let sym = kword.get_symbol();
 
-            //let index = cc.add_constant(ctx, kword);
             let old_syntax_sym = cc.syntax_sym;
             cc.syntax_sym = kword;
             cc.compile(ctx, transformer, false)?;
@@ -1036,8 +1051,11 @@ pub fn compile_cdr(cc: &mut Compiler, ctx: &mut Context, form: Value, _: bool) -
 
 pub fn compile_cons(cc: &mut Compiler, ctx: &mut Context, form: Value, _: bool) -> ScmResult<bool> {
     // Pair(_, Pair(car, Pair(cons, nil)))
-    if form.is_pair() && form.cdr().is_pair() && form.cdr().cdr().is_pair()
-    && form.cdr().cdr().cdr().is_null() {
+    if form.is_pair()
+        && form.cdr().is_pair()
+        && form.cdr().cdr().is_pair()
+        && form.cdr().cdr().cdr().is_null()
+    {
         let car = form.cdr().car();
         let cdr = form.cdr().cdr().car();
         cc.compile(ctx, car, false)?;
@@ -1050,4 +1068,24 @@ pub fn compile_cons(cc: &mut Compiler, ctx: &mut Context, form: Value, _: bool) 
 
         ctx.error(exc)
     }
+}
+
+pub fn set_car(ctx: &mut Context, cons: Value, car: Value) -> ScmResult {
+    cons.assert_type(ctx, SourcePosition::unknown(), &[Type::Pair])?;
+
+    let mut pair = cons.get_handle_of::<Pair>();
+
+    ctx.mutator().write_barrier(pair);
+    pair.car = car;
+    Ok(Value::void())
+}
+
+pub fn set_cdr(ctx: &mut Context, cons: Value, cdr: Value) -> ScmResult {
+    cons.assert_type(ctx, SourcePosition::unknown(), &[Type::Pair])?;
+
+    let mut pair = cons.get_handle_of::<Pair>();
+
+    ctx.mutator().write_barrier(pair);
+    pair.cdr = cdr;
+    Ok(Value::void())
 }

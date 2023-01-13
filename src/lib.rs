@@ -1,5 +1,5 @@
 
-#![feature(const_refs_to_cell, core_intrinsics)]
+#![feature(const_refs_to_cell, core_intrinsics, cstr_from_bytes_until_nul, arbitrary_self_types)]
 
 use prelude::Value;
 

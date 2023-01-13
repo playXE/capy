@@ -17,6 +17,21 @@ pub struct BigInt {
 
 impl BigInt {
     pub const BASE: u64 = u32::MAX as u64 + 1;
+
+    const fn hiword(num: u64) -> u32 {
+        ((num >> 32) & 0xffffffff) as u32 
+    }
+
+    const fn loword(num: u64) -> u32 {
+        (num & 0xffffffff) as u32
+    }
+
+    const fn joinwords(hi: u32, lo: u32) -> u64 {
+        ((hi as u64) << 32) | (lo as u64)
+    }
+
+    
+
 }
 
 impl Object for BigInt {

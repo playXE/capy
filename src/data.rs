@@ -8,3 +8,6 @@ pub mod symbol;
 pub mod value;
 pub mod library;
 pub mod equality;
+pub mod port;
+pub mod socket;
+pub mod hash;

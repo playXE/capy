@@ -256,7 +256,7 @@ impl Context {
 
     pub(crate) fn roots(&self, processor: &mut ThreadRootProcessor) {
         let visitor = processor.visitor();
-        for val in self.stack.iter() {
+        for val in self.stack.iter().take(self.sp) {
             val.trace(visitor);
         }
         self.registers.trace(visitor);
@@ -328,6 +328,10 @@ impl Context {
         finally(self, data)?;
 
         result
+    }
+
+    pub fn make_arguments(&mut self, args: &[Value]) -> Value {
+        Value::make_list_slice(self, args, Value::nil())
     }
 
     pub fn apply(&mut self, fun: Value, args: Value) -> ScmResult {

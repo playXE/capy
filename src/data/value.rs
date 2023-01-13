@@ -1011,7 +1011,7 @@ impl Value {
 
                 let mut builder = StringBuilder::new("#u8(", ")", Some(" "), None);
 
-                for byte in bytes.0.iter() {
+                for byte in bytes.iter() {
                     builder.append(format!("{}", byte));
                 }
 
@@ -1343,6 +1343,8 @@ impl Type {
         Some(match self {
             Type::Procedure => &[Type::Procedure, Type::Parameter],
             Type::Number => &[Type::Integer, Type::Fixnum, Type::Float],
+            Type::Integer => &[Type::Integer, Type::Fixnum],
+            Type::Float => &[Type::Float],
             Type::ProperList => &[Type::Null, Type::Pair, Type::ProperList],
             Type::AssocList => &[Type::AssocList, Type::Null, Type::Pair],
             Type::List => &[

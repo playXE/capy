@@ -148,7 +148,7 @@ pub fn equal(ctx: &mut Context, lhs: Value, rhs: Value) -> bool {
         let b1 = lhs.get_bytes();
         let b2 = rhs.get_bytes();
 
-        return &b1.0[0..] == &b2.0[0..];
+        return &b1[0..] == &b2[0..];
     }
 
     if lhs.is_string() && rhs.is_string() {

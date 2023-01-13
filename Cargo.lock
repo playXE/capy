@@ -38,6 +38,7 @@ version = "0.1.0"
 dependencies = [
  "dashmap",
  "env_logger",
+ "errno",
  "libc",
  "log",
  "memoffset 0.8.0",

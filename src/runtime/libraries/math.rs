@@ -71,6 +71,22 @@ pub(crate) fn math_library() {
         true,
         true
     );
+
+    manager.add_definition(
+        thr,
+        base,
+        ("arithmetic-shift", Implementation::Native2(arithmetic_shift)),
+        true,
+        true
+    );
+
+    manager.add_definition(
+        thr,
+        base,
+        ("arithmetic-shift-right", Implementation::Native2(arithmetic_shift_right)),
+        true,
+        true
+    );
 }
 
 pub fn plus(ctx: &mut Context, args: &Arguments) -> ScmResult {
@@ -154,4 +170,41 @@ pub fn less_or_equal(ctx: &mut Context, x: Value, y: Value) -> ScmResult {
         std::cmp::Ordering::Less | std::cmp::Ordering::Equal => Value::new(true),
         _ => Value::new(false)
     })
+}
+
+pub fn arithmetic_shift(ctx: &mut Context, num: Value, n: Value) -> ScmResult {
+    n.assert_type(ctx, SourcePosition::unknown(), &[Type::Integer])?;
+    num.assert_type(ctx, SourcePosition::unknown(), &[Type::Integer])?;
+
+    let y = n.get_int32();
+    let x = num.get_int32();
+
+    if y <= 0 {
+        return Ok(Value::new(x.wrapping_shr((-y) as u32)));
+    } else if x == 0 {
+        return Ok(Value::new(0));
+    } else if x > 0 {
+        if y < x.leading_zeros() as i32 - 1 {
+            return Ok(Value::new(x << y));
+        } else {
+            todo!("overflow to bigint")
+        }
+    } else {
+        if y < ((!x).leading_zeros() as i32 - 1) {
+            return Ok(Value::new(x << y));
+        } else {
+            todo!("overflow to bigint")
+        }
+    }
+
+}
+
+pub fn arithmetic_shift_right(ctx: &mut Context, num: Value, n: Value) -> ScmResult {
+    n.assert_type(ctx, SourcePosition::unknown(), &[Type::Integer])?;
+    num.assert_type(ctx, SourcePosition::unknown(), &[Type::Integer])?;
+
+    let y = n.get_int32();
+    let x = num.get_int32();
+
+    return Ok(Value::new(x >> y));
 }
