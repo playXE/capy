@@ -9,10 +9,11 @@ pub enum NumberPair {
 }
 
 impl NumberPair {
+    #[inline(always)]
     pub fn new(ctx: &mut Context, x: Value, y: Value) -> ScmResult<Self> {
-        Ok(if x.is_int32() && y.is_int32() {
+        Ok(if likely(x.is_int32() && y.is_int32()) {
             Self::Fixnum(x.get_int32(), y.get_int32())
-        } else if x.is_double() && y.is_double() {
+        } else if likely(x.is_double() && y.is_double()) {
             Self::Flonum(x.get_double(), y.get_double())
         } else if x.is_number() && y.is_number() {
             Self::Flonum(x.get_number(), y.get_number())
@@ -22,14 +23,14 @@ impl NumberPair {
             unreachable!()
         })
     }
-
+    #[inline]
     pub fn eq(&self) -> Value {
         match self {
             Self::Fixnum(x, y) => Value::new(x == y),
             Self::Flonum(x, y) => Value::new(x == y),
         }
     }
-
+    #[inline]
     pub fn cmp(&self) -> Ordering {
         match self {
             Self::Fixnum(x, y) => x.cmp(y),
@@ -38,12 +39,13 @@ impl NumberPair {
     }
 }
 
-use std::{cmp::Ordering, ops::*};
+use std::{cmp::Ordering, ops::*, intrinsics::likely};
 
 macro_rules! impl_op {
     ($($op: ident),*) => {
         $(
             impl NumberPair {
+                #[inline(always)]
                 pub fn $op(&self) -> Value {
                     match self {
                         Self::Fixnum(x, y) => paste::paste! {

@@ -413,7 +413,6 @@ checksum = "5b40af805b3121feab8a3c29f04d8ad262fa8e0561883e7653e024ae4479e6de"
 [[package]]
 name = "r7rs-parser"
 version = "0.1.1"
-source = "git+https://github.com/playxe/r7rs-parser#b6851d834f61e372ce57e7bdce2a105fc346beee"
 dependencies = [
  "num",
 ]

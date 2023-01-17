@@ -7,12 +7,13 @@ use rsgc::heap::{
 
 use crate::{prelude::*, utilities::arraylist::ArrayList};
 
-use self::{file_manager::FileManager, source_manager::SourceManager, libraries::control_flow::Continuation};
+use self::{file_manager::FileManager, source_manager::SourceManager, libraries::control_flow::Continuation, error::{ExnRec, Exn}};
 
 pub mod code;
 pub mod context;
 pub mod eval_error;
 pub mod file_manager;
+pub mod error;
 pub mod libraries;
 pub mod source_manager;
 pub mod stack;
@@ -33,6 +34,7 @@ pub struct Runtime {
     pub(crate) source_manager: Mutex<SourceManager>,
     pub(crate) loader: Value,
     pub(crate) identity: Value,
+    pub(crate) exn_table: Option<[ExnRec; Exn::FailLast as usize]>
 }
 
 static mut RT: *mut Runtime = null_mut();
@@ -94,6 +96,7 @@ impl Runtime {
             loader: Value::nil(),
             source_manager: Mutex::new(SourceManager::new()),
             file_manager: Mutex::new(FileManager::new()),
+            exn_table: None,
         }));
 
         unsafe {
@@ -137,7 +140,12 @@ impl Runtime {
                 rt.identity.trace(processor.visitor());
                 rt.empty_array.trace(processor.visitor());
                 rt.empty_arraylist.trace(processor.visitor());
-
+                if let Some(exn_table) = rt.exn_table.as_ref() {
+                    for exn in exn_table.iter() {
+                        exn.trace(processor.visitor());
+                    }
+                }
+                
                 for node in rt.documentation.iter() {
                     processor.visitor().visit(*node.key() as *const u8);
                 }
@@ -147,6 +155,7 @@ impl Runtime {
         libraries::core::core_library(this);
         libraries::control_flow::control_flow(this);
         libraries::math::math_library();
+       
         this
     }
 
@@ -163,6 +172,7 @@ impl Runtime {
 pub enum ScmThreadResult<R> {
     Ok(R),
     UncapturedContinuation(Handle<Continuation>),
+    UnpacturedException(Value),
     Panic(Box<dyn Any + Send>),
 }
 
@@ -173,7 +183,25 @@ pub fn scm_main_thread<R>(f: impl Fn(&mut Context) -> R) -> ScmThreadResult<R> {
         heap.add_core_root_set();
         let result = std::panic::catch_unwind(|| {
             let rt = Runtime::new(rsgc::heap::heap::heap());
+            
             let main_ctx = Context::new(rt, 1024, Thread::current());
+            
+            let mut result = || -> Result<(), Value> {
+                libraries::structure::structure_library(main_ctx);
+                let tab = error::init_exn(main_ctx);
+                main_ctx.runtime().exn_table = Some(tab);
+
+                Ok(())
+            };
+
+            match result() {
+                Ok(_) => (),
+                Err(_) => {
+                    panic!("exception thrown during base library initialization");
+                }
+            }
+
+
             let res = f(main_ctx);
 
             let _ = Box::from_raw(main_ctx);

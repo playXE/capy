@@ -11,3 +11,6 @@ pub mod equality;
 pub mod port;
 pub mod socket;
 pub mod hash;
+pub mod encoding;
+
+pub mod structure;

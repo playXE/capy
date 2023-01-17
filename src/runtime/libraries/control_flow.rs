@@ -704,7 +704,6 @@ pub fn compile_if(
                 cc.code[else_jump_ip] = Ins::BranchIf(cc.offset_to_next(else_jump_ip as _) as _);
                 return cc.compile(ctx, thenp, true);
             }
-
             let exit_jump_ip = cc.emit(ctx, Ins::Branch(0));
             cc.code[else_jump_ip] = Ins::BranchIf(cc.offset_to_next(else_jump_ip as _) as _);
             if cc.compile(ctx, thenp, tail)? {

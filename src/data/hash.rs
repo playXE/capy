@@ -1,7 +1,8 @@
+#![allow(dead_code)]
 use std::mem::size_of;
 
 use memoffset::offset_of;
-use rsgc::{sync::mutex::RawMutex, prelude::{Handle, Allocation, Object}, system::array::Array};
+use rsgc::{sync::mutex::RawMutex, prelude::{Handle, Allocation, Object},};
 
 use crate::{prelude::{Context, Value}, ScmResult};
 

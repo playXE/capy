@@ -2,7 +2,7 @@ use super::port::{cstr, IoError, Operation, SocketOperation};
 use rsgc::prelude::{Allocation, Handle, Object};
 use std::{
     ffi::CStr,
-    mem::{size_of, MaybeUninit},
+    mem::MaybeUninit,
     ptr::{copy_nonoverlapping, null_mut},
 };
 
@@ -227,7 +227,7 @@ impl Socket {
                 return None;
             }
 
-            let mut nbuf = [0; libc::NI_MAXHOST as usize + libc::NI_MAXSERV as usize];
+            let _nbuf = [0; libc::NI_MAXHOST as usize + libc::NI_MAXSERV as usize];
             todo!()
         }
     }

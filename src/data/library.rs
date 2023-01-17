@@ -218,7 +218,6 @@ impl LibraryManager {
 
         scm_for_each!(mp, module.mpl.cdr(), {
             let m = mp.car().get_handle_of::<Library>();
-
             let v = if external_only {
                 m.external.get(&sym).copied()
             } else {
@@ -327,7 +326,7 @@ impl LibraryManager {
         value: Value,
         constant: bool,
     ) -> ScmResult<Option<Handle<Gloc>>> {
-        if let Some(_) = self.global_variable_ref(ctx, module, sym, true, false)? {
+        if let Some(_) = self.global_variable_ref(ctx, module, sym, true, false)?.filter(|x| !x.is_undefined()) {
             return Ok(None);
         } else {
             Ok(Some(self.make_binding(
@@ -639,6 +638,16 @@ impl LibraryManager {
                 Value::new(thread.allocate(special))
             }
             Definition::Value(_, val) => val,
+            Definition::NativeSpecial(name, proc, spec) => {
+                let name = Str::new(thread, name);
+                let proc = Procedure {
+                    id: Procedure::new_id(),
+                    module,
+                    kind: ProcedureKind::Primitive(name, proc, Some(spec)),
+                };
+
+                Value::new(thread.allocate(proc))
+            }
             _ => todo!(),
         };
 
@@ -774,6 +783,7 @@ pub(crate) fn init(manager: &mut LibraryManager) {
 pub enum Definition<'a> {
     Special(&'a str, Form),
     NativeProcedure(&'a str, Implementation),
+    NativeSpecial(&'a str, Implementation, FormCompiler),
     Value(&'a str, Value),
     ClosureSource(&'a str, String, &'a [&'a str]),
 }
@@ -781,6 +791,12 @@ pub enum Definition<'a> {
 impl<'a, T: Into<Implementation>> Into<Definition<'a>> for (&'a str, T) {
     fn into(self) -> Definition<'a> {
         Definition::NativeProcedure(self.0, self.1.into())
+    }
+}
+
+impl<'a> Into<Definition<'a>> for (&'a str, Implementation, FormCompiler) {
+    fn into(self) -> Definition<'a> {
+        Definition::NativeSpecial(self.0, self.1, self.2)
     }
 }
 
@@ -803,6 +819,7 @@ impl<'a> Definition<'a> {
             Definition::NativeProcedure(name, _) => name,
             Definition::ClosureSource(name, _, _) => name,
             Definition::Value(name, _) => name,
+            Definition::NativeSpecial(name, _, _) => name,
         }
     }
 }

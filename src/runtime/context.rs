@@ -20,6 +20,7 @@ use crate::{
     data::{
         exception::{Exception, SourcePosition},
         special_form::{Form, SpecialForm},
+        structure::{StructInstance, StructProperty, StructType},
     },
     prelude::*,
     utilities::arraylist::ArrayList,
@@ -61,11 +62,11 @@ impl Context {
             let module = library_manager().null_module;
             Code::new(thread, insns, consts, frags, module.get_handle_of())
         };
-        let captured = Array::new(thread, 0, |_, _| unreachable!());
+
         let mut stack = Vec::with_capacity(512);
         stack.resize(512, Value::UNDEFINED);
         let this = Box::leak(Box::new(Self {
-            registers: Registers::new(code, library_manager().null_module, captured, 0, true),
+            registers: Registers::new(code, library_manager().null_module, None, 0, true),
             winders: None,
             rt,
             limit_sp,
@@ -114,6 +115,8 @@ impl Context {
                     match expr {
                         Ok(expr) => {
                             let val = r7rs_to_value(self, source_id as _, &expr);
+                            let mut i = NoIntern;
+                            println!("compile {}", expr.to_string(&mut i, false));
                             exprs.push(self.mutator(), val);
                         }
                         Err(ParseError::Syntax(position, error)) => {
@@ -160,9 +163,8 @@ impl Context {
 
             let code = Compiler::build(ctx, code, library, None)?;
 
-            let empty = Array::new(ctx.mutator(), 0, |_, _| unreachable!());
             let proc = Procedure {
-                kind: ProcedureKind::Closure(ClosureType::Anonymous, Value::nil(), empty, code),
+                kind: ProcedureKind::Closure(ClosureType::Anonymous, Value::nil(), None, code),
                 id: Procedure::new_id(),
                 module: library,
             };
@@ -185,12 +187,7 @@ impl Context {
         self.apply(loader, list)
     }
 
-    pub fn eval_path_in(
-        &mut self,
-        path: &str,
-        fold_case: bool,
-        lib: Handle<Library>,
-    ) -> ScmResult {
+    pub fn eval_path_in(&mut self, path: &str, fold_case: bool, lib: Handle<Library>) -> ScmResult {
         let exprs = self.parse(path, fold_case)?;
 
         let source_dir = std::path::Path::new(path).parent().unwrap();
@@ -203,14 +200,15 @@ impl Context {
     }
 
     #[inline(always)]
-    pub fn push(&mut self, v: Value) -> ScmResult<()> {
-        if self.sp < self.stack.len() {
-            unsafe {
-                *self.stack.get_unchecked_mut(self.sp as usize) = v;
-            }
-        } else {
-            self.push_slow(v)?;
+    pub fn push(&mut self, v: impl Into<Value>) -> ScmResult<()> {
+        let v = v.into();
+        //if self.sp < self.stack.len() {
+        unsafe {
+            *self.stack.get_unchecked_mut(self.sp as usize) = v;
         }
+        //} else {
+        //  self.push_slow(v)?;
+        //}
         self.sp += 1;
         Ok(())
     }
@@ -380,6 +378,32 @@ impl Context {
         })
     }
 
+    fn get_proc(&mut self, n: usize) -> Value {
+        unsafe { *self.stack.get_unchecked(self.sp - n - 1) }
+    }
+
+
+    pub fn check_arity(&mut self, proc: Handle<Procedure>, n: usize) -> bool {
+        let arity = proc.arity();
+
+        for ar in arity.iter() {
+            match ar {
+                Arity::AtLeast(x) => {
+                    if n >= *x {
+                        return true;
+                    }
+                }
+                Arity::Exact(x) => {
+                    if n == *x {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        false
+    }
+
     fn invoke(&mut self, n: &mut usize, overhead: usize) -> ScmResult<Handle<Procedure>> {
         let p = unsafe { *self.stack.get_unchecked(self.sp - *n - 1) }; //[self.sp - *n - 1];
 
@@ -397,7 +421,8 @@ impl Context {
         if matches!(proc.kind, ProcedureKind::Closure(_, _, _, _)) {
             return Ok(proc);
         }
-        let mut res = || -> ScmResult<Option<Handle<Procedure>>> {
+        let mut res = #[inline(always)]
+        || -> ScmResult<Option<Handle<Procedure>>> {
             loop {
                 if let ProcedureKind::Primitive(_, ref imp, _) = proc.kind {
                     match imp {
@@ -410,7 +435,7 @@ impl Context {
                                 kind: ProcedureKind::Closure(
                                     ClosureType::Anonymous,
                                     Value::nil(),
-                                    Array::new(self.mutator(), 0, |_, _| unreachable!()),
+                                    None,
                                     generated,
                                 ),
                                 id: Procedure::new_id(),
@@ -892,6 +917,33 @@ impl Context {
                             }
                             return Ok(Some(proc));
                         }
+
+                        Implementation::Native4R(exec) => {
+                            let this = unsafe { &mut *(self as *const Self as *mut Self) };
+                            if *n >= 3 {
+                                let arg0 = self.stack[self.sp - *n];
+                                let arg1 = self.stack[self.sp - *n + 1];
+                                let arg2 = self.stack[self.sp - *n + 2];
+                                let arg3 = self.stack[self.sp - *n + 3];
+                                let args = &self.stack[(self.sp - *n + 4)..self.sp];
+
+                                let res = exec(this, arg0, arg1, arg2, arg3, args)?;
+                                self.popn(*n as usize + overhead as usize);
+                                self.push(res)?;
+                            } else {
+                                let args = self.pop_as_list(*n as _);
+                                let exc = Exception::argument_count(
+                                    self,
+                                    None,
+                                    4,
+                                    usize::MAX,
+                                    args,
+                                    SourcePosition::unknown(),
+                                );
+                                self.error(exc)?;
+                            }
+                            return Ok(Some(proc));
+                        }
                     }
                 } else {
                     return Ok(None);
@@ -924,7 +976,7 @@ impl Context {
                     e.get_handle_of::<Exception>().attach_ctx(self, Some(proc));
                     return Err(Value::new(e));
                 } else {
-                    return Err(e)
+                    return Err(e);
                 }
             }
         }
@@ -999,10 +1051,20 @@ impl Context {
         stack_trace
     }
 
-    pub fn get_call_trace_info(&mut self, current: Option<Handle<Procedure>>, cap: Option<usize>) -> Option<Vec<String>> {
-        Some(self.get_call_trace(current, cap)?.iter().map(|x| x.to_string(false)).collect())
+    pub fn get_call_trace_info(
+        &mut self,
+        current: Option<Handle<Procedure>>,
+        cap: Option<usize>,
+    ) -> Option<Vec<String>> {
+        Some(
+            self.get_call_trace(current, cap)?
+                .iter()
+                .map(|x| x.to_string(false))
+                .collect(),
+        )
     }
 
+    
     pub fn get_call_trace(
         &mut self,
         current: Option<Handle<Procedure>>,
@@ -1148,7 +1210,8 @@ impl Context {
                 let upvalue = self.capture_upvalue(ptr);
                 list.push(self.mutator(), upvalue);
             } else {
-                let upvalue = self.registers.captured[capture.index as usize];
+                let upvalue =
+                    unsafe { self.registers.captured.unwrap_unchecked()[capture.index as usize] };
                 list.push(self.mutator(), upvalue);
             }
         }
@@ -1190,16 +1253,15 @@ impl Context {
         code: Handle<Code>,
         name: Handle<Str>,
     ) -> ScmResult {
-        let empty = Array::new(self.mutator(), 0, |_, _| unreachable!());
         let proc = self.mutator().allocate(Procedure {
             id: Procedure::new_id(),
-            kind: ProcedureKind::Closure(ClosureType::Named(name), Value::UNDEFINED, empty, code),
+            kind: ProcedureKind::Closure(ClosureType::Named(name), Value::UNDEFINED, None, code),
             module: code.module,
         });
 
         self.push(Value::new(proc))?;
 
-        self.execute_catch(code, 0, empty)
+        self.execute_catch(code, 0, None)
     }
 
     pub fn wind_up(
@@ -1231,22 +1293,21 @@ impl Context {
     }
 
     pub(crate) unsafe fn execute_unnamed(&mut self, code: Handle<Code>) -> ScmResult {
-        let empty = Array::new(self.mutator(), 0, |_, _| unreachable!());
         let proc = self.mutator().allocate(Procedure {
             id: Procedure::new_id(),
-            kind: ProcedureKind::Closure(ClosureType::Anonymous, Value::UNDEFINED, empty, code),
+            kind: ProcedureKind::Closure(ClosureType::Anonymous, Value::UNDEFINED, None, code),
             module: code.module,
         });
 
         self.push(Value::new(proc))?;
-        self.execute_catch(code, 0, empty)
+        self.execute_catch(code, 0, None)
     }
 
     pub(crate) unsafe fn execute_catch(
         &mut self,
         code: Handle<Code>,
         args: usize,
-        captured: Handle<Array<Handle<Upvalue>>>,
+        captured: Option<Handle<Array<Handle<Upvalue>>>>,
     ) -> ScmResult {
         let saved_registers = self.registers;
         self.registers = Registers::new(
@@ -1281,12 +1342,16 @@ impl Context {
     }
 
     pub(crate) unsafe fn execute(&mut self) -> ScmResult {
-        loop {
+        'interp: loop {
             //rsgc::heap::heap::heap().request_gc();
             let ip = self.registers.ip;
             self.registers.ip = ip + 1;
+            #[cfg(feature = "code-profiling")]
+            let start = { std::time::Instant::now() };
+
+            let ins = *self.registers.code.instructions.get_unchecked(ip);
             debug_assert!(ip < self.registers.code.instructions.len());
-            match *self.registers.code.instructions.get_unchecked(ip) {
+            match ins {
                 Ins::NoOp => continue,
                 Ins::Pop => {
                     self.pop();
@@ -1339,15 +1404,159 @@ impl Context {
                 }
 
                 Ins::PushCaptured(l) => {
-                    let val = self.registers.captured[l as usize].get();
+                    let val = self.registers.captured.unwrap_unchecked()[l as usize].get();
                     self.push(val)?;
                 }
 
                 Ins::SetCaptured(l) => {
                     let val = self.pop();
                     self.thread
-                        .write_barrier(self.registers.captured[l as usize]);
-                    self.registers.captured[l as usize].set(val);
+                        .write_barrier(self.registers.captured.unwrap_unchecked()[l as usize]);
+                    self.registers.captured.unwrap_unchecked()[l as usize].set(val);
+                }
+
+                Ins::Add2 => {
+                    let b = self.pop();
+                    let a = self.pop();
+
+                    if likely(a.is_int32() && b.is_int32()) {
+                        self.push(a.get_int32().wrapping_add(b.get_int32()))?;
+                    } else if likely(a.is_double() && b.is_double()) {
+                        self.push(a.get_double() + b.get_double())?;
+                    } else {
+                        let x = super::libraries::math::plus(self, &[a, b])?;
+                        self.push(x)?;
+                    }
+                }
+
+                Ins::Sub2 => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    if likely(a.is_int32() && b.is_int32()) {
+                        self.push(a.get_int32().wrapping_sub(b.get_int32()))?;
+                    } else if likely(a.is_double() && b.is_double()) {
+                        self.push(a.get_double() - b.get_double())?;
+                    } else {
+                        let x = super::libraries::math::minus(self, a, &[b])?;
+                        self.push(x)?;
+                    }
+                }
+
+                Ins::Mul2 => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    if likely(a.is_int32() && b.is_int32()) {
+                        self.push(a.get_int32().wrapping_mul(b.get_int32()))?;
+                    } else if likely(a.is_double() && b.is_double()) {
+                        self.push(a.get_double() * b.get_double())?;
+                    } else {
+                        let x = super::libraries::math::multiply(self, &[a, b])?;
+                        self.push(x)?;
+                    }
+                }
+
+                Ins::Div2 => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    if likely(a.is_int32() && b.is_int32()) {
+                        self.push(a.get_int32().wrapping_div(b.get_int32()))?;
+                    } else if likely(a.is_double() && b.is_double()) {
+                        self.push(a.get_double() / b.get_double())?;
+                    } else {
+                        let x = super::libraries::math::divide(self, &[a, b])?;
+                        self.push(x)?;
+                    }
+                }
+
+                Ins::Greater2 => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    if likely(a.is_int32() && b.is_int32()) {
+                        self.push(Value::new(a.get_int32() > b.get_int32()))?;
+                    } else if likely(a.is_double() && b.is_double()) {
+                        self.push(Value::new(a.get_double() > b.get_double()))?;
+                    } else {
+                        let x = super::libraries::math::greater(self, a, b)?;
+                        self.push(x)?;
+                    }
+                }
+
+                Ins::GreaterEq2 => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    if likely(a.is_int32() && b.is_int32()) {
+                        self.push(Value::new(a.get_int32() >= b.get_int32()))?;
+                    } else if likely(a.is_double() && b.is_double()) {
+                        self.push(Value::new(a.get_double() >= b.get_double()))?;
+                    } else {
+                        let x = super::libraries::math::greater_or_equal(self, a, b)?;
+                        self.push(x)?;
+                    }
+                }
+
+                Ins::Less2 => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    if likely(a.is_int32() && b.is_int32()) {
+                        self.push(Value::new(a.get_int32() < b.get_int32()))?;
+                    } else if likely(a.is_double() && b.is_double()) {
+                        self.push(Value::new(a.get_double() < b.get_double()))?;
+                    } else {
+                        let x = super::libraries::math::less(self, a, b)?;
+                        self.push(x)?;
+                    }
+                }
+
+                Ins::LessEq2 => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    if likely(a.is_int32() && b.is_int32()) {
+                        self.push(Value::new(a.get_int32() <= b.get_int32()))?;
+                    } else if likely(a.is_double() && b.is_double()) {
+                        self.push(Value::new(a.get_double() <= b.get_double()))?;
+                    } else {
+                        let x = super::libraries::math::less_or_equal(self, a, b)?;
+                        self.push(x)?;
+                    }
+                }
+
+                Ins::Equal2 => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    if likely(a.is_int32() && b.is_int32()) {
+                        self.push(Value::new(a.get_int32() == b.get_int32()))?;
+                    } else if likely(a.is_double() && b.is_double()) {
+                        self.push(Value::new(a.get_double() == b.get_double()))?;
+                    } else {
+                        let x = super::libraries::core::equal(self, a, b)?;
+                        self.push(x)?;
+                    }
+                }
+
+                Ins::Eq2 => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    if likely(a.is_int32() && b.is_int32()) {
+                        self.push(Value::new(a.get_int32() == b.get_int32()))?;
+                    } else if likely(a.is_double() && b.is_double()) {
+                        self.push(Value::new(a.get_double() == b.get_double()))?;
+                    } else {
+                        let x = super::libraries::core::eq(self, a, b)?;
+                        self.push(x)?;
+                    }
+                }
+
+                Ins::Eqv2 => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    if likely(a.is_int32() && b.is_int32()) {
+                        self.push(Value::new(a.get_int32() == b.get_int32()))?;
+                    } else if likely(a.is_double() && b.is_double()) {
+                        self.push(Value::new(a.get_double() == b.get_double()))?;
+                    } else {
+                        let x = super::libraries::core::eqv(self, a, b)?;
+                        self.push(x)?;
+                    }
                 }
 
                 Ins::MakeVariableArgument(_) => {}
@@ -1402,11 +1611,24 @@ impl Context {
                 Ins::DefineGlobal(ix, constant) => {
                     let lm = library_manager();
                     let value = self.pop();
-                    let identifier =
-                        self.registers.code.constants[ix as usize].get_handle_of::<Identifier>();
+                    let identifier = self.registers.code.constants[ix as usize];
+
+                    if !identifier.is_handle_of::<Identifier>() {
+                        let name = identifier.get_handle_of::<Gloc>();
+
+                        let exc = Exception::eval(
+                            self,
+                            EvalError::SymbolAlreadyExists,
+                            &[Value::new(name.name())],
+                            SourcePosition::unknown(),
+                        );
+
+                        return Err(exc.into());
+                    }
+
+                    let identifier = identifier.get_handle_of::<Identifier>();
                     let sym = identifier.name.get_symbol();
                     let library = identifier.module;
-
                     if constant {
                         lm.define_const(library, sym, value, false);
                     } else {
@@ -1507,6 +1729,22 @@ impl Context {
                         Value::encode_int32(self.registers.ip as _);
                     let mut m = n as usize;
 
+                    let proc = self.get_proc(m);
+
+                    if proc.is_handle_of::<Procedure>() {
+                        let proc = proc.get_handle_of::<Procedure>();
+                        if let ProcedureKind::Closure(_, _, ref newcaptured, ref newcode) =
+                            proc.kind
+                        {
+                            #[cfg(feature = "code-profiling")]
+                            {
+                                InsProfile::add(ins, start);
+                            }
+                            self.registers.r#use(*newcode, *newcaptured, self.sp - m);
+                            continue;
+                        }
+                    }
+
                     if let ProcedureKind::Closure(_, _, ref newcaptured, ref newcode) =
                         self.invoke(&mut m, 3)?.kind
                     {
@@ -1519,6 +1757,30 @@ impl Context {
                     let mut n = m as usize;
                     let after: *mut Value = &mut self.stack[self.registers.fp];
                     self.close_upvalues(after);
+
+                    let proc = self.get_proc(n);
+
+                    if proc.is_handle_of::<Procedure>() {
+                        let proc = proc.get_handle_of::<Procedure>();
+                        if let ProcedureKind::Closure(_, _, ref newcaptured, ref newcode) =
+                            proc.kind
+                        {
+                            self.registers
+                                .r#use(*newcode, *newcaptured, self.registers.fp);
+                            for i in 0..=n {
+                                self.stack[self.registers.fp - 1 + i] =
+                                    self.stack[self.sp - n - 1 + i];
+                            }
+
+                            self.sp = self.registers.fp + n;
+                            #[cfg(feature = "code-profiling")]
+                            {
+                                InsProfile::add(ins, start);
+                            }
+                            continue;
+                        }
+                    }
+
                     let proc = self.invoke(&mut n, 1)?;
 
                     match proc.kind {
@@ -1539,11 +1801,20 @@ impl Context {
                                 let res = self.pop();
 
                                 self.sp = self.registers.initial_fp - 1;
+                                #[cfg(feature = "code-profiling")]
+                                {
+                                    InsProfile::add(ins, start);
+                                }
                                 return Ok(res);
                             } else {
                                 self.exit_frame();
                             }
                         }
+                    }
+
+                    #[cfg(feature = "code-profiling")]
+                    {
+                        InsProfile::add(ins, start);
                     }
                 }
 
@@ -1554,6 +1825,10 @@ impl Context {
                         let res = self.pop();
 
                         self.sp = self.registers.initial_fp - 1;
+                        #[cfg(feature = "code-profiling")]
+                        {
+                            InsProfile::add(ins, start);
+                        }
                         return Ok(res);
                     } else {
                         self.exit_frame();
@@ -1658,8 +1933,13 @@ impl Context {
 
                 Ins::Car => {
                     let pair = self.pop();
-                    if unlikely(pair.typ() != Type::Pair) {
-                        let exc = Exception::type_error(self, &[Type::Pair], pair, SourcePosition::unknown());
+                    if unlikely(!pair.is_pair()) {
+                        let exc = Exception::type_error(
+                            self,
+                            &[Type::Pair],
+                            pair,
+                            SourcePosition::unknown(),
+                        );
                         return self.error(exc);
                     }
                     let car = pair.car();
@@ -1668,27 +1948,247 @@ impl Context {
 
                 Ins::Cdr => {
                     let pair = self.pop();
-                    if unlikely(pair.typ() != Type::Pair) {
-                        let exc = Exception::type_error(self, &[Type::Pair], pair, SourcePosition::unknown());
+                    if unlikely(!pair.is_pair()) {
+                        let exc = Exception::type_error(
+                            self,
+                            &[Type::Pair],
+                            pair,
+                            SourcePosition::unknown(),
+                        );
                         return self.error(exc);
                     }
                     let cdr = pair.cdr();
                     self.push(cdr)?;
                 }
 
+                Ins::AssertStruct(off, n) => {
+                    let struct_type =
+                        self.registers.code.constants[n as usize].get_handle_of::<StructType>();
+                    let val = self.stack[self.registers.fp + off as usize];
+
+                    if unlikely(!val.is_handle_of::<StructInstance>()) {
+                        let exc = Exception::type_error(
+                            self,
+                            &[Type::StructType(Some(struct_type))],
+                            val,
+                            SourcePosition::unknown(),
+                        );
+                        return self.error(exc);
+                    }
+
+                    let instance = val.get_handle_of::<StructInstance>();
+
+                    if unlikely(!instance.is_instance_of(struct_type)) {
+                        let exc = Exception::type_error(
+                            self,
+                            &[Type::StructType(Some(struct_type))],
+                            val,
+                            SourcePosition::unknown(),
+                        );
+                        return self.error(exc);
+                    }
+                }
+
+                Ins::MakeStruct(n) => {
+                    let struct_type =
+                        self.registers.code.constants[n as usize].get_handle_of::<StructType>();
+                    let mut instance = StructInstance::new(self, struct_type);
+
+                    for i in (0..struct_type.field_cnt_for_instance()).rev() {
+                        let val = self.pop();
+                        self.mutator().write_barrier(instance);
+                        instance.field_set(i as _, val);
+                    }
+
+                    self.push(Value::new(instance))?;
+                }
+
+                Ins::StructRef(n) => {
+                    let ix = self.pop();
+                    let instance = self.pop().get_handle_of::<StructInstance>();
+                    let struct_type =
+                        self.registers.code.constants[n as usize].get_handle_of::<StructType>();
+                    ix.assert_type(self, SourcePosition::unknown(), &[Type::Integer])?;
+                    let ix = ix.get_int32() as u32;
+
+                    let allowed_index = struct_type.init_field_cnt();
+
+                    if unlikely(ix >= allowed_index) {
+                        let exc = Exception::eval(
+                            self,
+                            EvalError::OutOfBounds,
+                            &[Value::new(ix as i32), Value::new(instance)],
+                            SourcePosition::unknown(),
+                        );
+                        return self.error(exc);
+                    }
+                    let actual_ix = if let Some(stype) = struct_type.super_type() {
+                        stype.field_cnt_for_instance() + ix 
+                    } else {
+                        ix 
+                    };
+                    let field = instance.field_ref(actual_ix as _);
+                    self.push(field)?;
+                }
+
+                Ins::StructSet(n) => {
+                    let val = self.pop();
+                    let ix = self.pop();
+
+                    let mut instance = self.pop().get_handle_of::<StructInstance>();
+
+                    let struct_type =
+                        self.registers.code.constants[n as usize].get_handle_of::<StructType>();
+
+                    ix.assert_type(self, SourcePosition::unknown(), &[Type::Integer])?;
+                    let ix = ix.get_int32();
+                    if unlikely(ix >= struct_type.field_cnt_for_instance() as i32) {
+                        let exc = Exception::eval(
+                            self,
+                            EvalError::OutOfBounds,
+                            &[Value::new(ix), Value::new(instance)],
+                            SourcePosition::unknown(),
+                        );
+                        return self.error(exc);
+                    }
+                    self.mutator().write_barrier(instance);
+                    instance.field_set(ix as _, val);
+                }
+
+                Ins::StructRefI(_n, ix) => {
+                    let instance = self.pop().get_handle_of::<StructInstance>();
+
+                    let field = instance.field_ref(ix as _);
+                    self.push(field)?;
+                }
+
+                Ins::StructSetI(_n, ix) => {
+                    let val = self.pop();
+                    let mut instance = self.pop().get_handle_of::<StructInstance>();
+
+                    self.mutator().write_barrier(instance);
+                    instance.field_set(ix as _, val);
+                }
+
+                Ins::CheckStruct(n) => {
+                    let struct_type =
+                        self.registers.code.constants[n as usize].get_handle_of::<StructType>();
+                    let val = self.pop();
+                    if !val.is_handle_of::<StructInstance>() {
+                        self.push(false)?;
+                    } else {
+                        let instance = val.get_handle_of::<StructInstance>();
+                        self.push(instance.is_instance_of(struct_type))?;
+                    }
+                }
+
+                Ins::CheckStructProperty(n) => {
+                    let struct_prop =
+                        self.registers.code.constants[n as usize].get_handle_of::<StructProperty>();
+                    let val = self.pop();
+                    let struct_type = if val.is_handle_of::<StructType>() {
+                        val.get_handle_of::<StructType>()
+                    } else if val.is_handle_of::<StructInstance>() {
+                        val.get_handle_of::<StructInstance>().struct_type()
+                    } else {
+                        self.push(false)?;
+                        continue;
+                    };
+
+                    self.push(struct_type.has_property(struct_prop))?;
+                }
+
+                Ins::StructPropertyAccessor(n, failure_result) => {
+                    let struct_prop =
+                        self.registers.code.constants[n as usize].get_handle_of::<StructProperty>();
+                    let failure_result = if failure_result {
+                        Some(self.pop())
+                    } else {
+                        None
+                    };
+                    let val = self.pop();
+                    let struct_type = if val.is_handle_of::<StructType>() {
+                        val.get_handle_of::<StructType>()
+                    } else if val.is_handle_of::<StructInstance>() {
+                        val.get_handle_of::<StructInstance>().struct_type()
+                    } else {
+                        let exc = Exception::type_error(
+                            self,
+                            &[Type::StructType(None)],
+                            val,
+                            SourcePosition::unknown(),
+                        );
+                        return self.error(exc);
+                    };
+
+                    for prop in struct_type.props.iter() {
+                        if prop.car().get_handle_of::<StructProperty>() == struct_prop {
+                            self.push(prop.cdr())?;
+                            continue 'interp;
+                        }
+                    }
+
+                    if let Some(failure_result) = failure_result {
+                        if failure_result.is_handle_of::<Procedure>() {
+                            let mut n = 0;
+                            self.push(failure_result)?;
+                            let proc = self.invoke(&mut n, 1)?;
+                            match proc.kind {
+                                ProcedureKind::Closure(_, _, ref newcaptured, ref newcode) => {
+                                    self.registers
+                                        .r#use(*newcode, *newcaptured, self.registers.fp);
+
+                                    for i in 0..=n {
+                                        self.stack[self.registers.fp - 1 + i] =
+                                            self.stack[self.sp - n - 1 + i];
+                                    }
+
+                                    self.sp = self.registers.fp + n;
+                                }
+
+                                _ => {
+                                    if self.registers.top_level() {
+                                        let res = self.pop();
+        
+                                        self.sp = self.registers.initial_fp - 1;
+                                        #[cfg(feature = "code-profiling")]
+                                        {
+                                            InsProfile::add(ins, start);
+                                        }
+                                        return Ok(res);
+                                    } else {
+                                        self.exit_frame();
+                                    }
+                                }
+                            }
+                        } else {
+                            self.push(failure_result)?;
+                        }
+                    } else {
+                        let exc = Exception::custom(
+                            self,
+                            "evaluation error",
+                            "structure property $0 not found in $1",
+                            &[Value::new(struct_prop), Value::new(struct_type)],
+                            SourcePosition::unknown(),
+                        );
+                        return self.error(exc);
+                    }
+                }
+
                 Ins::IsNull => {
                     let val = self.pop();
-                    self.push(val.is_null().into())?;
+                    self.push(val.is_null())?;
                 }
 
                 Ins::IsPair => {
                     let val = self.pop();
-                    self.push(val.is_pair().into())?;
+                    self.push(val.is_pair())?;
                 }
 
                 Ins::IsVector => {
                     let val = self.pop();
-                    self.push(val.is_vector().into())?;
+                    self.push(val.is_vector())?;
                 }
 
                 Ins::Pack(n) => {
@@ -1733,6 +2233,7 @@ impl Context {
                         let mut m = n as i32;
 
                         let mut next = val.get_handle_of::<Values>().0;
+
                         let list = next;
                         while next.is_pair() {
                             let rest = next.cdr();
@@ -1816,7 +2317,7 @@ impl Context {
                         kind: ProcedureKind::Closure(
                             typ,
                             Value::UNDEFINED,
-                            captured,
+                            Some(captured),
                             self.registers.code.fragments[index as usize],
                         ),
                     };
@@ -1828,18 +2329,25 @@ impl Context {
 
                 ins => todo!("{:?}", ins),
             }
+
+            #[cfg(feature = "code-profiling")]
+            {
+                InsProfile::add(ins, start);
+            }
         }
     }
 
+    #[inline(always)]
     fn exit_frame(&mut self) {
         let fp = self.registers.fp;
 
+        #[cfg(debug_assertions)]
         if !self.stack[fp - 2].is_int32() {
             unreachable!("malformed stack");
         }
 
         self.registers.ip = self.stack[fp - 2].get_int32() as _;
-
+        #[cfg(debug_assertions)]
         if !self.stack[fp - 3].is_int32() {
             unreachable!("malformed stack");
         }
@@ -1851,7 +2359,7 @@ impl Context {
         self.registers.fp = newfp as _;
 
         let proc = self.stack[newfp as usize - 1];
-
+        #[cfg(debug_assertions)]
         if !proc.is_handle_of::<Procedure>() {
             unreachable!("malformed stack: procedure expected");
         }
@@ -1862,7 +2370,12 @@ impl Context {
             self.registers.captured = *newcaptured;
             self.registers.code = *newcode;
         } else {
+            #[cfg(debug_assertions)]
             unreachable!("trying to return to non-VM function");
+            #[cfg(not(debug_assertions))]
+            unsafe {
+                std::hint::unreachable_unchecked();
+            }
         }
     }
 
@@ -1939,8 +2452,8 @@ impl Drop for Context {
 pub struct Registers {
     rid: usize,
     code: Handle<Code>,
-    module: Value,
-    captured: Handle<Array<Handle<Upvalue>>>,
+    pub(crate) module: Value,
+    captured: Option<Handle<Array<Handle<Upvalue>>>>,
     ip: usize,
     fp: usize,
     initial_fp: usize,
@@ -1952,7 +2465,7 @@ impl Registers {
     pub(crate) fn new(
         code: Handle<Code>,
         module: Value,
-        captured: Handle<Array<Handle<Upvalue>>>,
+        captured: Option<Handle<Array<Handle<Upvalue>>>>,
         fp: usize,
         root: bool,
     ) -> Self {
@@ -1974,7 +2487,7 @@ impl Registers {
     pub(crate) fn r#use(
         &mut self,
         code: Handle<Code>,
-        captured: Handle<Array<Handle<Upvalue>>>,
+        captured: Option<Handle<Array<Handle<Upvalue>>>>,
         fp: usize,
     ) {
         self.code = code;

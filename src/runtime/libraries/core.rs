@@ -39,7 +39,7 @@ pub(crate) fn core_library(rt: &mut Runtime) {
     manager.add_definition(
         thr,
         base,
-        ("null?", Form::Primitive(compile_is_null)),
+        Definition::NativeSpecial("null?", Implementation::Native1(is_null), compile_is_null),
         true,
         true,
     );
@@ -47,7 +47,7 @@ pub(crate) fn core_library(rt: &mut Runtime) {
     manager.add_definition(
         thr,
         base,
-        ("pair?", Form::Primitive(compile_is_pair)),
+        Definition::NativeSpecial("pair?", Implementation::Native1(is_pair), compile_is_pair),
         true,
         true,
     );
@@ -108,14 +108,22 @@ pub(crate) fn core_library(rt: &mut Runtime) {
         true,
     );
 
-    manager.add_definition(thr, base, ("car", Form::Primitive(compile_car)), true, true);
+    manager.add_definition(
+        thr,
+        base,
+        ("list", Implementation::Native0R(list)),
+        true,
+        true 
+    );
 
-    manager.add_definition(thr, base, ("cdr", Form::Primitive(compile_cdr)), true, true);
+    manager.add_definition(thr, base, Definition::NativeSpecial("car", Implementation::Native1(car), compile_car), true, true);
+
+    manager.add_definition(thr, base, Definition::NativeSpecial("cdr", Implementation::Native1(cdr), compile_cdr), true, true);
 
     manager.add_definition(
         thr,
         base,
-        ("cons", Form::Primitive(compile_cons)),
+        Definition::NativeSpecial("cons", Implementation::Native2(cons), compile_cons),
         true,
         true,
     );
@@ -261,9 +269,9 @@ pub fn compile_and_eval_first(
     let code = Compiler::build(ctx, form, library, source_dir)?;
 
     let named = ClosureType::Named(Str::new(ctx.mutator(), "<loader>"));
-    let upvals = Array::new(ctx.mutator(), 0, |_, _| unreachable!());
+
     let proc = Procedure {
-        kind: ProcedureKind::Closure(named, Value::nil(), upvals, code),
+        kind: ProcedureKind::Closure(named, Value::nil(), None, code),
         id: Procedure::new_id(),
         module: library,
     };
@@ -323,7 +331,6 @@ pub fn load(
         match parser.parse(true) {
             Ok(expr) => {
                 let val = r7rs_to_value(ctx, u32::MAX, &expr);
-
                 exprs = ctx.make_pair(val, exprs);
             }
             Err(err) => match err {
@@ -789,6 +796,7 @@ pub fn compile_define_values(
 
                 let ix = cc.add_constant(ctx, identifier);
                 cc.emit(ctx, Ins::DefineGlobal(ix as _, false));
+                cc.emit(ctx, Ins::Pop);
                 res = ctx.make_pair(Value::new(*sym), res);
             }
 
@@ -1088,4 +1096,15 @@ pub fn set_cdr(ctx: &mut Context, cons: Value, cdr: Value) -> ScmResult {
     ctx.mutator().write_barrier(pair);
     pair.cdr = cdr;
     Ok(Value::void())
+}
+
+
+pub fn list(ctx: &mut Context, args: &[Value]) -> ScmResult {
+    let mut list = Value::nil();
+
+    for arg in args.iter().rev() {
+        list = ctx.make_pair(*arg, list);
+    }
+
+    Ok(list)
 }

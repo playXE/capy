@@ -1,8 +1,14 @@
-
-#![feature(const_refs_to_cell, core_intrinsics, cstr_from_bytes_until_nul, arbitrary_self_types)]
+#![feature(
+    const_refs_to_cell,
+    core_intrinsics,
+    cstr_from_bytes_until_nul,
+    arbitrary_self_types,
+    stmt_expr_attributes,
+    integer_atomics,
+    const_discriminant
+)]
 
 use prelude::Value;
-
 
 #[macro_export]
 macro_rules! scm_for_each {
@@ -16,25 +22,18 @@ macro_rules! scm_for_each {
     };
 }
 
+pub mod compiler;
 pub mod data;
 pub mod io;
-pub mod utilities;
-pub mod compiler;
 pub mod runtime;
+pub mod utilities;
 
 pub mod prelude {
+    pub use super::ScmResult;
     pub use crate::data::{
-        environment::*,
-        collection::*,
-        symbol::*,
-        value::*,
-        procedure::*,
-        library::*
+        collection::*, environment::*, library::*, procedure::*, symbol::*, value::*,
     };
-    pub use crate::runtime::{
-        *,
-        context::*
-    };
+    pub use crate::runtime::{context::*, *};
     pub use rsgc::{
         sync::{monitor::*, mutex::*},
         system::{
@@ -42,7 +41,6 @@ pub mod prelude {
         },
         thread::*,
     };
-    pub use super::ScmResult;
 }
 
 pub type ScmResult<T = Value> = Result<T, Value>;

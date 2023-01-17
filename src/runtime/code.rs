@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use once_cell::sync::OnceCell;
 use rsgc::{
     system::{
@@ -9,8 +11,9 @@ use rsgc::{
 };
 
 use crate::{
-    prelude::{Arity, Value, Library},
-    utilities::{arraylist::ArrayList, vec_to_gc}, compiler::Capture,
+    compiler::Capture,
+    prelude::{Arity, Library, Value},
+    utilities::{arraylist::ArrayList, vec_to_gc}, 
 };
 
 pub struct Code {
@@ -37,7 +40,7 @@ impl Code {
             fragments,
             module,
             arity: OnceCell::new(),
-            captures: ArrayList::new(thread)
+            captures: ArrayList::new(thread),
         };
         thread.allocate(code)
     }
@@ -93,17 +96,14 @@ impl Code {
                             arities.push(Arity::AtLeast(n as _));
                             i = (i as isize + offset as isize) as usize;
                         }
-                        _ => return vec_to_gc(thread, arities)
+                        _ => return vec_to_gc(thread, arities),
                     }
                 }
-
-            
 
                 vec_to_gc(thread, arities)
             })
             .as_ref()
     }
-
 }
 
 impl Object for Code {
@@ -119,100 +119,123 @@ impl Object for Code {
     }
 }
 impl Allocation for Code {}
-
 #[derive(Clone, Copy, Debug)]
+#[repr(C, u8)]
 pub enum Ins {
-    Pop,
-    Dup,
-    Swap,
-    Alloc(u16),
-    AllocBelow(u16),
-    Reset(i32, u16),
-    PushUndef,
-    PushVoid,
-    PushEof,
-    PushNull,
-    PushTrue,
-    PushFalse,
-    PushFixnum(i32),
-    PushConstant(u32),
-    PushProcedure(u32),
+    Pop,        //=0,
+    Dup,        //=1,
+    Swap,       //=2,
+    Alloc(u16), //=3,
 
-    Pack(u32),
-    Flatpack(u32),
-    Unpack(u32, bool),
+    Reset(i32, u16),    //=5,
+    PushUndef,          //=6,
+    PushVoid,           //=7,
+    PushEof,            //=8,
+    PushNull,           //=9,
+    PushTrue,           //=10,
+    PushFalse,          //=11,
+    PushFixnum(i32),    //=12,
+    PushConstant(u32),  //=13,
+    PushProcedure(u32), //=14,
 
-    PushFragment(u16),
-    MakeClosure(i16, u16, u16),
-    MakeTaggedClosure(i16, u16, u16),
+    MakeFrame,   //=21,
+    InjectFrame, //=22,
 
-    MakeFrame,
-    InjectFrame,
+    Call(u16),              //=23,
+    TailCall(u16),          //=24,
+    Apply(u16),             //=25,
+    Return,                 //=26,
+    AssertArgCount(u16),    //=27,
+    AssertMinArgCount(u16), //=28,
+    CollectRest(u16),       //=29,
 
-    Call(u16),
-    TailCall(u16),
-    Apply(u16),
-    Return,
-    AssertArgCount(u16),
-    AssertMinArgCount(u16),
-    CollectRest(u16),
+    MakeSyntax(i32),           //=31,
+    MakePromise,               //=32,
+    MakeStream,                //=33,
+    Force,                     //=34,
+    StoreInPromise,            //=35,
+    MakeLocalVariable(u16),    //=36,
+    MakeVariableArgument(u16), //=37,
 
-    Compile,
+    PushGlobal(u32),         //=38,
+    SetGlobal(u32),          //=39,
+    DefineGlobal(u32, bool), //=40,
+    PushCaptured(u16),       //=41,
+    SetCaptured(u16),        //=42,
 
-    MakeSyntax(i32),
-    MakePromise,
-    MakeStream,
-    Force,
-    StoreInPromise,
-    MakeLocalVariable(u16),
-    MakeVariableArgument(u16),
+    PushLocal(u16), //=43,
+    SetLocal(u16),  //=44,
 
-    PushGlobal(u32),
-    SetGlobal(u32),
-    DefineGlobal(u32, bool),
-    PushCaptured(u16),
-    SetCaptured(u16),
+    Branch(i32),                      //=45,
+    BranchIf(i32),                    //=46,
+    BranchIfNot(i32),                 //=47,
+    KeepOrBranchIfNot(i32),           //=48,
+    BranchIfArgMismatch(i32, u16),    //=49,
+    BranchIfMinArgMismatch(i32, u16), //=50,
 
-    PushLocal(u16),
-    SetLocal(u16),
+    Add2,            //=70,
+    Sub2,            //=71,
+    Mul2,            //=72,
+    Div2,            //=73,
+    Greater2,        //=74,
+    Less2,           //=75,
+    GreaterEq2,      //=76,
+    LessEq2,         //=77,
+    Equal2,          //=78,
+    Eqv2,            //=79,
+    Eq2,             //=80,
+    AllocBelow(u16), //=4,
+    Or(i32),         //=51,
+    And(i32),        //=52,
 
-    Branch(i32),
-    BranchIf(i32),
-    BranchIfNot(i32),
-    KeepOrBranchIfNot(i32),
-    BranchIfArgMismatch(i32, u16),
-    BranchIfMinArgMismatch(i32, u16),
+    Compile,           //=30,
+    Eq,                //=53,
+    Eqv,               //=54,
+    Equal,             //=55,
+    IsPair,            //=56,
+    IsNull,            //=57,
+    IsUndef,           //=58,
+    List(u32),         //=59,
+    Cons,              //=60,
+    DeCons,            //=61,
+    DeConsKeyword,     //=62,
+    Car,               //=63,
+    Cdr,               //=64,
+    Vector(u32),       //=65,
+    ListToVector,      //=66,
+    VectorAppend(u32), //=67,
+    IsVector,          //=68,
+    Not,               //=69,
 
-    Or(i32),
-    And(i32),
+    Pack(u32),         //=15,
+    Flatpack(u32),     //=16,
+    Unpack(u32, bool), //=17,
 
-    Eq,
-    Eqv,
-    Equal,
-    IsPair,
-    IsNull,
-    IsUndef,
-    List(u32),
-    Cons,
-    DeCons,
-    DeConsKeyword,
-    Car,
-    Cdr,
-    Vector(u32),
-    ListToVector,
-    VectorAppend(u32),
-    IsVector,
-    Not,
+    AssertStruct(u8, u32),
+    CheckStruct(u32),
+    StructRef(u32),
+    StructSet(u32),
+    MakeStruct(u32),
 
-    FailIfNotNull,
-    NoOp,
+    StructRefI(u32, u16),
+    StructSetI(u32, u16),
+
+    CheckStructProperty(u32),
+    StructPropertyAccessor(u32, bool),
+
+    PushFragment(u16),                //=18,
+    MakeClosure(i16, u16, u16),       //=19,
+    MakeTaggedClosure(i16, u16, u16), //=20,
+
+    FailIfNotNull, //=81,
+    NoOp,          //=82,
+    Last,          //=83,
 }
 
 impl Object for Ins {}
 impl Allocation for Ins {
     const NO_HEAP_PTRS: bool = true;
 }
-
 
 impl Code {
     pub fn dump(&self) {
@@ -224,7 +247,7 @@ impl Code {
 
         println!("instructions: ");
         for (i, ins) in self.instructions.iter().enumerate() {
-            print!(" {:04}: ",i);
+            print!(" {:04}: ", i);
             match *ins {
                 Ins::Pop => print!("pop"),
                 Ins::Dup => print!("dup"),
@@ -239,9 +262,21 @@ impl Code {
                 Ins::PushTrue => print!("push-true"),
                 Ins::PushFalse => print!("push-false"),
                 Ins::PushFixnum(n) => print!("push-fixnum {}", n),
-                Ins::PushConstant(n) => print!("push-constant {} ; => {}", n, self.constants[n as usize].to_string(false)),
-                Ins::PushGlobal(n) => print!("push-global {} ; => {}", n, self.constants[n as usize].to_string(false)),
-                Ins::SetGlobal(n) => print!("set-global {} ; => {}", n, self.constants[n as usize].to_string(false)),
+                Ins::PushConstant(n) => print!(
+                    "push-constant {} ; => {}",
+                    n,
+                    self.constants[n as usize].to_string(false)
+                ),
+                Ins::PushGlobal(n) => print!(
+                    "push-global {} ; => {}",
+                    n,
+                    self.constants[n as usize].to_string(false)
+                ),
+                Ins::SetGlobal(n) => print!(
+                    "set-global {} ; => {}",
+                    n,
+                    self.constants[n as usize].to_string(false)
+                ),
                 Ins::PushLocal(n) => print!("push-local {}", n),
                 Ins::PushProcedure(n) => print!("push-procedure {}", n),
 
@@ -252,10 +287,10 @@ impl Code {
                 Ins::PushFragment(n) => print!("push-fragment {}", n),
                 Ins::MakeClosure(n, i, j) => print!("make-closure {} {} {}", n, i, j),
                 Ins::MakeTaggedClosure(n, i, j) => print!("make-tagged-closure {} {} {}", n, i, j),
-                
+
                 Ins::MakeFrame => print!("make-frame"),
                 Ins::InjectFrame => print!("inject-frame"),
-                
+
                 Ins::Call(n) => print!("call {}", n),
                 Ins::TailCall(n) => print!("tail-call {}", n),
                 Ins::Return => print!("return"),
@@ -263,7 +298,7 @@ impl Code {
                 Ins::AssertArgCount(n) => print!("assert-arg-count {}", n),
                 Ins::AssertMinArgCount(n) => print!("assert-min-arg-count {}", n),
                 Ins::CollectRest(n) => print!("collect-rest {}", n),
-                
+
                 Ins::Compile => print!("compile"),
 
                 Ins::MakeSyntax(n) => print!("make-syntax {}", n),
@@ -296,10 +331,164 @@ impl Code {
                     print!("branch-if-arg-mismatch {} {} ; => {:04}", off, n, to)
                 }
 
-                _ => print!("{:?}", ins)
+                _ => print!("{:?}", ins),
             }
             println!();
         }
+    }
+}
 
+#[derive(Clone, Copy)]
+pub struct InsProfile {
+    discriminant: u8,
+    total: u64,
+    total_time: u128,
+}
+
+impl InsProfile {
+    pub fn add(ins: Ins, t: Instant) {
+        unsafe {
+            let time = t.elapsed().as_nanos();
+            let profile: &mut InsProfile =
+                &mut PROFILES[std::mem::transmute::<_, u8>(std::mem::discriminant(&ins)) as usize];
+            profile.total += 1;
+            profile.total_time += time;
+        }
+    }
+}
+
+pub static mut PROFILES: [InsProfile; unsafe {
+    std::mem::transmute::<_, u8>(std::mem::discriminant(&Ins::Last)) as usize
+}] = [InsProfile {
+    discriminant: 0,
+    total: 0,
+    total_time: 0,
+}; unsafe { std::mem::transmute::<_, u8>(std::mem::discriminant(&Ins::Last)) as usize }];
+
+pub const fn instruction_discriminant(ins: Ins) -> u8 {
+    unsafe {
+        let discr = std::mem::discriminant(&ins);
+        std::mem::transmute::<_, u8>(discr)
+    }
+}
+
+pub fn instruction_name(i: usize) -> &'static str {
+    match i {
+        0 => "pop",
+        1 => "dup",
+        2 => "swap",
+        3 => "alloc",
+        4 => "alloc-below",
+        5 => "reset",
+        6 => "push-undef",
+        7 => "push-void",
+        8 => "push-eof",
+        9 => "push-null",
+        10 => "push-true",
+        11 => "push-false",
+        12 => "push-fixnum",
+        13 => "push-constant",
+        14 => "push-procedure",
+        15 => "pack",
+        16 => "flatpack",
+        17 => "unpack",
+        18 => "push-fragment",
+        19 => "make-closure",
+        20 => "make-tagged-closure",
+        21 => "make-frame",
+        22 => "inject-frame",
+        23 => "call",
+        24 => "tail-call",
+        25 => "apply",
+        26 => "return",
+        27 => "assert-arg-count",
+        28 => "assert-min-arg-count",
+        29 => "collect-rest",
+        30 => "compile",
+        31 => "make-syntax",
+        32 => "make-promise",
+        33 => "make-stream",
+        34 => "force",
+        35 => "store-in-promise",
+        36 => "make-local-variable",
+        37 => "make-variable-argument",
+
+        38 => "push-global",
+        39 => "set-global",
+        40 => "define-global",
+        41 => "push-captured",
+        42 => "set-captured",
+        43 => "push-local",
+        44 => "set-local",
+
+        45 => "branch",
+        46 => "branch-if",
+        47 => "branch-if-not",
+        48 => "keep-or-branch-if-not",
+        49 => "branch-if-arg-mismatch",
+        50 => "branch-if-not-arg-mismatch",
+
+        51 => "or",
+        52 => "and",
+
+        53 => "eq?",
+        54 => "eqv?",
+        55 => "equal?",
+
+        56 => "pair?",
+        57 => "null?",
+        58 => "undef?",
+        59 => "list",
+        60 => "cons",
+        61 => "decons",
+        62 => "decons-kword",
+        63 => "car",
+        64 => "cdr",
+        65 => "vector",
+        66 => "list->vector",
+        67 => "vector-append",
+        68 => "vector?",
+        69 => "not",
+
+        70 => "add2",
+        71 => "sub2",
+        72 => "mul2",
+        73 => "div2",
+        74 => "greater2",
+        75 => "less2",
+        76 => "greater-equal2",
+        77 => "less-equal2",
+        78 => "equal2",
+        79 => "eqv2",
+        80 => "eq2",
+        81 => "fail-if-not-null",
+        82 => "no-op",
+        83 => "last",
+        _ => unreachable!(),
+    }
+}
+
+pub fn dump_profiles() {
+    println!("instruction profiles:");
+    unsafe {
+        for (i, profile) in PROFILES.iter_mut().enumerate() {
+            profile.discriminant = i as _;
+        }
+
+        PROFILES.sort_by_key(|p| p.total);
+
+        for profile in PROFILES.iter() {
+            if profile.total > 0 {
+                let avg = profile.total_time / profile.total as u128;
+                println!(
+                    " {:04}: {}\t\t {} executions, {} ns/op, total op time: {:.4}ms",
+                    profile.discriminant,
+                    instruction_name(profile.discriminant as _),
+                    profile.total,
+                    avg,
+                    Duration::from_nanos(profile.total_time as _).as_micros() as f64 / 1000.0
+                );
+            }
+        }
     }
 }

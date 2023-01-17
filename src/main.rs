@@ -22,5 +22,9 @@ fn main() {
         ScmThreadResult::Panic(_) => {
             eprintln!("uncaptured panic");
         }
+
+        ScmThreadResult::UnpacturedException(_) => {
+            eprintln!("uncaptured exception");
+        }
     }
 }

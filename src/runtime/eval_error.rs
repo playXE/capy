@@ -137,6 +137,7 @@ pub enum EvalError {
     ExpectedTextBlockStyleAttribute,
     UnknownTextBlockStyleAttribute,
     SymbolAlreadyExists,
+    OutOfBounds,
 }
 
 impl EvalError {
@@ -259,6 +260,7 @@ impl EvalError {
             UnknownParagraphStyleAttribute => "unknown paragraph style attribute: $0",
             InvalidShadowSpec => "invalid shadow specification: $0",
             LibraryNotFound => "library $0 not found",
+            OutOfBounds => "index $0 out of bounds: $1",
             _ => todo!()
         }
     }

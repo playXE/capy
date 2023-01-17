@@ -6,8 +6,9 @@ use std::{collections::hash_map::RandomState, ptr::null};
 
 use crate::{
     data::{
+        equality::eq,
         exception::{Exception, SourcePosition},
-        special_form::{Form, Macro, SpecialForm}, equality::eq,
+        special_form::{Form, Macro, SpecialForm},
     },
     prelude::{
         code::{Code, Ins},
@@ -57,7 +58,7 @@ impl Object for LocalEnv {
 
 pub enum Access {
     Local(u16),
-    Global(Handle<Identifier>),
+    Global((Handle<Identifier>, Value)),
     Env(u16),
     Macro(Handle<Procedure>),
     Special(Handle<SpecialForm>),
@@ -120,7 +121,7 @@ impl Environment {
                         env: None,
                     };
 
-                    Access::Global(ctx.mutator().allocate(id))
+                    Access::Global((ctx.mutator().allocate(id), Value::UNDEFINED))
                 } else {
                     let index = lenv.vars.len() as u16;
                     lenv.vars.put(ctx.mutator(), sym, Value::new(index as i32));
@@ -178,8 +179,9 @@ impl Environment {
                             return Ok(Access::Macro(index.get_handle_of()));
                         }
                     }
+
                     let gloc =
-                        library_manager().global_variable_ref(ctx, *library, sym, false, true)?;
+                        library_manager().global_variable_ref(ctx, *library, sym, false, false)?;
 
                     if gloc.is_none() {
                         let id = Identifier {
@@ -187,7 +189,10 @@ impl Environment {
                             module: *library,
                             env: None,
                         };
-                        return Ok(Access::Global(ctx.mutator().allocate(id)));
+                        return Ok(Access::Global((
+                            ctx.mutator().allocate(id),
+                            Value::UNDEFINED,
+                        )));
                     }
 
                     let gloc = gloc.unwrap();
@@ -203,7 +208,7 @@ impl Environment {
                         module: *library,
                         env: None,
                     };
-                    return Ok(Access::Global(ctx.mutator().allocate(id)));
+                    return Ok(Access::Global((ctx.mutator().allocate(id), gloc)));
                 }
 
                 Self::Local(local) => {
@@ -483,6 +488,58 @@ impl Compiler {
         Ok(group)
     }
 
+    pub fn compile_custom<F>(
+        ctx: &mut Context,
+        library: Handle<Library>,
+        clos: F,
+    ) -> ScmResult<Handle<Code>>
+    where
+        F: FnOnce(&mut Context, &mut Self) -> ScmResult<()>,
+    {
+        let captures = HashMap::with_hasher(RandomState::new());
+        let local = LocalEnv {
+            vars: HashMap::with_hasher(RandomState::new()),
+            captures,
+            parent: None,
+            cc: null(),
+        };
+
+        let fragments = ArrayList::new(ctx.mutator());
+        let arguments = ArrayList::new(ctx.mutator());
+        let mut this = Compiler {
+            toplevel: true,
+            env: ctx
+                .mutator()
+                .allocate(Environment::Global((library, local))),
+            code: ArrayList::new(ctx.mutator()),
+            constants: ArrayList::new(ctx.mutator()),
+            source_directory: None,
+            arguments: ctx.mutator().allocate(arguments),
+            fragments,
+            num_locals: 0,
+            library,
+            syntax_sym: Value::nil(),
+            max_locals: 0,
+            captures,
+            capture_array: ArrayList::new(ctx.mutator()),
+        };
+        let p = &this as *const Compiler;
+        this.env.bind_to_cc(p);
+
+        clos(ctx, &mut this)?;
+
+        let code = ctx.mutator().allocate(Code {
+            instructions: this.code,
+            constants: this.constants,
+            fragments: this.fragments,
+            arity: Default::default(),
+            module: library,
+            captures: this.capture_array,
+        });
+
+        Ok(code)
+    }
+
     pub fn compile_bindings(
         &mut self,
         ctx: &mut Context,
@@ -630,9 +687,9 @@ impl Compiler {
             module: library,
             captures: this.capture_array,
         });
-        println!("top-level code:\n");
+
+        println!("top-level:");
         code.dump();
-        //println!("code: {:?}", code.instructions);
 
         Ok(code)
     }
@@ -867,7 +924,7 @@ impl Compiler {
                 kind: ProcedureKind::Closure(
                     typ,
                     Value::nil(),
-                    Array::new(ctx.mutator(), 0, |_, _| unreachable!()),
+                    None,
                     code,
                 ),
                 module: library,
@@ -877,7 +934,8 @@ impl Compiler {
             let proc = Value::new(proc);
             let ix = self.add_constant(ctx, proc);
             self.emit(ctx, Ins::PushConstant(ix as _));
-
+            println!("Dump for closure",);
+            code.dump();
             Ok(())
         } else {
             let code = closure_cc.bundle(ctx);
@@ -940,6 +998,8 @@ impl Compiler {
                 );
             }
 
+            println!("Dump for closure",);
+            self.fragments[code_index].dump();
             Ok(())
         }
     }
@@ -968,7 +1028,7 @@ impl Compiler {
                 self.emit(ctx, Ins::SetLocal(x));
             }
 
-            Access::Global(x) => {
+            Access::Global((x, _)) => {
                 let c = self.add_constant(ctx, x);
                 self.emit(ctx, Ins::SetGlobal(c as _));
             }
@@ -995,7 +1055,7 @@ impl Compiler {
                 self.emit(ctx, Ins::PushLocal(x as _));
             }
 
-            Access::Global(x) => {
+            Access::Global((x, _)) => {
                 let c = self.add_constant(ctx, Value::new(x));
                 self.emit(ctx, Ins::PushGlobal(c as _));
             }
@@ -1081,7 +1141,16 @@ impl Compiler {
                     return Ok(self.call(ctx, nargs, tail));
                 }
 
-                Access::Global(sym) => {
+                Access::Global((sym, gloc)) => {
+                    if gloc.is_handle_of::<Procedure>() {
+                        if let ProcedureKind::Primitive(_, _, Some(ref form_compiler)) =
+                            gloc.get_handle_of::<Procedure>().kind
+                        {
+                            return form_compiler(self, ctx, sform, tail);
+                        }
+                    }
+
+                    
                     self.emit(ctx, Ins::MakeFrame);
                     let ix = self.add_constant(ctx, Value::new(sym));
                     self.emit(ctx, Ins::PushGlobal(ix as _));
@@ -1091,7 +1160,7 @@ impl Compiler {
 
                 Access::Special(special) => match special.kind {
                     Form::Primitive(form_compiler) => {
-                        return form_compiler(self, ctx, sform, false);
+                        return form_compiler(self, ctx, sform, tail);
                     }
                     Form::Macro(transformer) => {
                         let ls = ctx.make_pair(form, Value::nil());
@@ -1114,7 +1183,7 @@ impl Compiler {
                     return Ok(false);
                 }
 
-                Access::Global(sym) => {
+                Access::Global((sym, _)) => {
                     let ix = self.add_constant(ctx, Value::new(sym));
                     self.emit(ctx, Ins::PushGlobal(ix as _));
                     return Ok(false);

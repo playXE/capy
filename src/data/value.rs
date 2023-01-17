@@ -1,6 +1,6 @@
 use super::{
     exception::{Exception, SourcePosition},
-    pure_nan::{pure_nan, purify_nan},
+    pure_nan::{pure_nan, purify_nan}, structure::{StructInstance, StructType, StructProperty},
 };
 use crate::{
     data::special_form::SpecialForm,
@@ -9,7 +9,7 @@ use crate::{
     utilities::{arraylist::ArrayList, string_builder::StringBuilder},
 };
 use core::fmt;
-use std::{collections::HashSet, fmt::Debug, intrinsics::likely};
+use std::{collections::HashSet, fmt::Debug, intrinsics::likely, hash::Hash};
 #[derive(Copy, Clone, Debug)]
 pub struct Value(pub(crate) EncodedValueDescriptor);
 #[derive(Clone, Copy)]
@@ -22,6 +22,13 @@ pub(crate) union EncodedValueDescriptor {
     #[allow(dead_code)]
     as_bits: AsBits,
 }
+
+impl Hash for Value {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        unsafe { self.0.as_int64.hash(state) }
+    }
+}
+
 impl Debug for EncodedValueDescriptor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_fmt(format_args!("EncodedValueDescriptor {}", unsafe {
@@ -461,6 +468,12 @@ impl Value {
             Type::Eof
         } else if self.is_handle_of::<Procedure>() {
             Type::Procedure
+        } else if self.is_char() {
+            Type::Char
+        } else if self.is_handle_of::<StructInstance>() {
+            Type::Struct(self.get_handle_of::<StructInstance>().struct_type())
+        } else if self.is_handle_of::<StructType>() {
+            Type::StructType(Some(self.get_handle_of()))
         } else {
             todo!()
         }
@@ -520,6 +533,7 @@ impl Value {
         x.into()
     }
 
+    #[inline]
     pub fn is_pair(self) -> bool {
         self.is_handle() && self.get_handle().is::<Pair>()
     }
@@ -828,6 +842,7 @@ pub enum Type {
     Integer,
     Float,
     Str,
+    Char,
     ByteVector,
     Pair,
     Box,
@@ -850,7 +865,9 @@ pub enum Type {
     BinaryOutputPort,
     Syntax,
     Table,
-    Record,
+    Struct(Handle<StructType>),
+    StructType(Option<Handle<StructType>>),
+    StructProperty(Option<Handle<StructProperty>>),
     Object(Handle<Symbol>),
 }
 
@@ -866,6 +883,7 @@ impl fmt::Display for Type {
             Type::Boolean => write!(f, "boolean"),
             Type::Fixnum => write!(f, "fixnum"),
             Type::Integer => write!(f, "integer"),
+            Type::Char => write!(f, "char"),
             Type::Float => write!(f, "float"),
             Type::Str => write!(f, "string"),
             Type::ByteVector => write!(f, "bytevector"),
@@ -890,7 +908,11 @@ impl fmt::Display for Type {
             Type::BinaryOutputPort => write!(f, "binary-output-port"),
             Type::Syntax => write!(f, "syntax"),
             Type::Table => write!(f, "table"),
-            Type::Record => write!(f, "record"),
+            Type::Struct(name) => write!(f, "#<{}>", name.name()),
+            Type::StructType(None) => write!(f, "#<struct-type>"),
+            Type::StructType(Some(ty)) => write!(f, "#<struct-type {}>", ty.name()),
+            Type::StructProperty(Some(ty)) => write!(f, "#<struct-property {}>", ty.name),
+            Type::StructProperty(None) => write!(f, "#<struct-property>"),
             Type::Object(sym) => write!(f, "{}", sym.identifier()),
         }
     }
@@ -1125,6 +1147,12 @@ impl Value {
                 )
             } else if val.is_handle_of::<Exception>() {
                 format!("#<exception {}>", val.get_handle_of::<Exception>().inline_description())
+            } else if val.is_handle_of::<Identifier>() {
+                format!("#<identifier {}>", val.get_handle_of::<Identifier>().name.to_string(false))
+            } else if val.is_handle_of::<StructInstance>() {
+                format!("#<{}>", val.get_handle_of::<StructInstance>().struct_type().name())
+            } else if val.is_handle_of::<StructType>() {
+                format!("#<struct-type {}>", val.get_handle_of::<StructType>().name())
             } else {
                 format!("#<unknown {:p}>", val.raw() as *mut u8)
             }
@@ -1153,6 +1181,16 @@ impl Value {
 
         let exc = Exception::type_error(ctx, types, *self, pos);
         ctx.error(exc)
+    }
+
+    #[inline]
+    pub fn is_char(self) -> bool {
+        self.is_native_value()
+    }
+
+    #[inline]
+    pub fn encode_char(c: u32) -> Self {
+        Self::encode_native_u32(c as u32)
     }
 }
 
@@ -1356,5 +1394,14 @@ impl Type {
             ],
             _ => return None,
         })
+    }
+}
+
+
+
+
+impl Default for Value {
+    fn default() -> Self {
+        Self::nil()
     }
 }

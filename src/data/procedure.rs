@@ -6,6 +6,8 @@ use crate::{
     utilities::arraylist::ArrayList,
 };
 
+use super::structure::{StructType, StructProperty};
+
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Arity {
     Exact(usize),
@@ -70,6 +72,7 @@ impl Procedure {
                 Implementation::Native1R(_) => &[Arity::AtLeast(1)],
                 Implementation::Native2R(_) => &[Arity::AtLeast(2)],
                 Implementation::Native3R(_) => &[Arity::AtLeast(3)],
+                Implementation::Native4R(_) => &[Arity::AtLeast(4)],
                 Implementation::Apply(_) | Implementation::Eval(_) => &[Arity::AtLeast(0)],
             },
 
@@ -101,7 +104,7 @@ pub enum ProcedureKind {
     Closure(
         ClosureType,
         Value,
-        Handle<Array<Handle<Upvalue>>>,
+        Option<Handle<Array<Handle<Upvalue>>>>,
         Handle<Code>,
     ),
     RawContinuation(Handle<Continuation>),
@@ -114,8 +117,15 @@ impl Object for ProcedureKind {
             ProcedureKind::Primitive(name, _, _) => name.trace(visitor),
             ProcedureKind::Parameter(ls) => ls.trace(visitor),
             ProcedureKind::Closure(ty, proc, free_vars, code) => {
-                if let ClosureType::Named(name) = ty {
-                    name.trace(visitor);
+                match ty {
+                    ClosureType::Named(name) => name.trace(visitor),
+                    ClosureType::Constructor(ty) | 
+                    ClosureType::Mutator(ty)
+                    | ClosureType::Accessor(ty)
+                    | ClosureType::Predicate(ty) => ty.trace(visitor),
+                
+                    ClosureType::PropertyAccessor(ty) | ClosureType::PropertyPredicate(ty) => ty.trace(visitor),
+                    _ => ()
                 }
                 proc.trace(visitor);
                 free_vars.trace(visitor);
@@ -136,6 +146,12 @@ pub enum ClosureType {
     Anonymous,
     Named(Handle<Str>),
     Continuation,
+    Constructor(Handle<StructType>),
+    Accessor(Handle<StructType>),
+    Mutator(Handle<StructType>),
+    Predicate(Handle<StructType>),
+    PropertyAccessor(Handle<StructProperty>),
+    PropertyPredicate(Handle<StructProperty>),
 }
 
 pub enum Implementation {
@@ -158,6 +174,7 @@ pub enum Implementation {
     Native1R(fn(&mut Context, Value, &Arguments) -> ScmResult),
     Native2R(fn(&mut Context, Value, Value, &Arguments) -> ScmResult),
     Native3R(fn(&mut Context, Value, Value, Value, &Arguments) -> ScmResult),
+    Native4R(fn(&mut Context, Value, Value, Value, Value, &Arguments) -> ScmResult),
 }
 
 impl Into<Implementation>
