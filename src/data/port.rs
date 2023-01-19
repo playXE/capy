@@ -9,12 +9,13 @@ use std::{
     borrow::Cow,
     ffi::{CStr, CString},
     mem::MaybeUninit,
-    ptr::{copy_nonoverlapping, null_mut},
+    ptr::{copy_nonoverlapping, null_mut, write_bytes},
 };
 
 use rsgc::{
     prelude::{Allocation, Handle, Object},
     sync::mutex::Mutex,
+    system::string::Str,
 };
 
 use crate::prelude::{ByteVector, Context, Procedure, Value, Vector};
@@ -46,7 +47,6 @@ pub enum Operation {
     Port(PortOperation),
     Socket(SocketOperation),
 }
-
 
 pub struct Port {
     lock: Mutex<()>,
@@ -199,7 +199,7 @@ fn io_mkstemp(template: &mut [u8]) -> i32 {
 }
 use libc::*;
 
-use super::encoding::{utf8_byte_count, cnvt_utf8_to_ucs4};
+use super::encoding::{cnvt_ucs4_to_utf8, cnvt_utf8_to_ucs4, utf8_byte_count};
 #[inline]
 pub fn S_ISBLK(m: mode_t) -> bool {
     ((m) & S_IFMT) == S_IFBLK /* block special */
@@ -343,10 +343,10 @@ fn device_read(
     let vect = port.handlers.get_handle_of::<Vector>();
     let bv = port.bytes.get_handle_of::<ByteVector>();
 
-    let args = ctx.make_arguments(&[Value::new(bv), Value::new(0), Value::new(p.len() as i32)]);
+
 
     let result = ctx
-        .apply(vect.elements[PORT_HANDLER_READ as usize], args)
+        .apply(vect.elements[PORT_HANDLER_READ as usize], &[Value::new(bv), Value::new(0), Value::new(p.len() as i32)])
         .map_err(IoError::Value)?;
     unsafe {
         copy_nonoverlapping(bv.as_ptr(), p.as_mut_ptr(), p.len());
@@ -422,10 +422,9 @@ fn device_write(
         unsafe {
             copy_nonoverlapping(p.as_ptr(), bv.as_mut_ptr(), p.len());
         }
-        let args = ctx.make_arguments(&[Value::new(bv), Value::new(0), Value::new(rest as i32)]);
 
         written = ctx
-            .apply(vect.elements[PORT_HANDLER_WRITE as usize], args)
+            .apply(vect.elements[PORT_HANDLER_WRITE as usize], &[Value::new(bv), Value::new(0), Value::new(rest as i32)])
             .map_err(IoError::Value)?
             .get_int32();
         p = &p[written as usize..];
@@ -455,9 +454,8 @@ fn device_set_mark(ctx: &mut Context, mut port: Handle<Port>, offset: i64) -> Re
     } else if port.typ == Port::TYPE_CUSTOM {
         let vect = port.handlers.get_handle_of::<Vector>();
         let off = Value::new(offset as i32);
-        let args = ctx.make_arguments(&[off]);
 
-        ctx.apply(vect.elements[PORT_HANDLER_SET_POS], args)
+        ctx.apply(vect.elements[PORT_HANDLER_SET_POS], &[off])
             .map_err(IoError::Value)?;
     } else {
         unreachable!()
@@ -496,7 +494,7 @@ fn device_close(ctx: &mut Context, mut port: Handle<Port>) -> Result<(), IoError
         let vect = port.handlers.get_handle_of::<Vector>();
 
         if vect.elements[PORT_HANDLER_CLOSE].is_handle_of::<Procedure>() {
-            ctx.apply(vect.elements[PORT_HANDLER_CLOSE], Value::nil())
+            ctx.apply(vect.elements[PORT_HANDLER_CLOSE], &[])
                 .map_err(IoError::Value)?;
         }
     }
@@ -1423,9 +1421,12 @@ pub fn port_lookahead_utf8(ctx: &mut Context, mut port: Handle<Port>) -> Result<
                     }
 
                     Port::ERROR_HANDLING_MODE_RAISE => {
-                        return Err(IoError::Message(Operation::Port(PortOperation::Decode), "encountered invalid UTF-8 sequence".to_string()))
+                        return Err(IoError::Message(
+                            Operation::Port(PortOperation::Decode),
+                            "encountered invalid UTF-8 sequence".to_string(),
+                        ))
                     }
-                    _ => unreachable!()
+                    _ => unreachable!(),
                 }
             }
 
@@ -1447,7 +1448,7 @@ pub fn port_get_utf8(ctx: &mut Context, port: Handle<Port>) -> Result<Value, IoE
     if port.opened {
         loop {
             let mut utf8 = [0u8; 6];
-            
+
             let b = port_get_byte(ctx, port)?;
             if b == EOF {
                 return Ok(Value::eof());
@@ -1469,7 +1470,10 @@ pub fn port_get_utf8(ctx: &mut Context, port: Handle<Port>) -> Result<Value, IoE
                                 return Ok(Value::encode_char(Port::UCS4_REPLACEMENT_CHAR));
                             }
                             _ => {
-                                return Err(IoError::Message(Operation::Port(PortOperation::Decode), "encountered invalid UTF-8 sequence".to_string()))
+                                return Err(IoError::Message(
+                                    Operation::Port(PortOperation::Decode),
+                                    "encountered invalid UTF-8 sequence".to_string(),
+                                ))
                             }
                         }
                     }
@@ -1489,9 +1493,12 @@ pub fn port_get_utf8(ctx: &mut Context, port: Handle<Port>) -> Result<Value, IoE
                         }
 
                         Port::ERROR_HANDLING_MODE_RAISE => {
-                            return Err(IoError::Message(Operation::Port(PortOperation::Decode), "encountered invalid UTF-8 sequence".to_string()))
+                            return Err(IoError::Message(
+                                Operation::Port(PortOperation::Decode),
+                                "encountered invalid UTF-8 sequence".to_string(),
+                            ))
                         }
-                        _ => unreachable!()
+                        _ => unreachable!(),
                     }
                 }
 
@@ -1504,11 +1511,451 @@ pub fn port_get_utf8(ctx: &mut Context, port: Handle<Port>) -> Result<Value, IoE
 
             return Ok(Value::encode_char(b as _));
         }
-
-        
     }
 
     Ok(Value::eof())
+}
+
+pub fn port_set_mark(
+    ctx: &mut Context,
+    mut port: Handle<Port>,
+    offset: i64,
+) -> Result<(), IoError> {
+    if port.opened {
+        port_flush_output(ctx, port)?;
+        port.lookahead_size = 0;
+
+        match port.typ {
+            Port::TYPE_BYTEVECTOR => {
+                port.mark = offset;
+            }
+            _ => {
+                device_set_mark(ctx, port, offset)?;
+            }
+        }
+
+        port.track_line_column = false;
+        port.column = 0;
+        port.line = 0;
+    }
+
+    Ok(())
+}
+
+const fn hundred_twenty_five_percent_of(n: usize) -> usize {
+    n + (n >> 2)
+}
+
+pub fn port_put_byte(ctx: &mut Context, mut port: Handle<Port>, byte: i32) -> Result<(), IoError> {
+    if port.opened {
+        port.lookahead_size = 0;
+
+        if port.track_line_column {
+            port_update_line_column(port, byte);
+        }
+
+        match port.typ {
+            Port::TYPE_BYTEVECTOR => {
+                if port.mark >= port.buf_size as i64 {
+                    let mut newsize = port.mark as usize + Port::BYTEVECTOR_OUTPUT_CHUNK;
+                    let cursize = port.buf_tail as usize - port.buf_head as usize;
+
+                    if newsize < hundred_twenty_five_percent_of(cursize) {
+                        newsize = hundred_twenty_five_percent_of(cursize);
+                    }
+
+                    if newsize < (port.mark + Port::BYTEVECTOR_OUTPUT_CHUNK as i64) as usize {
+                        return Err(IoError::Message(
+                            Operation::Port(PortOperation::Write),
+                            "bytevector output buffer overflow".to_string(),
+                        ));
+                    }
+
+                    let prev = port.buf;
+                    port.buf = unsafe { libc::realloc(port.buf.cast(), newsize).cast() };
+                    if port.buf.is_null() {
+                        port.buf = prev;
+                        return Err(IoError::Message(
+                            Operation::Port(PortOperation::Write),
+                            "bytevector output buffer overflow".to_string(),
+                        ));
+                    }
+
+                    unsafe {
+                        write_bytes(port.buf.add(newsize), 0, newsize - cursize);
+                    }
+
+                    port.buf_head = port.buf;
+                    port.buf_tail = unsafe { port.buf.add(cursize) };
+                    port.buf_size = newsize;
+                }
+                unsafe {
+                    let mut p = port.buf_head.offset(port.mark as _);
+                    p.write(byte as _);
+                    port.mark += 1;
+
+                    p = p.add(1);
+                    if p > port.buf_tail {
+                        port.buf_tail = p;
+                    }
+                }
+            }
+
+            _ => unsafe {
+                if !port.buf.is_null() {
+                    if port.buf_state != Port::BUF_STATE_WRITE {
+                        port.buf_head = port.buf;
+                        port.buf_tail = port.buf;
+                        port.buf_state = Port::BUF_STATE_WRITE;
+                    } else {
+                        if port.buf_tail == port.buf.add(port.buf_size) {
+                            port_flush_output(ctx, port)?;
+                            port.buf_state = Port::BUF_STATE_WRITE;
+                        }
+                    }
+
+                    port.buf_tail.write(byte as _);
+                    port.buf_tail = port.buf_tail.add(1);
+                    port.mark += 1;
+
+                    if port.buffer_mode == Port::BUFFER_MODE_LINE {
+                        if byte == b'\n' as i32 {
+                            port_flush_output(ctx, port)?;
+                        }
+                    }
+                } else {
+                    let b = byte as u8;
+                    device_write(ctx, port, &[b], port.mark)?;
+                    port.mark += 1;
+                }
+            },
+        }
+    }
+
+    Ok(())
+}
+
+pub fn port_put_bytes(
+    ctx: &mut Context,
+    mut port: Handle<Port>,
+    bytes: &[u8],
+) -> Result<(), IoError> {
+    if port.opened {
+        match port.typ {
+            Port::TYPE_BYTEVECTOR => unsafe {
+                if port.mark >= port.buf_size as i64 {
+                    let mut newsize = port.mark as usize + Port::BYTEVECTOR_OUTPUT_CHUNK;
+                    let cursize = port.buf_tail as usize - port.buf_head as usize;
+
+                    if newsize < hundred_twenty_five_percent_of(cursize) {
+                        newsize = hundred_twenty_five_percent_of(cursize);
+                    }
+
+                    if newsize < (port.mark + Port::BYTEVECTOR_OUTPUT_CHUNK as i64) as usize {
+                        return Err(IoError::Message(
+                            Operation::Port(PortOperation::Write),
+                            "bytevector output buffer overflow".to_string(),
+                        ));
+                    }
+
+                    let prev = port.buf;
+                    port.buf = libc::realloc(port.buf.cast(), newsize).cast();
+                    if port.buf.is_null() {
+                        port.buf = prev;
+                        return Err(IoError::Message(
+                            Operation::Port(PortOperation::Write),
+                            "bytevector output buffer overflow".to_string(),
+                        ));
+                    }
+
+                    write_bytes(port.buf.add(newsize), 0, newsize - cursize);
+
+                    port.buf_head = port.buf;
+                    port.buf_tail = port.buf.add(cursize);
+                    port.buf_size = newsize;
+                }
+
+                let space = port.buf_size as i64 - port.mark;
+                let n = if space < bytes.len() as i64 {
+                    space as usize
+                } else {
+                    bytes.len()
+                };
+
+                copy_nonoverlapping(bytes.as_ptr(), port.buf_head.offset(port.mark as _), n);
+
+                port.mark += n as i64;
+
+                if port.buf_head.offset(port.mark as _) > port.buf_tail {
+                    port.buf_tail = port.buf_head.offset(port.mark as _);
+                }
+
+                if port.track_line_column {
+                    for i in 0..n {
+                        port_update_line_column(port, bytes[i] as _);
+                    }
+                }
+
+                if n != bytes.len() {
+                    port_put_bytes(ctx, port, &bytes[n..])?;
+                }
+            },
+
+            _ => unsafe {
+                if !port.buf.is_null() {
+                    if port.buf_state != Port::BUF_STATE_WRITE {
+                        port.buf_head = port.buf;
+                        port.buf_tail = port.buf;
+                        port.buf_state = Port::BUF_STATE_WRITE;
+                    } else {
+                        if port.buf_tail == port.buf.add(port.buf_size) {
+                            port_flush_output(ctx, port)?;
+                            port.buf_state = Port::BUF_STATE_WRITE;
+                        }
+                    }
+
+                    let space = port.buf_size - (port.buf_tail as usize - port.buf as usize);
+                    let n = if space < bytes.len() {
+                        space
+                    } else {
+                        bytes.len()
+                    };
+
+                    copy_nonoverlapping(bytes.as_ptr(), port.buf_tail, n);
+                    port.buf_tail = port.buf_tail.add(n);
+                    port.mark += n as i64;
+
+                    if port.track_line_column {
+                        for i in 0..n {
+                            port_update_line_column(port, bytes[i] as _);
+                        }
+                    }
+
+                    if n == bytes.len() && port.buffer_mode == Port::BUFFER_MODE_LINE {
+                        let mut flush = false;
+                        for i in 0..n {
+                            if bytes[i] == b'\n' as u8 {
+                                flush = true;
+                                break;
+                            }
+                        }
+
+                        if flush {
+                            port_flush_output(ctx, port)?;
+                        }
+                    }
+                } else {
+                    device_write(ctx, port, bytes, port.mark)?;
+                    port.mark += bytes.len() as i64;
+
+                    if port.track_line_column {
+                        for i in 0..bytes.len() {
+                            port_update_line_column(port, bytes[i] as _);
+                        }
+                    }
+                }
+            },
+        }
+    }
+
+    Ok(())
+}
+
+pub fn port_put_utf8(ctx: &mut Context, port: Handle<Port>, ucs4: i32) -> Result<(), IoError> {
+    let mut utf8: [u8; 4] = [0; 4];
+    let n = cnvt_ucs4_to_utf8(ucs4 as _, &mut utf8);
+    for i in 0..n {
+        port_put_byte(ctx, port, utf8[i] as _)?;
+    }
+    Ok(())
+}
+
+pub fn port_input_pred(port: Handle<Port>) -> bool {
+    (port.direction & Port::DIRECTION_IN) != 0
+}
+
+pub fn port_output_pred(port: Handle<Port>) -> bool {
+    (port.direction & Port::DIRECTION_OUT) != 0
+}
+
+pub fn port_textual_pred(port: Handle<Port>) -> bool {
+    !port.transcoder.is_false()
+}
+
+pub fn port_binary_pred(port: Handle<Port>) -> bool {
+    port.transcoder.is_false()
+}
+
+pub fn port_open_pred(port: Handle<Port>) -> bool {
+    port.opened
+}
+
+pub fn port_bytevector_pred(port: Handle<Port>) -> bool {
+    port.typ == Port::TYPE_BYTEVECTOR
+}
+
+pub fn port_regular_file_pred(port: Handle<Port>) -> bool {
+    port.typ == Port::TYPE_NAMED_FILE && port.subtype == Port::SUBTYPE_NONE
+}
+
+pub fn port_get_bytevector(ctx: &mut Context, port: Handle<Port>) -> Handle<ByteVector> {
+    let n = port.buf_tail as usize - port.buf_head as usize;
+    let bvector = if port.buf.is_null() {
+        ByteVector::new(ctx, 0)
+    } else {
+        let mut bvector = ByteVector::new(ctx, n);
+        unsafe {
+            copy_nonoverlapping(port.buf_head, &mut bvector[0], n);
+        }
+
+        bvector
+    };
+
+    bvector
+}
+
+pub fn port_extract_bytevector(ctx: &mut Context, mut port: Handle<Port>) -> Handle<ByteVector> {
+    let bvec = port_get_bytevector(ctx, port);
+
+    unsafe {
+        libc::free(port.buf.cast());
+    }
+
+    port.buf = null_mut();
+    port.buf_head = null_mut();
+    port.buf_tail = null_mut();
+    port.buf_size = 0;
+    port.mark = 0;
+    bvec
+}
+
+pub fn port_get_string_ref<'a>(port: &'a Handle<Port>) -> &'a str {
+    if port.buf.is_null() {
+        ""
+    } else {
+        unsafe {
+            std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                port.buf_head,
+                port.buf_tail as usize - port.buf_head as usize,
+            ))
+        }
+    }
+}
+pub fn port_get_string(ctx: &mut Context, port: Handle<Port>) -> Handle<Str> {
+    Str::new(ctx.mutator(), port_get_string_ref(&port))
+}
+
+pub fn port_extract_string(ctx: &mut Context, mut port: Handle<Port>) -> Handle<Str> {
+    let s = port_get_string(ctx, port);
+
+    unsafe {
+        libc::free(port.buf.cast());
+    }
+
+    port.buf = null_mut();
+    port.buf_head = null_mut();
+    port.buf_tail = null_mut();
+    port.buf_size = 0;
+    port.mark = 0;
+    s
+}
+
+pub fn port_lookahead_ch(ctx: &mut Context, port: Handle<Port>) -> Result<Value, IoError> {
+    match port.codec {
+        Port::BUFFER_CODEC_UTF8 => port_lookahead_utf8(ctx, port),
+        _ => {
+            let b = port_lookahead_byte(ctx, port)?;
+            if b == EOF {
+                return Ok(Value::eof());
+            }
+
+            Ok(Value::encode_char(b as _))
+        }
+    }
+}
+
+pub fn port_lookahead_char(ctx: &mut Context, port: Handle<Port>) -> Result<Value, IoError> {
+    let ch = port_lookahead_ch(ctx, port)?;
+
+    if ch.is_eof() {
+        return Ok(ch);
+    }
+
+    if port.transcoder.is_false() {
+        return Ok(ch);
+    }
+
+    if port.eol_style == Port::EOL_STYLE_NONE {
+        return Ok(ch);
+    }
+
+    match ch.get_native_u32() {
+        Port::UCS4_CR | Port::UCS4_NEL | Port::UCS4_LF => Ok(Value::encode_char(Port::UCS4_LF)),
+        _ => Ok(ch),
+    }
+}
+
+pub fn port_get_ch(ctx: &mut Context, port: Handle<Port>) -> Result<Value, IoError> {
+    match port.codec {
+        Port::BUFFER_CODEC_UTF8 => port_get_utf8(ctx, port),
+        _ => {
+            let b = port_get_byte(ctx, port)?;
+            if b == EOF {
+                return Ok(Value::eof());
+            }
+
+            Ok(Value::encode_char(b as _))
+        }
+    }
+}
+
+pub fn port_get_char(ctx: &mut Context, port: Handle<Port>) -> Result<Value, IoError> {
+    let ch = port_get_ch(ctx, port)?;
+
+    if ch.is_eof() {
+        return Ok(ch);
+    }
+
+    if port.transcoder.is_false() {
+        return Ok(ch);
+    }
+
+    if port.eol_style == Port::EOL_STYLE_NONE {
+        return Ok(ch);
+    }
+
+    match ch.get_native_u32() {
+        Port::UCS4_CR => {
+            let post = port_lookahead_ch(ctx, port)?;
+            match post.get_native_u32() {
+                Port::UCS4_LF | Port::UCS4_NEL => {
+                    port_get_ch(ctx, port)?;
+                    return Ok(Value::encode_char(Port::UCS4_LF));
+                }
+                _ => Ok(Value::encode_char(Port::UCS4_LF)),
+            }
+        }
+        Port::UCS4_NEL | Port::UCS4_LS => Ok(Value::encode_char(Port::UCS4_LF)),
+        _ => Ok(ch),
+    }
+}
+
+pub fn port_lookahead_u8(ctx: &mut Context, port: Handle<Port>) -> Result<Value, IoError> {
+    let b = port_lookahead_byte(ctx, port)?;
+    if b == EOF {
+        return Ok(Value::eof());
+    }
+
+    Ok(Value::new(b))
+}
+
+pub fn port_get_u8(ctx: &mut Context, port: Handle<Port>) -> Result<Value, IoError> {
+    let b = port_get_byte(ctx, port)?;
+    if b == EOF {
+        return Ok(Value::eof());
+    }
+
+    Ok(Value::new(b))
 }
 
 pub fn make_port(ctx: &mut Context) -> Handle<Port> {
@@ -1541,6 +1988,6 @@ pub fn make_port(ctx: &mut Context) -> Handle<Port> {
         bom_be: false,
         bom_le: false,
         track_line_column: false,
-        opened: false
+        opened: false,
     })
 }

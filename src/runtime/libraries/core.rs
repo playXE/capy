@@ -52,6 +52,7 @@ pub(crate) fn core_library(rt: &mut Runtime) {
         true,
     );
 
+    
     manager.add_definition(
         thr,
         base,
@@ -115,6 +116,8 @@ pub(crate) fn core_library(rt: &mut Runtime) {
         true,
         true 
     );
+
+    manager.add_definition(thr, base, ("make-parameter", Implementation::Native1O(make_parameter)), true, true);
 
     manager.add_definition(thr, base, Definition::NativeSpecial("car", Implementation::Native1(car), compile_car), true, true);
 
@@ -1107,4 +1110,27 @@ pub fn list(ctx: &mut Context, args: &[Value]) -> ScmResult {
     }
 
     Ok(list)
+}
+
+pub fn make_parameter(ctx: &mut Context, init: Value, guard: Option<Value>) -> ScmResult {
+    let guard = if let Some(guard) = guard {
+        if guard.is_false() || guard.is_null() {
+            Value::nil()
+        } else if guard.is_handle_of::<Procedure>() { 
+            guard 
+        } else {
+            todo!()
+        }
+    } else {
+        Value::nil()
+    };
+
+    let parameter = ctx.make_pair(guard, init);
+    let proc = Procedure {
+        id: Procedure::new_id(),
+        kind: ProcedureKind::Parameter(parameter.pair()),
+        module: library_manager().scheme_module.get_handle_of()
+    };
+
+    Ok(ctx.mutator().allocate(proc).into())
 }

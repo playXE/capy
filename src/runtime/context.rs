@@ -29,6 +29,7 @@ use crate::{
 use super::{
     code::{Code, Ins},
     eval_error::EvalError,
+    libraries::core::make_parameter,
 };
 
 /// Thread-local context for the Scheme runtime.
@@ -171,7 +172,7 @@ impl Context {
 
             let proc = Value::new(ctx.mutator().allocate(proc));
 
-            ctx.apply(proc, Value::nil())
+            ctx.apply(proc, &[])
         })
     }
 
@@ -183,8 +184,7 @@ impl Context {
         let loader = self.runtime().loader;
         let s = Str::new(self.mutator(), source_dir.display().to_string());
         let lib = library_manager().user_module;
-        let list = Value::make_list_slice(self, &[exprs, Value::new(s), lib], Value::nil());
-        self.apply(loader, list)
+        self.apply(loader, &[exprs, Value::new(s), lib])
     }
 
     pub fn eval_path_in(&mut self, path: &str, fold_case: bool, lib: Handle<Library>) -> ScmResult {
@@ -195,8 +195,7 @@ impl Context {
         let loader = self.runtime().loader;
         let s = Str::new(self.mutator(), source_dir.display().to_string());
         let lib = Value::new(lib);
-        let list = Value::make_list_slice(self, &[exprs, Value::new(s), lib], Value::nil());
-        self.apply(loader, list)
+        self.apply(loader, &[exprs, Value::new(s), lib])
     }
 
     #[inline(always)]
@@ -332,7 +331,49 @@ impl Context {
         Value::make_list_slice(self, args, Value::nil())
     }
 
-    pub fn apply(&mut self, fun: Value, args: Value) -> ScmResult {
+    pub fn apply(&mut self, fun: Value, args: &Arguments) -> ScmResult {
+        self.push(fun)?;
+
+        for arg in args.iter() {
+            self.push(*arg)?;
+        }
+        let mut n = args.len();
+        let proc = self.invoke(&mut n, 1)?; // throws
+
+        match proc.kind {
+            ProcedureKind::Closure(_, _, ref captured, ref code) => unsafe {
+                self.execute_catch(*code, n, *captured) // throws
+            }
+
+            ProcedureKind::Transformer(ref rules) => {
+                let rules = *rules;
+
+                if n != 1 {
+                    let ls = Value::make_list_slice(self, args, Value::nil());
+                    let exc =
+                        Exception::argument_count(self, None, 1, 1, ls, SourcePosition::unknown());
+                    self.error(exc)?;
+                }
+                let arg = self.pop();
+                let res = rules.expand(self, arg);
+
+                self.pop();
+                Ok(res)
+            }
+
+            ProcedureKind::RawContinuation(ref cont) => {
+                let mut cont = *cont;
+                let ls = Value::make_list_slice(self, args, Value::nil());
+                cont.argument = super::libraries::control_flow::make_values(self, ls)?;
+
+                std::panic::resume_unwind(Box::new(cont));
+            }
+            // native function executed
+            _ => Ok(self.pop()),
+        }
+    }
+
+    pub fn apply_list(&mut self, fun: Value, args: Value) -> ScmResult {
         self.try_catch(|ctx| unsafe {
             ctx.push(fun)?;
 
@@ -382,7 +423,6 @@ impl Context {
         unsafe { *self.stack.get_unchecked(self.sp - n - 1) }
     }
 
-
     pub fn check_arity(&mut self, proc: Handle<Procedure>, n: usize) -> bool {
         let arity = proc.arity();
 
@@ -404,6 +444,29 @@ impl Context {
         false
     }
 
+    pub fn make_parameter(
+        &mut self,
+        init: Value,
+        guard_name: Option<&str>,
+        guard: Option<fn(&mut Context, Value) -> ScmResult>,
+    ) -> ScmResult {
+        let proc = if let Some(guard) = guard {
+            let guard_name = if let Some(name) = guard_name {
+                Str::new(self.mutator(), name)
+            } else {
+                Str::new(self.mutator(), "")
+            };
+            Some(Value::new(self.mutator().allocate(Procedure {
+                id: Procedure::new_id(),
+                kind: ProcedureKind::Primitive(guard_name, Implementation::Native1(guard), None),
+                module: library_manager().scheme_module.get_handle_of(),
+            })))
+        } else {
+            None
+        };
+        make_parameter(self, init, proc)
+    }
+
     fn invoke(&mut self, n: &mut usize, overhead: usize) -> ScmResult<Handle<Procedure>> {
         let p = unsafe { *self.stack.get_unchecked(self.sp - *n - 1) }; //[self.sp - *n - 1];
 
@@ -421,6 +484,39 @@ impl Context {
         if matches!(proc.kind, ProcedureKind::Closure(_, _, _, _)) {
             return Ok(proc);
         }
+
+        if let ProcedureKind::Parameter(ref parameter) = proc.kind {
+            let mut parameter = *parameter;
+            match n {
+                0 => {
+                    self.popn(overhead);
+                    self.push(parameter.cdr())?;
+                    return Ok(proc);
+                }
+
+                1 => {
+                    if parameter.car().is_null() {
+                        let a = self.pop();
+                        self.popn(overhead);
+                        self.mutator().write_barrier(parameter);
+                        parameter.cdr = a;
+                    } else {
+                        let a0 = self.pop();
+                        let res = self.apply(parameter.car(), &[a0])?;
+                        self.popn(overhead);
+                        self.mutator().write_barrier(parameter);
+                        parameter.cdr = res;
+                    }
+                    self.push(Value::void())?;
+                    return Ok(proc);
+                }
+
+                _ => {
+                    todo!()
+                }
+            }
+        }
+
         let mut res = #[inline(always)]
         || -> ScmResult<Option<Handle<Procedure>>> {
             loop {
@@ -1064,7 +1160,6 @@ impl Context {
         )
     }
 
-    
     pub fn get_call_trace(
         &mut self,
         current: Option<Handle<Procedure>>,
@@ -2023,9 +2118,9 @@ impl Context {
                         return self.error(exc);
                     }
                     let actual_ix = if let Some(stype) = struct_type.super_type() {
-                        stype.field_cnt_for_instance() + ix 
+                        stype.field_cnt_for_instance() + ix
                     } else {
-                        ix 
+                        ix
                     };
                     let field = instance.field_ref(actual_ix as _);
                     self.push(field)?;
@@ -2149,7 +2244,7 @@ impl Context {
                                 _ => {
                                     if self.registers.top_level() {
                                         let res = self.pop();
-        
+
                                         self.sp = self.registers.initial_fp - 1;
                                         #[cfg(feature = "code-profiling")]
                                         {

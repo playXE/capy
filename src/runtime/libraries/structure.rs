@@ -7,7 +7,7 @@ use crate::{
     compiler::Compiler,
     data::{
         exception::{Exception, SourcePosition},
-        structure::{StructProperty, StructType},
+        structure::{StructProperty, StructType, StructInstance},
     },
     prelude::{code::Ins, eval_error::EvalError, *},
     utilities::arraylist::ArrayList,
@@ -1129,7 +1129,7 @@ pub fn apply_guards(
     let _ = ctx;
     let _ = stype;
     let _ = args;
-    todo!()
+    Ok(ArrayList::with(ctx.mutator(), args.len(), args.len(), |_, ix| args[ix]))
 }
 
 pub fn make_struct_type_internal(
@@ -1284,9 +1284,7 @@ pub fn guard_property(
         let a = get_struct_type_info(ctx, t)?;
         let l = Value::make_list_slice(ctx, &a, Value::nil());
 
-        let args = Value::make_list_slice(ctx, &[v, l], Value::nil());
-
-        return ctx.apply(prop.guard, args);
+        return ctx.apply(prop.guard, &[v, l]);
     } else {
         Ok(v)
     }
@@ -1322,8 +1320,7 @@ pub fn append_super_props(
 
         while props.is_list() {
             let v = props.car();
-            let args = Value::make_list_slice(ctx, &[arg], Value::nil());
-            let res = ctx.apply(v.cdr(), args)?;
+            let res = ctx.apply(v.cdr(), &[arg])?;
             let v = ctx.make_pair(v, res);
             let pr = ctx.make_pair(v, Value::nil());
 
@@ -1497,4 +1494,16 @@ pub fn make_name(
     } else {
         Str::new(thr, name).into()
     }
+}
+
+pub fn make_struct_instance(ctx: &mut Context, stype: Handle<StructType>, args: &[Value]) -> ScmResult<Handle<StructInstance>> {
+    let mut instance = StructInstance::new(ctx, stype);
+    let args = apply_guards(ctx, stype, args)?;
+
+    for i in 0..stype.field_cnt_for_instance() {
+        ctx.mutator().write_barrier(instance);
+        instance.field_set(i, args[i as usize]);
+    }
+
+    Ok(instance)
 }

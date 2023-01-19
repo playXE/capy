@@ -1163,8 +1163,7 @@ impl Compiler {
                         return form_compiler(self, ctx, sform, tail);
                     }
                     Form::Macro(transformer) => {
-                        let ls = ctx.make_pair(form, Value::nil());
-                        let expanded = ctx.apply(transformer.into(), ls)?;
+                        let expanded = ctx.apply(transformer.into(), &[form])?;
                         return self.compile(ctx, expanded, tail);
                     }
                 },

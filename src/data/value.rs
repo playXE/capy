@@ -1405,3 +1405,13 @@ impl Default for Value {
         Self::nil()
     }
 }
+
+impl Value {
+    pub fn numberp(self) -> bool {
+        self.is_int32() || self.is_double()
+    }
+
+    pub fn intp(self) -> bool {
+        self.is_int32()
+    }
+}

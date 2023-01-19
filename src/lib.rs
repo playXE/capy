@@ -4,8 +4,7 @@
     cstr_from_bytes_until_nul,
     arbitrary_self_types,
     stmt_expr_attributes,
-    integer_atomics,
-    const_discriminant
+    c_variadic
 )]
 
 use prelude::Value;

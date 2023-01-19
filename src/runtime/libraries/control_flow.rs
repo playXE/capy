@@ -1145,9 +1145,8 @@ pub fn call_with_current_continuation(ctx: &mut Context, proc: Value) -> ScmResu
     let cont_proc = ctx.mutator().allocate(cont_proc);
     let registers = ctx.registers;
     let sp = ctx.sp;
-    let ls = ctx.make_pair(cont_proc.into(), Value::nil());
 
-    let result = ctx.apply(Value::new(proc), Value::new(ls));
+    let result = ctx.apply(Value::new(proc), &[cont_proc.into()]);
     match result {
         Ok(result) => Ok(result),
         Err(err) => {

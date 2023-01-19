@@ -15,7 +15,9 @@ pub mod eval_error;
 pub mod file_manager;
 pub mod error;
 pub mod libraries;
+pub mod strings;
 pub mod source_manager;
+pub mod num;
 pub mod stack;
 pub mod syntax_rules;
 
@@ -165,6 +167,10 @@ impl Runtime {
 
     pub fn symbol_table(&self) -> &SymbolTable {
         &self.symtab
+    }
+
+    pub fn exn(&self, exn: Exn) -> &ExnRec {
+        &self.exn_table.as_ref().unwrap()[exn as usize]
     }
 }
 
