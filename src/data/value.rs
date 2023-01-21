@@ -4,9 +4,9 @@ use super::{
 };
 use crate::{
     data::special_form::SpecialForm,
-    prelude::{*, eval_error::EvalError},
+    prelude::{*, eval_error::EvalError, error::wrong_type},
     runtime::Runtime,
-    utilities::{arraylist::ArrayList, string_builder::StringBuilder},
+    utilities::{arraylist::ArrayList, string_builder::StringBuilder, bigint::BigInt, rational::Rational, complex::Complex},
 };
 use core::fmt;
 use std::{collections::HashSet, fmt::Debug, intrinsics::likely, hash::Hash};
@@ -338,7 +338,7 @@ impl Value {
     }
 
     #[inline]
-    pub fn is_number(self) -> bool {
+    pub fn _is_number(self) -> bool {
         unsafe { (self.0.as_int64 & Self::NUMBER_TAG) != 0 }
     }
 
@@ -372,7 +372,7 @@ impl Value {
     }
     #[inline]
     pub fn is_double(self) -> bool {
-        self.is_number() && !self.is_int32()
+        self._is_number() && !self.is_int32()
     }
 
     #[inline]
@@ -1413,5 +1413,105 @@ impl Value {
 
     pub fn intp(self) -> bool {
         self.is_int32()
+    }
+    
+
+    pub fn normalized(self) -> Self {
+        if self.is_int32() || self.is_double() {
+            return self;
+        }
+
+        if self.is_handle_of::<BigInt>() {
+            if let Some(i) = self.get_handle_of::<BigInt>().i32() {
+                return Self::new(i);
+            } else {
+                self 
+            }
+        } else if self.is_handle_of::<Rational>() {
+            let rational = self.get_handle_of::<Rational>();
+
+            if rational.denominator().is_int32() {
+                if rational.denominator().get_int32() == 1 {
+                    return rational.numerator().normalized();
+                } else {
+                    return self;
+                }
+            } else if rational.denominator().is_handle_of::<BigInt>() {
+                if rational.denominator().get_handle_of::<BigInt>().is_one() {
+                    return rational.numerator().normalized();
+                } else {
+                    return self;
+                }
+            } else {
+                return self;
+            }
+        } else if self.is_handle_of::<Complex>() {
+            let c = self.get_handle_of::<Complex>();
+            return if c.is_real() {
+                Value::new(c.re)
+            } else {
+                self 
+            }
+        } else {
+            self
+        }
+    }
+
+    pub fn as_double(self, coerce: bool) -> Option<f64> {
+        if !coerce {
+            if self.is_double() {
+                return Some(self.get_double());
+            }
+
+            return None;
+        }
+
+        let n = self.normalized();
+        if n.is_double() {
+            return Some(n.get_double());
+        }
+        if n.is_int32() {
+            return Some(n.get_int32() as f64);
+        } else if n.is_handle_of::<BigInt>() {
+            return Some(n.get_handle_of::<BigInt>().f64());
+        } else if n.is_handle_of::<Rational>() {
+            let rational = n.get_handle_of::<Rational>();
+            let numerator = rational.numerator().as_double(true)?;
+            let denominator = rational.denominator().as_double(true)?;
+            return Some(numerator / denominator);
+        } else {
+            None
+        }
+    }
+
+    pub fn as_complex(self, coerce: bool) -> Option<Complex> {
+        if !coerce {
+            if self.is_double() {
+                return Some(Complex::new(self.get_double(), 0.0));
+            } else if self.is_handle_of::<Complex>() {
+                return Some(*self.get_handle_of::<Complex>());
+            } else {
+                return None;
+            }
+        }
+
+        let n = self.normalized();
+
+        if n.is_double() {
+            return Some(Complex::new(n.get_double(), 0.0));
+        } else if n.is_handle_of::<Complex>() {
+            return Some(*n.get_handle_of::<Complex>());
+        } else if n.is_int32() {
+            return Some(Complex::new(n.get_int32() as f64, 0.0));
+        } else if n.is_handle_of::<BigInt>() {
+            return Some(Complex::new(n.get_handle_of::<BigInt>().f64(), 0.0));
+        } else if n.is_handle_of::<Rational>() {
+            let rational = n.get_handle_of::<Rational>();
+            let numerator = rational.numerator().as_double(true)?;
+            let denominator = rational.denominator().as_double(true)?;
+            return Some(Complex::new(numerator / denominator, 0.0));
+        } else {
+            None
+        }
     }
 }

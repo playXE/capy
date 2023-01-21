@@ -29,7 +29,6 @@ const DATE_FIELDS: &'static [&str] = &[
 
 const DATE_STAR_FIELDS: &'static [&str] = &["nanosecond", "time-zone-name"];
 
-const LOCATION_FIELDS: &'static [&str] = &["source", "line", "column", "position", "span"];
 
 #[derive(Default)]
 pub struct StructGlobals {
@@ -204,6 +203,9 @@ pub(crate) fn structure_library(ctx: &mut Context) {
     ).unwrap();
 
     let mut loc_count = 0;
+
+    
+    const LOCATION_FIELDS: &'static [&str] = &["source", "line", "column", "position", "span"];
 
     let loc_names = make_struct_names_from_array(
         ctx,

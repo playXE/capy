@@ -15,7 +15,7 @@ impl NumberPair {
             Self::Fixnum(x.get_int32(), y.get_int32())
         } else if likely(x.is_double() && y.is_double()) {
             Self::Flonum(x.get_double(), y.get_double())
-        } else if x.is_number() && y.is_number() {
+        } else if x._is_number() && y._is_number() {
             Self::Flonum(x.get_number(), y.get_number())
         } else {
             x.assert_type(ctx, SourcePosition::unknown(), &[Type::Number])?;
