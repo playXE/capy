@@ -1,32 +1,32 @@
 [package]
-name = "capyscheme"
+name = "capy"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-rsgc = { path = "submodules/rsgc", default-features = false}                                        # { git = "https://github.com/playxe/rsgc" }
-memoffset = "0.8"
-env_logger = "0.10"
-log = "0.4"
+r7rs-parser = { git = "https://github.com/playxe/r7rs-parser" }
 libc = "0.2"
-r7rs-parser = {path = "r7rs-parser"} #{ git = "https://github.com/playxe/r7rs-parser" }
+num-traits = "0.2"
+paste = "1.0"
+rsgc = { git = "https://github.com/playxe/rsgc", default-features = false, features = ["gc-satb", "conditional-safepoint"]}
+env_logger = "0.10"
+memoffset = "0.8"
 once_cell = "1.8"
 dashmap = "5.4"
-paste = "1.0"
-errno = "0.2"
+errno = "0.3"
+termcolor = "1.2"
+pretty = { version = "0.11", features = ["termcolor"] }
+num = "0.4"
+murmur3 = "0.5"
+cranelift = "0.93"
+cranelift-frontend = "0.93"
+cranelift-jit = "0.93"
+cranelift-codegen = "0.93"
+cranelift-native = "0.93"
+cranelift-module = "0.93"
+capstone = "0.11"
+
 [profile.release]
-debug = true
-debug-assertions = false
-lto = "fat"
 opt-level = 3
-
-[features]
-gc-satb = ["rsgc/gc-satb"]
-gc-incremental-update = ["rsgc/gc-incremental-update"]
-gc-passive = ["rsgc/gc-passive"]
-code-profiling = []
-
-
-default = ["gc-incremental-update"]
+lto = "thin"

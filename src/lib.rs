@@ -1,45 +1,95 @@
 #![feature(
-    const_refs_to_cell,
     core_intrinsics,
-    cstr_from_bytes_until_nul,
+    thread_local,
     arbitrary_self_types,
-    stmt_expr_attributes,
-    c_variadic
+    const_refs_to_cell
 )]
 
-use prelude::Value;
+#[macro_export]
+macro_rules! offsetof {
+    ($obj: ty, $($field: ident).+) => {{
+        #[allow(unused_unsafe)]
+        unsafe {
+            let addr = 0x4000 as *const $obj;
+            &(*addr).$($field).* as *const _ as usize - 0x4000
+        }
+    }
+    };
+}
 
 #[macro_export]
-macro_rules! scm_for_each {
-    ($p: ident, $list: expr, $body: expr) => {
-        $p = $list;
-        #[allow(unreachable_code)]
-        while $p.is_pair() {
-            $body;
-            $p = $p.cdr();
+macro_rules! cassert {
+    ($($rest:tt)*) => {
+        #[cfg(feature="debug-assertions")]
+        {
+            assert!($($rest)*);
+        }
+
+        #[cfg(not(feature="no-assert"))]
+        {
+           
         }
     };
 }
 
-pub mod compiler;
-pub mod data;
-pub mod io;
-pub mod runtime;
-pub mod utilities;
+pub use once_cell::sync::Lazy;
 
-pub mod prelude {
-    pub use super::ScmResult;
-    pub use crate::data::{
-        collection::*, environment::*, library::*, procedure::*, symbol::*, value::*,
+#[macro_export]
+macro_rules! define_proc {
+    (extern $sname: expr, $name: ident  ($vm: ident, $k: ident, $args: ident) $mina: expr, $maxa: expr => $e: expr) => {
+        pub fn $name($vm: &mut $crate::vm::Vm, $k: $crate::value::Value, $args: &[$crate::value::Value]) -> $crate::vm::Trampoline {
+            $e
+        }
+
+        paste::paste! {
+            pub static [<$name:upper _PROC>]: $crate::Lazy<$crate::value::Value> = $crate::Lazy::new(|| {
+                $crate::vm::Vm::make_procedure($sname, $name, $mina, $maxa)
+            });
+
+            pub static [<$name:upper _NAME>]: $crate::Lazy<$crate::value::Value> = $crate::Lazy::new(|| {
+                $crate::vm::intern($sname)
+            });
+        }
     };
-    pub use crate::runtime::{context::*, *};
-    pub use rsgc::{
-        sync::{monitor::*, mutex::*},
-        system::{
-            array::*, collections::hashmap::*, object::*, string::*, traits::*, weak_reference::*,
-        },
-        thread::*,
+
+    (extern $sname: expr, $name: ident  ($vm: ident, $args: ident) $mina: expr, $maxa: expr => $e: expr) => {
+        pub fn $name($vm: &mut $crate::vm::Vm, _: $crate::value::Value, $args: &[$crate::value::Value]) -> $crate::vm::Trampoline {
+            $e
+        }
+
+        paste::paste! {
+            pub static [<$name:upper _PROC>]: $crate::Lazy<$crate::value::Value> = $crate::Lazy::new(|| {
+                $crate::vm::Vm::make_procedure($sname, $name, $mina, $maxa)
+            });
+
+            pub static [<$name:upper _NAME>]: $crate::Lazy<$crate::value::Value> = $crate::Lazy::new(|| {
+                $crate::vm::intern($sname)
+            });
+        }
     };
 }
 
-pub type ScmResult<T = Value> = Result<T, Value>;
+#[macro_use]
+pub mod ports;
+//pub mod module;
+pub mod case;
+pub mod jit;
+pub mod r4rs;
+pub mod value;
+pub mod vm;
+//pub mod simple_eval;
+pub mod r#bool;
+pub mod compiler;
+pub mod error;
+pub mod fun;
+pub mod hash;
+pub mod list;
+pub mod number;
+pub mod precomp;
+pub mod string;
+pub mod structure;
+pub mod util;
+pub mod utils;
+pub mod pp;
+
+pub use rsgc;
