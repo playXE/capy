@@ -243,11 +243,11 @@ impl Vm {
         unsafe { self.invoke(rands.len() + 1) }
     }
 
-    /// Invokes a procedure on stack.
+    /// Trampoline for invoking a procedure. It handles tail calls and continuations.
     ///
     /// Stack layout for invocation:
     /// ```text
-    /// | ... | k | proc | arg1 | arg2 | ... | argn |
+    /// | ... | proc | k | arg1 | arg2 | ... | argn |
     /// ```
     ///
     /// When fucntion returns `Trampoline::Return` the continuaiton `k` is invoked with the result of the procedure.
