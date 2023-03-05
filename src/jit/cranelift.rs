@@ -1072,6 +1072,7 @@ impl<'a> FunctionTranslator<'a> {
                 }
                 "free" => {
                     let env = self.env;
+                    self.generate_write_barrier(env);
                     let val_ptr = self
                         .builder
                         .ins()
@@ -1137,7 +1138,7 @@ impl<'a> FunctionTranslator<'a> {
                     self.builder.ins().store(
                         MemFlags::trusted(),
                         val,
-                        var_ptr,
+                        var,
                         Boxed::value_offset() as i32,
                     );
                 }
