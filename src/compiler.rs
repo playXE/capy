@@ -86,6 +86,7 @@ pub fn expr_to_value<I: Interner>(i: &I, e: &r7rs_parser::expr::Expr<I>) -> Valu
         }
         Expr::Float(x) => Value::make_double(Thread::current(), *x),
         Expr::Syntax(_, e) => expr_to_value(i, e),
+        Expr::Str(x) => Value::make_str(Thread::current(), x),
         _ => todo!(),
     }
 }
@@ -179,30 +180,9 @@ pub fn lambda_args(exp: Value) -> Value {
     exp.cadr()
 }
 
-pub fn lambda_defs(exp: Value) -> Value {
-    exp.caddr().cdr()
-}
-
-pub fn lambda_r(exp: Value) -> Value {
-    exp.cadddr().cadr().car()
-}
-
-pub fn lambda_f(exp: Value) -> Value {
-    exp.cadddr().cadr().cadr()
-}
-
-pub fn lambda_g(exp: Value) -> Value {
-    exp.cadddr().cadr().caddr()
-}
-
-pub fn lambda_decls(exp: Value) -> Value {
-    exp.cadddr().cadr().cadddr()
-}
-
 pub fn lambda_body(exp: Value) -> Value {
-    exp.cdddr().cdr().car()
+    exp.cddr()
 }
-
 pub fn call_proc(exp: Value) -> Value {
     exp.car()
 }
@@ -1079,7 +1059,7 @@ pub mod cps {
     }
 }
 
-/*
+
 pub mod redex {
     use crate::bool::equal;
 
@@ -1109,9 +1089,48 @@ pub mod redex {
                     make_call(proc, args)
                 }
                 "lambda" => {
-
+                    redex_lambda(e)
                 }
+
+                "set!" => {
+                    let var = redex_convert(e.cadr());
+                    let val = redex_convert(e.caddr());
+
+                    make_assignment(var, val)
+                }
+
+                "#%set-box!" => {
+                    let var = redex_convert(e.cadr());
+                    let val = redex_convert(e.caddr());
+
+                    Value::make_list(
+                        Thread::current(),
+                        &[
+                            intern("#%set-box!"),
+                            var,
+                            val,
+                        ],
+                    )
+                }
+
+                "if" => {
+                    let test = redex_convert(e.cadr());
+                    let then = redex_convert(e.caddr());
+                    let else_ = redex_convert(e.cadddr());
+
+                    make_conditional(test, then, else_)
+                }
+
+                "begin" => {
+                    let exprs = Value::list_map(Thread::current(), e.cdr(), redex_convert);
+                
+                    make_begin2(exprs)
+                }
+
+                _ => e
             }
+        } else {
+            e
         }
     }
 
@@ -1125,19 +1144,26 @@ pub mod redex {
     fn redex_lambda(e: Value) -> Value {
         let formals = e.cadr();
         let body = e.caddr();
-
+        
         if body.is_list() 
             && body.pairp()
             && body.car().strsym() == "#%app"
-            && equal(body.cddr(), formals)
+            
         {
-            body.cadr()
+            println!("body: {}", e);
+            // check if application arguments are equal to formals:
+            if equal(formals, body.cddr()) {
+                println!("reduce to: {}", body.cadr());
+                body.cadr()
+            } else {
+                e
+            }
         } else {
             e
         }
     }
 }
-*/
+
 pub mod uncover_assigned {
     //! This pass collects assigned variables and list them inside the binding
     //! constructs that bind them. It works bottom-up and passes on a list of
@@ -2313,6 +2339,18 @@ pub mod lambda_lifting {
         )
     }
 }
+
+pub fn make_null_terminated(formals: Value) -> Value {
+    if formals.nullp() {
+        Value::make_null()
+    } else if formals.symbolp() {
+        Value::make_cons(formals, Value::make_null())
+    } else {
+        Value::make_cons(formals.car(), make_null_terminated(formals.cdr()))
+    }
+}
+
+
 
 pub fn desugar(exp: Value, defs: &mut Value) -> Result<Value, Value> {
     let exp = pass1::desugar_definitions(exp, defs)?;

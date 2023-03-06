@@ -26,7 +26,6 @@ cranelift-codegen = "0.93"
 cranelift-native = "0.93"
 cranelift-module = "0.93"
 capstone = "0.11"
-
 [profile.release]
-opt-level = 3
+opt-level = "z"
 lto = "thin"

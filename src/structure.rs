@@ -453,6 +453,23 @@ pub fn is_simple_struct_type(stype: Handle<StructType>) -> bool {
     true
 }
 
+pub fn make_simple_struct_instance_from_array(
+    vm: &mut Vm,
+    args: &[Value],
+    typ: Value
+) -> Value {
+    let stype = typ.downcast_structuretype();
+
+    let c = stype.num_slots;
+
+    let slots = Array::new(vm.mutator(), c as _, |_, i| args[i]);
+
+    let s = Structure::new(vm.mutator(), stype, slots);
+
+   s 
+}
+
+
 pub(crate) fn make_simple_struct_instance(
     vm: &mut Vm,
     _: Value,

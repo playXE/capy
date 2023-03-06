@@ -6,15 +6,16 @@
 use std::any::Any;
 
 use once_cell::sync::Lazy;
-use rsgc::{system::arraylist::ArrayList, thread::Thread, prelude::Handle};
+use rsgc::{system::arraylist::ArrayList, thread::Thread, prelude::{Handle, Object}, heap::{heap::heap, root_processor::SimpleRoot}};
 
 use crate::{
     number::{bin_gte, bin_lt},
-    ports::{map_io_error, StringOutputPort, TextOutputPort},
+    ports_v2::*,
+    print::*,
     string::do_format,
-    structure::{make_struct_instance_, STRUCT_EXPTIME, STRUCT_NO_SET, STRUCT_NO_MAKE_PREFIX},
+    structure::{make_struct_instance_, STRUCT_EXPTIME, STRUCT_NO_SET, STRUCT_NO_MAKE_PREFIX, force_struct_type_info, make_struct_values, make_simple_struct_instance_from_array},
     value::{Str, Type, Value, SCHEME_MAX_ARGS},
-    vm::Trampoline, compiler::env::environment_set,
+    vm::{Trampoline, intern}, compiler::env::environment_set,
 };
 
 #[macro_export]
@@ -201,6 +202,10 @@ pub const EXN_FAIL_NETWORK_ERRNO_FIELDS: [&'static str; 1] = ["errno"];
 pub const EXN_BREAK_FIELDS: [&'static str; 1] = ["continuation"];
 
 pub const EXN_FLAGS: i32 = STRUCT_EXPTIME | STRUCT_NO_SET | STRUCT_NO_MAKE_PREFIX;
+
+pub fn get_exn_type(id: Exception) -> Value {
+    EXN_TABLE[id as usize].typ
+}
 
 pub static EXN_TABLE: Lazy<[ExnRec; Exception::Other as usize]> = Lazy::new(|| {
     let mut exn_table = [ExnRec {
@@ -435,8 +440,18 @@ pub static EXN_TABLE: Lazy<[ExnRec; Exception::Other as usize]> = Lazy::new(|| {
         Value::null()
     );
 
+    heap().add_root(SimpleRoot::new("exception-records", "exnrec", |processor| {
+        for rec in EXN_TABLE.iter() {
+            rec.typ.trace(processor.visitor());
+            rec.names.trace(processor.visitor());
+            rec.exptime.trace(processor.visitor());
+        }
+    }));
+
     exn_table
 });
+
+
 
 pub fn wrong_contract<T>(
     name: &str,
@@ -782,15 +797,15 @@ fn do_error(who: &str, mode: Exception, args: &[Value]) -> Result<(), Value> {
 
             newargs[0] = Str::new(Thread::current(), format!("error: {}", s)).into();
         } else {
-            let mut port = StringOutputPort::new();
+            let port = Port::new(Thread::current());
+            port_open_bytevector(port, intern("do_error"), SCM_PORT_DIRECTION_OUT, Value::make_false(), Value::make_false());
             if !args[1].strp() {
                 return wrong_contract(who, "string?", 1, args.len() as _, args);
             }
 
-            do_format(who, &mut port, None, 1, 2, args.len(), args)?;
+            do_format(who, port, None, 1, 2, args.len(), args)?;
 
-            let s = port.string();
-
+            let s = port_extract_string(port).unwrap();
             newargs[0] = Str::new(
                 Thread::current(),
                 format!("{}: {}", args[0].strsym(), s.str()),
@@ -802,16 +817,18 @@ fn do_error(who: &str, mode: Exception, args: &[Value]) -> Result<(), Value> {
             return wrong_contract(who, "(or/c string? symbol?)", 0, args.len() as _, args);
         }
 
-        let mut strout = StringOutputPort::new();
-
-        strout.display(args[0]).map_err(map_io_error)?;
+        let port = Port::new(Thread::current());
+        port_open_bytevector(port, intern("do_error"), SCM_PORT_DIRECTION_OUT, Value::make_false(), Value::make_false());
+        let mut printer = Printer::new(crate::vm::vm(), port);
+        printer.write(args[0])?;
+       
 
         for i in 1..args.len() {
-            strout.put_string(" ").map_err(map_io_error)?;
-            strout.write(args[i]).map_err(map_io_error)?;
+            printer.puts(" ")?;
+            printer.write(args[i])?;
         }
 
-        newargs[0] = strout.string().into();
+        newargs[0] = port_extract_string(port).unwrap();
     }
 
     newargs[1] = Value::make_null();
@@ -1039,9 +1056,46 @@ pub fn wrong_count<T>(
     wrong_count_impl(name, minc, maxc, argc, args).map(|_| unreachable!())
 }
 
+
+pub static SRCLOC: Lazy<Value> = Lazy::new(|| {
+    let typ = crate::structure::make_struct_type_from_string(crate::vm::vm(), "srcloc", Value::make_false(), 4, Value::make_false(), Value::make_false()).unwrap();
+    typ
+});
+
+pub fn make_srcloc(source: Value, line: i32, column: i32, position: i32) -> Value {
+    make_simple_struct_instance_from_array(crate::vm::vm(), &[source, Value::make_int(line), Value::make_int(column), Value::make_int(position)], *SRCLOC)
+}
+
 pub fn initialize_error(env: Value) {
     environment_set(env, *RAISE_ARGUMENT_ERROR_NAME, *RAISE_ARGUMENT_ERROR_PROC);
     environment_set(env, *RAISE_RESULT_ERROR_NAME, *RAISE_RESULT_ERROR_PROC);
     environment_set(env, *RAISE_TYPE_ERROR_NAME, *RAISE_TYPE_ERROR_PROC);
     environment_set(env, *ERROR_NAME, *ERROR_PROC);
+
+
+    for exn in EXN_TABLE.iter() {
+        if let Some(mut names) = exn.names.filter(|x| x.len() > 0) {
+
+            force_struct_type_info(exn.typ.downcast_structuretype());
+            let values = make_struct_values(exn.typ, &mut names, EXN_FLAGS);
+
+            for j in (0..names.len() - 1).rev() {
+                let name = names[j];
+                let value = values.values_ref(j);
+                environment_set(env, name, value);
+            }
+        } 
+    }
+
+    let typ = *SRCLOC;
+    let mut names = crate::structure::make_struct_names_from_array("srcloc", 4, &["source", "line", "column", "position"], EXN_FLAGS);
+    let values = crate::structure::make_struct_values(typ, &mut names, EXN_FLAGS);
+
+    for j in (0..names.len() - 1).rev() {
+        let name = names[j];
+        let value = values.values_ref(j);
+        environment_set(env, name, value);
+    }
+
 }
+

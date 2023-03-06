@@ -4,7 +4,7 @@
 use crate::{
     compiler::env::environment_set,
     value::Value,
-    vm::{intern, Trampoline}, number, error::wrong_contract, list, fun
+    vm::{intern, Trampoline}, number, error::wrong_contract, list, fun, string
 };
 
 define_proc! {
@@ -117,7 +117,19 @@ define_proc! {
     }
 }
 
-pub fn initialize_r4rs_environment(env: Value) {
+define_proc! {
+    extern "make-parameter", make_parameter(_vm, args) 1, 2 => {
+        let arg = args[0];
+        let guard = if args.len() == 2 {
+            args[1]
+        } else {
+            Value::make_false()
+        };
+        Trampoline::Return(Value::make_parameter(_vm.mutator(), arg, guard))
+    }
+}
+
+pub fn initialize_r5rs_environment(env: Value) {
     environment_set(env, *NOT_NAME, *NOT_PROC);
     environment_set(env, *IS_BOOLEAN_NAME, *IS_BOOLEAN_PROC);
 
@@ -133,8 +145,11 @@ pub fn initialize_r4rs_environment(env: Value) {
     environment_set(env, *SET_CDR_NAME, *SET_CDR_PROC);
     environment_set(env, *IS_NULL_NAME, *IS_NULL_PROC);
     environment_set(env, *GC_NAME, *GC_PROC);
+    environment_set(env, *MAKE_PARAMETER_NAME, *MAKE_PARAMETER_PROC);
+
 
     number::initialize_env(env);
     list::initialize_list(env);
     fun::initialize_fun(env);
+    string::initialize_string(env);
 }

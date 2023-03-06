@@ -21,17 +21,24 @@ use crate::{
     value::{
         ClosedPrimitiveProcedure, Hdr, NativeProcedure, PrimitiveProcedure, Type, Value,
         CHAR_CACHE, SCHEME_MAX_ARGS,
-    },
+    }, jit::cranelift::JIT,
 };
 
 pub struct Runtime {
     symbol_table: SymbolTable,
     contexts: Mutex<*mut Vm>,
+    pub empty_vector: Value,
+    global_roots: Mutex<Vec<Value>>,
+    pub jit: Mutex<JIT>,
 }
 
 impl Runtime {
     pub fn get() -> &'static Self {
         &*RUNTIME
+    }
+
+    pub fn add_global_root(&self, value: Value) {
+        self.global_roots.lock(true).push(value);
     }
 }
 
@@ -76,6 +83,15 @@ impl Object for Runtime {
                 (*vm).trace(visitor);
                 vm = (*vm).next;
             }
+
+            let jit = self.jit.unsafe_get();
+            jit.trace(visitor);
+
+            let roots = self.global_roots.lock(false);
+
+            for root in roots.iter() {
+                root.trace(visitor);
+            }
         }
     }
 }
@@ -84,9 +100,13 @@ static RUNTIME: Lazy<Runtime> = Lazy::new(|| {
     rsgc::heap::heap::heap().add_root(SimpleRoot::new("runtime", "rt", |processor| {
         RUNTIME.trace(processor.visitor());
     }));
+    let empty_vector = crate::value::Vector::new(Thread::current(), 0, Value::make_void()).into();
     Runtime {
         symbol_table: SymbolTable::new(),
+        empty_vector,
+        global_roots: Mutex::new(vec![]),
         contexts: Mutex::new(std::ptr::null_mut()),
+        jit: Mutex::new(JIT::default()),
     }
 });
 
@@ -274,24 +294,31 @@ impl Vm {
 
             let mina;
             let maxa;
-
+            let adjust;
             if rator.primitive_procedurep() {
+                adjust = 1;
                 num_rands -= 1;
                 let proc = rator.downcast_primitive_proc();
                 mina = proc.mina;
                 maxa = proc.maxa;
             } else if rator.closed_primitive_procedurep() {
+
+                adjust = 1;
                 num_rands -= 1;
                 let proc = rator.downcast_closed_primitive_proc();
                 mina = proc.mina;
                 maxa = proc.maxa;
             } else if rator.get_type() == Type::ReturnCont {
+                adjust = 0;
                 mina = 1;
                 maxa = 1;
             } else if rator.get_type() == Type::Parameter {
+                adjust = 0;
+                num_rands -= 1;
                 mina = 0;
                 maxa = 1;
             } else {
+                adjust = 0;
                 // the check is done in native code, so we just skip it here.
                 mina = 0;
                 maxa = SCHEME_MAX_ARGS;
@@ -303,7 +330,7 @@ impl Vm {
                     mina,
                     maxa,
                     num_rands as _,
-                    rands,
+                    &rands[adjust..],
                 );
             }
 
@@ -404,9 +431,10 @@ impl Vm {
                 self.popn(n + 1);
                 return Ok(val);
             } else if rator.parameterp() {
-                match self.invoke_parameter(rator, rands) {
+                match self.invoke_parameter(rator, &rands[1..]) {
                     Trampoline::Return(val) => {
                         self.popn(n + 1);
+                        self.push(k)?;
                         self.push(val)?;
                         n = 1;
                         continue 'apply;

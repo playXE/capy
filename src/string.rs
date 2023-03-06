@@ -1,13 +1,19 @@
+use rsgc::prelude::Handle;
+
 use crate::{
+    compiler::env::environment_set,
     error::{contract_error, make_args_string, wrong_contract},
-    ports::{map_io_error, TextOutputPort},
+    ports_v2::{
+        port_extract_string, port_open_bytevector, port_puts, Port, SCM_PORT_DIRECTION_OUT,
+    },
     raise_exn,
     value::Value,
+    vm::intern,
 };
 
-pub fn do_format<T: TextOutputPort>(
+pub fn do_format(
     who: &str,
-    port: &mut T,
+    port: Handle<Port>,
     format: Option<&str>,
     fpos: usize,
     offset: usize,
@@ -74,7 +80,7 @@ pub fn do_format<T: TextOutputPort>(
             i += 1;
         }
     }
-    println!("done");
+
     if bytes[end] == b'~' && !end_ok {
         return contract_error(
             who,
@@ -94,7 +100,7 @@ pub fn do_format<T: TextOutputPort>(
             return raise_exn!(
                 FailContract,
                 &[],
-                "{}: format string requires {} arguments, given {}{}",
+                "{}: format string requires {} arguments, given {} {}",
                 who,
                 used - offset,
                 argc - offset,
@@ -104,7 +110,7 @@ pub fn do_format<T: TextOutputPort>(
             return raise_exn!(
                 FailContract,
                 &[],
-                "{}: format string requires {} arguments, given {}{}",
+                "{}: format string requires {} arguments, given {} {}",
                 who,
                 used - offset,
                 argc - offset,
@@ -120,8 +126,9 @@ pub fn do_format<T: TextOutputPort>(
     while i < format.len() {
         if bytes[i] == b'~' {
             if start < i {
-                port.put_string(std::str::from_utf8(&bytes[start..i]).unwrap())
-                    .map_err(map_io_error)?;
+                /*port.put_string(std::str::from_utf8(&bytes[start..i]).unwrap())
+                .map_err(map_io_error)?;*/
+                port_puts(port, std::str::from_utf8(&bytes[start..i]).unwrap())?;
             }
             i += 1;
 
@@ -152,24 +159,26 @@ pub fn do_format<T: TextOutputPort>(
             } else {
                 match bytes[i] {
                     b'~' => {
-                        port.put_string("~").map_err(map_io_error)?;
+                        port_puts(port, "~")?;
                     }
 
                     b'%' | b'n' | b'N' => {
-                        port.put_string("\n").map_err(map_io_error)?;
+                        port_puts(port, "\n")?;
+                        //port.put_string("\n").map_err(map_io_error)?;
                     }
 
                     b'c' | b'C' | b'a' | b'A' => {
-                        port.display(args[used]).map_err(map_io_error)?;
+                        port_puts(port, &format!("{}", args[used]))?;
+                        //port.display(args[used]).map_err(map_io_error)?;
                         used += 1;
                     }
                     b's' | b'S' => {
-                        port.write(args[used]).map_err(map_io_error)?;
+                        port_puts(port, &format!("{}", args[used]))?;
                         used += 1;
                     }
 
                     b'v' | b'P' => {
-                        port.display(args[used]).map_err(map_io_error)?;
+                        port_puts(port, &format!("{}", args[used]))?;
                         used += 1;
                     }
 
@@ -183,9 +192,27 @@ pub fn do_format<T: TextOutputPort>(
         i += 1;
     }
     if start < i {
-        port.put_string(std::str::from_utf8(&bytes[start..i]).unwrap())
-            .map_err(map_io_error)?;
+        port_puts(port, std::str::from_utf8(&bytes[start..i]).unwrap())?;
     }
 
     Ok(())
+}
+
+define_proc! {
+    extern "format", format(_vm, args) 0, -1 => {
+        let port = Port::new(_vm.mutator);
+        port_open_bytevector(port, intern("format"), SCM_PORT_DIRECTION_OUT, Value::make_false(), Value::make_false());
+
+        match do_format("format", port, None, 0, 1, args.len() as _, args) {
+            Ok(_) => crate::vm::Trampoline::Return(match port_extract_string(port) {
+                Ok(s) => s,
+                Err(e) => return crate::vm::Trampoline::Throw(e),
+            }) ,
+            Err(e) => crate::vm::Trampoline::Throw(e),
+        }
+    }
+}
+
+pub fn initialize_string(env: Value) {
+    environment_set(env, *FORMAT_NAME, *FORMAT_PROC);
 }

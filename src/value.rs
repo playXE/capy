@@ -9,7 +9,7 @@ use std::mem::size_of;
 
 use crate::{
     util::string::String,
-    vm::{Trampoline, Vm},
+    vm::{Trampoline, Vm, Runtime, intern}, ports_v2::{port_output_pred, port_input_pred, Port, port_open_bytevector, SCM_PORT_DIRECTION_OUT, port_extract_string}, print::Printer,
 };
 
 pub const SCHEME_MAX_ARGS: i32 = 0x3FFFFFFE;
@@ -144,7 +144,26 @@ impl Value {
 
     pub fn portp(self) -> bool {
         let t = self.get_type();
-        t >= Type::StringInputPort && t <= Type::StringOutputPort
+        t == Type::Port
+    }
+
+    pub fn downcast_port(self) -> Handle<Port> {
+        self.handle().downcast::<Port>().unwrap()
+    }
+    pub fn output_portp(self) -> bool {
+        if self.portp() {
+            port_output_pred(self.downcast_port())
+        } else {
+            false
+        }
+    }
+
+    pub fn input_portp(self) -> bool {
+        if self.portp() {
+            port_input_pred(self.downcast_port())
+        } else {
+            false
+        }
     }
 
     /// Obtains value lock. If this value is not heap allocated it is a NO-OP.
@@ -233,23 +252,11 @@ pub enum Type {
     StructureType,
     StructureProperty,
 
-    StringInputPort,
-    FileInputPort,
-    FileOutputPort,
-    BinaryFileInputPort,
-    BinaryFileOutputPort,
-    StdOutputPort,
-    StdErrorPort,
-    StdInputPort,
-    StringOutputPort,
-    BinaryByteVectorInputPort,
-    BinaryByteVectorOutputPort,
-    ByteVectorInputPort,
-    ByteVectorOutputPort,
     Values,
     HashTable,
     Env,
     Boxed,
+    Port,
 }
 
 /// A Scheme object header.
@@ -487,6 +494,16 @@ impl Value {
         unsafe {
             let ptr = self.0 as *const Char;
             (*ptr).val
+        }
+    }
+
+    pub fn make_char_cached(c: char) -> Value {
+        if c.is_ascii() {
+            unsafe {
+                *CHAR_CACHE.get_unchecked(c as usize)
+            }
+        } else {
+            Value::make_char(Thread::current(), c)
         }
     }
 
@@ -895,6 +912,9 @@ impl Value {
     }
 
     pub fn make_vector(thread: &mut Thread, len: u32, init: Value) -> Value {
+        if len == 0 {
+            return Runtime::get().empty_vector;
+        }
         Vector::new(thread, len, init)
     }
 
@@ -1258,11 +1278,17 @@ impl Value {
 impl std::fmt::Debug for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         {
-            use crate::ports::TextOutputPort;
-            let mut port = crate::ports::StringOutputPort::new();
-            match port.write(*self) {
-                Ok(_) => write!(f, "{}", port.string().str()),
-                Err(_) => write!(f, "#<error writing value {:x} to string>", self.raw()),
+            let port = Port::new(Thread::current());
+            port_open_bytevector(port, intern("Debug"), SCM_PORT_DIRECTION_OUT, Value::make_false(), Value::make_false());
+            let mut printer = Printer::new(crate::vm::vm(), port);
+            match printer.write(*self) {
+                Ok(_) => {
+                    match printer.flush() {
+                        Ok(_) => write!(f, "{}", port_extract_string(port).unwrap().str()),
+                        Err(_) => write!(f, "Error flushing port"),
+                    }
+                }
+                Err(_) => write!(f, "Error writing to port"),
             }
         }
     }

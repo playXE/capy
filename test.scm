@@ -1,0 +1,1 @@
+(format "Hello, ~a~a" "world" "!" ) ; => "Hello, world!"

@@ -3,7 +3,6 @@ use std::collections::hash_map::RandomState;
 use crate::compiler::env::environment_get_cell;
 use crate::compiler::get_arity_from_lambda;
 use crate::compiler::lambda_lifting::LiftedLambda;
-use crate::jit::inline::try_inline_application;
 use crate::value::Boxed;
 use crate::value::NativeProcedure;
 use crate::value::Pair;
@@ -17,15 +16,16 @@ use cranelift_frontend::FunctionBuilderContext;
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::Linkage;
 use cranelift_module::{DataContext, FuncId, Module};
+use inline::try_inline_application;
 use rsgc::prelude::Handle;
 use rsgc::prelude::Object;
 use rsgc::system::arraylist::ArrayList;
 use rsgc::system::collections::hashmap::HashMap;
 use rsgc::thread::Thread;
 
-use super::thunks::make_closure;
 use super::thunks;
-
+use super::thunks::make_closure;
+pub mod inline;
 
 #[allow(dead_code)]
 pub struct JIT {
@@ -36,14 +36,20 @@ pub struct JIT {
     functions: Functions,
 }
 
+impl Object for JIT {
+    fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
+        self.functions.trace(visitor);
+    }
+}
+
 impl Default for JIT {
     fn default() -> Self {
         let mut flag_builder = settings::builder();
         flag_builder.set("use_colocated_libcalls", "false").unwrap();
         flag_builder.set("is_pic", "false").unwrap();
-        flag_builder.set("opt_level", "speed").unwrap();
+        flag_builder.set("opt_level", "speed_and_size").unwrap();
         flag_builder.set("enable_alias_analysis", "true").unwrap();
-        
+
         let isa_builder = cranelift_native::builder().unwrap_or_else(|msg| {
             panic!("host machine is not supported: {}", msg);
         });
@@ -84,7 +90,6 @@ impl Default for JIT {
         let make_wrong_arity = {
             let mut sig = module.make_signature();
             sig.params.extend_from_slice(&[
-                AbiParam::new(types::I64),
                 AbiParam::new(types::I64),
                 AbiParam::new(types::I64),
                 AbiParam::new(types::I64),
@@ -245,7 +250,7 @@ impl JIT {
             .declare_anonymous_function(&scm_signature)
             .unwrap();
         let toplevel_lambda = make_toplevel_lambda(toplevel);
-        
+
         self.functions.lifted.put(
             Thread::current(),
             i32::MIN,
@@ -307,13 +312,14 @@ impl JIT {
                 translator.generate_prelude();
 
                 translator.translate();
-                
+
                 translator.builder.finalize();
             }
 
             self.ctx.preopt(self.module.isa()).unwrap();
 
-            let data = self.module
+            let data = self
+                .module
                 .define_function(entry.id, &mut self.ctx)
                 .unwrap();
             compiled.push((data.size, entry.id));
@@ -321,7 +327,7 @@ impl JIT {
         }
 
         self.module.finalize_definitions().unwrap();
-        /* 
+        /*
         for (size, id) in compiled {
             let code = self.module.get_finalized_function(id);
             unsafe {
@@ -356,6 +362,12 @@ pub struct Functions {
     pub lifted: Handle<HashMap<i32, LiftedEntry>>,
 }
 
+impl Object for Functions {
+    fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
+        self.lifted.trace(visitor);
+    }
+}
+
 pub struct FunctionTranslator<'a> {
     pub builder: FunctionBuilder<'a>,
     pub module: &'a mut JITModule,
@@ -375,7 +387,6 @@ pub struct FunctionTranslator<'a> {
 }
 
 impl<'a> FunctionTranslator<'a> {
-
     pub fn heap_check(&mut self, val: Value, tag: crate::value::Type) -> Value {
         let is_smallint = self.check_smallint(val);
         let merge = self.builder.create_block();
@@ -383,14 +394,22 @@ impl<'a> FunctionTranslator<'a> {
         self.builder.append_block_param(merge, types::I64);
 
         let slow = self.builder.create_block();
-        let false_ = self.builder.ins().iconst(types::I64, ScmValue::make_false().raw() as i64);
-        self.builder.ins().brif(is_smallint, merge, &[false_], slow, &[]);
-        
+        let false_ = self
+            .builder
+            .ins()
+            .iconst(types::I64, ScmValue::make_false().raw() as i64);
+        self.builder
+            .ins()
+            .brif(is_smallint, merge, &[false_], slow, &[]);
+
         {
             self.builder.switch_to_block(slow);
             let vtag = self.builder.ins().load(types::I64, MemFlags::new(), val, 0);
             let is_eq = self.builder.ins().icmp_imm(IntCC::Equal, vtag, tag as i64);
-            let true_ = self.builder.ins().iconst(types::I64, ScmValue::make_true().raw() as i64);
+            let true_ = self
+                .builder
+                .ins()
+                .iconst(types::I64, ScmValue::make_true().raw() as i64);
             let res = self.builder.ins().select(is_eq, true_, false_);
             self.builder.ins().jump(merge, &[res]);
         }
@@ -399,23 +418,42 @@ impl<'a> FunctionTranslator<'a> {
         self.builder.block_params(merge)[0]
     }
     /// Is `val` in the range of `start..=end` types?
-    pub fn heap_check_in_range(&mut self, val: Value, start: crate::value::Type, end: crate::value::Type) -> Value {
+    pub fn heap_check_in_range(
+        &mut self,
+        val: Value,
+        start: crate::value::Type,
+        end: crate::value::Type,
+    ) -> Value {
         let is_smallint = self.check_smallint(val);
         let merge = self.builder.create_block();
 
         self.builder.append_block_param(merge, types::I64);
 
         let slow = self.builder.create_block();
-        let false_ = self.builder.ins().iconst(types::I64, ScmValue::make_false().raw() as i64);
-        self.builder.ins().brif(is_smallint, merge, &[false_], slow, &[]);
-        
+        let false_ = self
+            .builder
+            .ins()
+            .iconst(types::I64, ScmValue::make_false().raw() as i64);
+        self.builder
+            .ins()
+            .brif(is_smallint, merge, &[false_], slow, &[]);
+
         {
             self.builder.switch_to_block(slow);
             let vtag = self.builder.ins().load(types::I64, MemFlags::new(), val, 0);
-            let is_greater = self.builder.ins().icmp_imm(IntCC::UnsignedGreaterThan, vtag, start as i64);
-            let is_less = self.builder.ins().icmp_imm(IntCC::UnsignedLessThanOrEqual, vtag, end as i64);
+            let is_greater =
+                self.builder
+                    .ins()
+                    .icmp_imm(IntCC::UnsignedGreaterThan, vtag, start as i64);
+            let is_less =
+                self.builder
+                    .ins()
+                    .icmp_imm(IntCC::UnsignedLessThanOrEqual, vtag, end as i64);
             let is_in_range = self.builder.ins().band(is_greater, is_less);
-            let true_ = self.builder.ins().iconst(types::I64, ScmValue::make_true().raw() as i64);
+            let true_ = self
+                .builder
+                .ins()
+                .iconst(types::I64, ScmValue::make_true().raw() as i64);
             let res = self.builder.ins().select(is_in_range, true_, false_);
             self.builder.ins().jump(merge, &[res]);
         }
@@ -491,7 +529,7 @@ impl<'a> FunctionTranslator<'a> {
         } else {
             IntCC::UnsignedGreaterThanOrEqual
         };
-    
+
         let test = self.builder.ins().icmp_imm(cc, self.argc, n as i64);
 
         let check_ok = self.builder.create_block();
@@ -519,11 +557,10 @@ impl<'a> FunctionTranslator<'a> {
                 this.builder.ins().iconst(types::I64, n as i64)
             };
 
-            let body = this.builder.ins().iconst(types::I64, this.body.raw() as i64);
-            let val = this
-                .builder
-                .ins()
-                .call(wrong_arity, &[this.vm, this.argc, maxa, mina, this.argv, body]);
+            let val = this.builder.ins().call(
+                wrong_arity,
+                &[this.vm, this.argc, maxa, mina, this.argv],
+            );
             let ret = this.builder.inst_results(val)[0];
             /* set error return tag */
             {
@@ -706,10 +743,7 @@ impl<'a> FunctionTranslator<'a> {
             args = args.cdr();
         }
 
-        
-
         if try_inline_application(self, exp.car(), &cranelift_values) {
-            
             return Value::from_u32(0);
         } else {
             let rator = self.compile(exp.car(), false);
@@ -817,7 +851,6 @@ impl<'a> FunctionTranslator<'a> {
 
         closure
     }
-
 
     pub fn generate_global_reference(&mut self, var: ScmValue) -> Value {
         let cell = environment_get_cell(self.genv, var);
@@ -1218,7 +1251,6 @@ impl<'a> FunctionTranslator<'a> {
     }
 }
 
-
 #[allow(dead_code)]
 fn disassemble(mem: &[u8]) {
     use capstone::prelude::*;
@@ -1237,6 +1269,4 @@ fn disassemble(mem: &[u8]) {
     for ins in insns.as_ref() {
         println!("{}", ins);
     }
-
-
 }

@@ -1,4 +1,4 @@
-use super::cranelift::FunctionTranslator;
+use super::FunctionTranslator;
 use crate::{
     compiler::{is_global_ref, is_ref, ref_name},
     value::{Type, Value as ScmValue},
@@ -353,7 +353,7 @@ pub fn inline_type_check<'a>(fx: &mut FunctionTranslator<'a>, op: &str, val: Val
 
         "bytevector?" => fx.heap_check(val, Type::ByteVector),
 
-        "port?" => fx.heap_check_in_range(val, Type::StringInputPort, Type::ByteVectorOutputPort),
+        "port?" => fx.heap_check(val, Type::Port),
 
         "values?" => fx.heap_check(val, Type::Values),
 
