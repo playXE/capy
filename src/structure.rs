@@ -233,7 +233,7 @@ fn prop_accessor(
             prop.structureproperty_name().str()
         };
 
-        return wrong_contract(name, ctc, 0, 1, args).into();
+        return wrong_contract::<()>(name, ctc, 0, 1, args).into();
     } else {
         let v = args[1];
         if v.procedurep() {
@@ -613,7 +613,7 @@ pub fn struct_getter(
 
     if !inst.structp() {
         let pred_name = extract_field_proc_name(st.name, vars);
-        return wrong_contract(name, &pred_name, 0, args.len() as _, args).into();
+        return wrong_contract::<()>(name, &pred_name, 0, args.len() as _, args).into();
     } else if !is_struct_instance(vars[0], inst) {
         return Trampoline::Throw(wrong_struct_type(
             vars,
@@ -651,7 +651,7 @@ pub(crate) fn struct_setter(
 
     if !inst.structp() {
         let pred_name = extract_field_proc_name(st.name, vars);
-        return wrong_contract(name, &pred_name, 0, args.len() as _, args).into();
+        return wrong_contract::<()>(name, &pred_name, 0, args.len() as _, args).into();
     } else if !is_struct_instance(vars[0], inst) {
         return Trampoline::Throw(wrong_struct_type(
             vars,
@@ -740,7 +740,7 @@ define_proc! {
         } else if args[1].symbolp() {
             args[1].strsym().to_string()
         } else {
-            return wrong_contract("struct-type-make-constructor", "symbol?", 1, args.len() as _, args).into();
+            return wrong_contract::<()>("struct-type-make-constructor", "symbol?", 1, args.len() as _, args).into();
         };
 
         let stype = args[0].downcast_structuretype();
@@ -1221,21 +1221,21 @@ pub fn make_struct_type_from_string(
 define_proc! {
     extern "make-struct-type", make_struct_type_proc (vm, args) 4, 8 => {
         if !args[0].symbolp() {
-            return wrong_contract("make-struct-type", "symbol?", 0, args.len() as _, args).into();
+            return wrong_contract::<()>("make-struct-type", "symbol?", 0, args.len() as _, args).into();
         }
 
         if !args[1].falsep() && !args[1].structuretypep() {
-            return wrong_contract("make-struct-type", "(or/c struct-type? #f)", 1, args.len() as _, args).into();
+            return wrong_contract::<()>("make-struct-type", "(or/c struct-type? #f)", 1, args.len() as _, args).into();
         }
 
         let initc = if !args[2].intp() || args[2].int() < 0 {
-            return wrong_contract("make-struct-type", "exact-nonnegative-integer?", 2, args.len() as _, args).into();
+            return wrong_contract::<()>("make-struct-type", "exact-nonnegative-integer?", 2, args.len() as _, args).into();
         } else {
             args[2].int() as usize
         };
 
         let uninitc = if !args[3].intp() || args[3].int() < 0 {
-            return wrong_contract("make-struct-type", "exact-nonnegative-integer?", 3, args.len() as _, args).into();
+            return wrong_contract::<()>("make-struct-type", "exact-nonnegative-integer?", 3, args.len() as _, args).into();
         } else {
             args[3].int() as usize
         };
@@ -1253,14 +1253,14 @@ define_proc! {
                     guard = args[6];
 
                     if !guard.procedurep() {
-                        return wrong_contract("make-struct-type", "procedure?", 6, args.len() as _, args).into();
+                        return wrong_contract::<()>("make-struct-type", "procedure?", 6, args.len() as _, args).into();
                     }
 
                     if args.len() > 7 {
                         cstr_name = args[7];
 
                         if !cstr_name.symbolp() {
-                            return wrong_contract("make-struct-type", "symbol?", 7, args.len() as _, args).into();
+                            return wrong_contract::<()>("make-struct-type", "symbol?", 7, args.len() as _, args).into();
                         }
                     }
                 }

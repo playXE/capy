@@ -1,8 +1,8 @@
 use capy::{
-    compiler::{env::make_environment, expr_to_value, *},
+    compiler::{env::{make_environment, environment_get}, expr_to_value, *},
     jit::cranelift::JIT,
     pp::pretty_print,
-    r5rs::initialize_r5rs_environment,
+    r5rs::{initialize_r5rs_environment, interaction_environment},
     structure::struct_ref,
     util::arraylist::ArrayList,
     value::Value,
@@ -82,10 +82,11 @@ fn main() {
         m.cdddr().set_pair_cdr(toplevel);
 
         let mut jit = JIT::default();
-        let env = make_environment(intern("r4rs"));
-        initialize_r5rs_environment(env);
+        let env = interaction_environment();
 
+        let cstart = std::time::Instant::now();
         let code = jit.compile(env, defs, lambdas, m);
+        println!(">compiled in {:.4}ms", cstart.elapsed().as_micros() as f64 / 1000.0);
         let start = std::time::Instant::now();
         let val = vm.apply(code, &[]);
 
@@ -99,6 +100,7 @@ fn main() {
                 print!("\n");
             }
             Err(e) => {
+
                 println!("{}", struct_ref(e, 0));
             }
         }

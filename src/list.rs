@@ -739,7 +739,7 @@ define_proc! {
         if arg.is_list() {
             Trampoline::Return(Value::make_int(arg.list_length() as _))
         } else {
-            wrong_contract("length", "list?", 0, 1, args).into()
+            wrong_contract::<()>("length", "list?", 0, 1, args).into()
         }
     }
 }

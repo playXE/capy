@@ -33,15 +33,14 @@ pub struct Value(u64);
 
 impl Object for Value {
     fn trace(&self, visitor: &mut dyn Visitor) {
-        /*if self.get_type() > Type::Integer {
+        if self.get_type() > Type::Integer {
             unsafe {
                 let ptr = self.0 as *mut u8;
                 let handle = Handle::<dyn Object>::from_raw(ptr);
                 
                 handle.trace(visitor);
             }
-        }*/
-        visitor.visit_conservative(self as *const Self as *const *const u8, 1);
+        }
     }
 }
 
@@ -679,13 +678,10 @@ pub struct Vector {
 
 impl Object for Vector {
     fn trace_range(&self, from: usize, to: usize, visitor: &mut dyn Visitor) {
-        /*for i in from..to {
+        for i in from..to {
             unsafe {
                 (*self.data.as_ptr().add(i)).trace(visitor);
             }
-        }*/
-        unsafe {
-            visitor.visit_conservative(self.data.as_ptr().add(from).cast(), to - from);
         }
     }
 }
@@ -1035,6 +1031,17 @@ impl Value {
         ByteVector::new(thread, len, init)
     }
 
+    pub fn make_byte_vector_from(thread: &mut Thread, init: impl AsRef<[u8]>) -> Value {
+        let init = init.as_ref();
+        let len = init.len() as u32;
+        let mut bv = ByteVector::new(thread, len, 0);
+        unsafe {
+            
+            bv.byte_vector_as_slice_mut().copy_from_slice(init);
+        }
+        bv
+    }
+
     pub fn downcast_byte_vector<'a>(self) -> Handle<ByteVector> {
         cassert!(self.byte_vectorp());
         unsafe { Handle::from_raw(self.0 as *mut u8) }
@@ -1273,7 +1280,20 @@ impl Value {
     pub fn is_true(self) -> bool {
         !self.falsep()
     }
+
+    pub fn is_exact_integer(self) -> bool {
+        self.intp() || self.get_type() == Type::Bignum
+    }
+
+    pub fn is_nonnegative_exact_smallint(self) -> bool {
+        self.intp() && self.is_nonnegative()
+    }
+
+    pub fn is_nonnegative(self) -> bool {
+        self.intp() && self.int() >= 0
+    }
 }
+
 
 impl std::fmt::Debug for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1349,10 +1369,7 @@ declare_typed! { Parameter : Parameter {
     pub guard: Value
 } }
 
-declare_typed! {
-ReturnCont : ReturnCont {
-
-}}
+declare_typed! { ReturnCont : ReturnCont {}}
 
 declare_typed! { Boxed : Boxed {
     pub value: Value

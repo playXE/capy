@@ -1,8 +1,11 @@
 //! List of R4RS procedure definitions
 
 
+use once_cell::sync::Lazy;
+use rsgc::thread::Thread;
+
 use crate::{
-    compiler::env::environment_set,
+    compiler::env::{environment_set, make_environment},
     value::Value,
     vm::{intern, Trampoline}, number, error::wrong_contract, list, fun, string
 };
@@ -54,7 +57,7 @@ define_proc! {
         if arg.pairp() {
             Trampoline::Return(arg.car())
         } else {
-            wrong_contract("car", "pair?", 0, 1, args).into()
+            wrong_contract::<()>("car", "pair?", 0, 1, args).into()
         }
     }
 }
@@ -65,7 +68,7 @@ define_proc! {
         if arg.pairp() {
             Trampoline::Return(arg.cdr())
         } else {
-            wrong_contract("cdr", "pair?", 0, 1, args).into()
+            wrong_contract::<()>("cdr", "pair?", 0, 1, args).into()
         }
     }
 }
@@ -79,7 +82,7 @@ define_proc! {
             arg1.set_pair_car(arg2);
             Trampoline::Return(Value::make_void())
         } else {
-            wrong_contract("set-car!", "pair?", 0, 2, args).into()
+            wrong_contract::<()>("set-car!", "pair?", 0, 2, args).into()
         }
     }
 }
@@ -93,7 +96,7 @@ define_proc! {
             arg1.set_pair_cdr(arg2);
             Trampoline::Return(Value::make_void())
         } else {
-            wrong_contract("set-cdr!", "pair?", 0, 2, args).into()
+            wrong_contract::<()>("set-cdr!", "pair?", 0, 2, args).into()
         }
     }
 }
@@ -129,6 +132,22 @@ define_proc! {
     }
 }
 
+define_proc! { 
+    extern "display", display(_vm, args) 1, 1 => {
+        let arg = args[0];
+        print!("{}", arg);
+        Trampoline::Return(Value::make_void())
+    }
+}
+
+define_proc! {
+    extern "displayln", displayln(_vm, args) 1, 1 => {
+        let arg = args[0];
+        println!("{}", arg);
+        Trampoline::Return(Value::make_void())
+    }
+}
+
 pub fn initialize_r5rs_environment(env: Value) {
     environment_set(env, *NOT_NAME, *NOT_PROC);
     environment_set(env, *IS_BOOLEAN_NAME, *IS_BOOLEAN_PROC);
@@ -146,10 +165,29 @@ pub fn initialize_r5rs_environment(env: Value) {
     environment_set(env, *IS_NULL_NAME, *IS_NULL_PROC);
     environment_set(env, *GC_NAME, *GC_PROC);
     environment_set(env, *MAKE_PARAMETER_NAME, *MAKE_PARAMETER_PROC);
+    environment_set(env, *DISPLAY_NAME, *DISPLAY_PROC);
+    environment_set(env, *DISPLAYLN_NAME, *DISPLAYLN_PROC);
 
 
     number::initialize_env(env);
     list::initialize_list(env);
     fun::initialize_fun(env);
     string::initialize_string(env);
+}
+
+pub static INTERACTION_ENVIRONMENT: Lazy<Value> = Lazy::new(|| {
+    let env = make_environment(intern("r5rs"));
+    initialize_r5rs_environment(env);
+    let param = Value::make_parameter(Thread::current(), env, Value::make_false());
+    crate::vm::Runtime::get().add_global_root(param);
+    param
+});
+
+
+pub fn interaction_environment() -> Value {
+    *INTERACTION_ENVIRONMENT.parameter_value()
+}
+
+pub fn set_interaction_environment(env: Value) {
+    INTERACTION_ENVIRONMENT.set_parameter_value(env);
 }

@@ -2,7 +2,8 @@
     core_intrinsics,
     thread_local,
     arbitrary_self_types,
-    const_refs_to_cell
+    const_refs_to_cell,
+    try_trait_v2
 )]
 
 #[macro_export]

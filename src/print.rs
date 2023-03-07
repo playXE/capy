@@ -332,7 +332,8 @@ impl<'a> Printer<'a> {
         } else if obj.charp() {
             self.puts(obj.char_val().to_string().as_str())
         } else if obj.strp() {
-            self.write_string(obj.str().as_bytes())
+            self.puts(obj.str())
+            // self.write_string(obj.str().as_bytes())
         } else if obj.symbolp() {
             self.puts(obj.strsym())
         } else if obj.vectorp() {
@@ -393,7 +394,7 @@ impl<'a> Printer<'a> {
         } else if obj.parameterp() {
             self.puts(&format!("#<parameter {:p}>", obj.downcast_parameter()))
         } else {
-            self.puts(&format!("#<unknown {:x}:{:?}>", obj.raw(), obj.get_type()))
+            self.puts(&format!("#<unknown {:x}>", obj.raw()))
         }
     }
 }

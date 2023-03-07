@@ -269,7 +269,9 @@ impl JIT {
 
         unsafe {
             let code = self.module.get_finalized_function(toplevel_id);
-            make_closure(crate::vm::vm(), std::mem::transmute(code), 0, 1, 1)
+            let clos = make_closure(crate::vm::vm(), std::mem::transmute(code), 0, 1, 1);
+            println!("clos: {:x}", clos.raw());
+            clos 
         }
     }
 
@@ -327,8 +329,8 @@ impl JIT {
         }
 
         self.module.finalize_definitions().unwrap();
-        /*
-        for (size, id) in compiled {
+        
+        /*for (size, id) in compiled {
             let code = self.module.get_finalized_function(id);
             unsafe {
                 println!("function {}:", id);

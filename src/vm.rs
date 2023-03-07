@@ -1,6 +1,6 @@
 use std::{
     hint::unreachable_unchecked,
-    intrinsics::{likely, unlikely},
+    intrinsics::{likely, unlikely}, ops::FromResidual, convert::Infallible,
 };
 
 use dashmap::DashMap;
@@ -16,12 +16,13 @@ use rsgc::{
 use crate::{
     error::{wrong_contract, wrong_count},
     fun::get_proc_name,
+    jit::cranelift::JIT,
     raise_exn,
     util::arraylist::ArrayList,
     value::{
         ClosedPrimitiveProcedure, Hdr, NativeProcedure, PrimitiveProcedure, Type, Value,
         CHAR_CACHE, SCHEME_MAX_ARGS,
-    }, jit::cranelift::JIT,
+    }, ports_v2::{SCM_PORT_CODEC_NATIVE, SCM_PORT_EOL_STYLE_NATIVE, SCM_PORT_ERROR_HANDLING_MODE_REPLACE},
 };
 
 pub struct Runtime {
@@ -30,6 +31,7 @@ pub struct Runtime {
     pub empty_vector: Value,
     global_roots: Mutex<Vec<Value>>,
     pub jit: Mutex<JIT>,
+    pub(crate) native_transcoder: Value,
 }
 
 impl Runtime {
@@ -39,6 +41,10 @@ impl Runtime {
 
     pub fn add_global_root(&self, value: Value) {
         self.global_roots.lock(true).push(value);
+    }
+
+    pub fn native_transcoder(&self) -> Value {
+        self.native_transcoder.clone()
     }
 }
 
@@ -69,6 +75,7 @@ impl SymbolTable {
     pub fn mutator(&self) -> &'static mut Thread {
         Thread::current()
     }
+    
 }
 
 impl Object for Runtime {
@@ -76,6 +83,8 @@ impl Object for Runtime {
         self.symbol_table.interned.iter().for_each(|entry| {
             entry.value().trace(visitor);
         });
+
+        self.native_transcoder.trace(visitor);
 
         unsafe {
             let mut vm = *self.contexts.unsafe_get();
@@ -101,12 +110,17 @@ static RUNTIME: Lazy<Runtime> = Lazy::new(|| {
         RUNTIME.trace(processor.visitor());
     }));
     let empty_vector = crate::value::Vector::new(Thread::current(), 0, Value::make_void()).into();
+    let native_transcoder = Value::make_byte_vector(Thread::current(), 3, 0);
+    native_transcoder.byte_vector_set(0, SCM_PORT_CODEC_NATIVE);
+    native_transcoder.byte_vector_set(1, SCM_PORT_EOL_STYLE_NATIVE);
+    native_transcoder.byte_vector_set(2, SCM_PORT_ERROR_HANDLING_MODE_REPLACE);
     Runtime {
         symbol_table: SymbolTable::new(),
         empty_vector,
         global_roots: Mutex::new(vec![]),
         contexts: Mutex::new(std::ptr::null_mut()),
         jit: Mutex::new(JIT::default()),
+        native_transcoder
     }
 });
 
@@ -215,7 +229,6 @@ impl Vm {
         Ok(())
     }
 
-
     #[allow(dead_code)]
     #[inline]
     fn pop(&mut self) {
@@ -302,7 +315,6 @@ impl Vm {
                 mina = proc.mina;
                 maxa = proc.maxa;
             } else if rator.closed_primitive_procedurep() {
-
                 adjust = 1;
                 num_rands -= 1;
                 let proc = rator.downcast_closed_primitive_proc();
@@ -484,6 +496,7 @@ impl Vm {
     /// the continuation is invoked, which returns the value to the Rust code.
     #[inline(always)]
     unsafe fn invoke_native(&mut self, p: Handle<NativeProcedure>, n: usize) -> Trampoline {
+        rsgc::force_on_stack(&p);
         let rands = &self.stack[self.sp - n..self.sp];
 
         let proc = unsafe {
@@ -496,15 +509,13 @@ impl Vm {
         let mut tag = 0;
 
         let res = proc(self, p.captures, rands.as_ptr(), rands.len(), &mut tag);
-
-         
-            match tag {
-                0 => unreachable_unchecked(),
-                1 => Trampoline::Throw(res),
-                2 => Trampoline::TailCall(true),
-                _ => unreachable_unchecked(),
-            }
-        
+        //rsgc::force_on_stack(&p);
+        match tag {
+            0 => unreachable_unchecked(),
+            1 => Trampoline::Throw(res),
+            2 => Trampoline::TailCall(true),
+            _ => unreachable_unchecked(),
+        }
     }
 
     fn invoke_parameter(&mut self, p: Value, rands: &[Value]) -> Trampoline {
@@ -546,7 +557,8 @@ impl Vm {
             code: f,
         };
 
-        unsafe { Value::encode_ptr(Thread::current().allocate(proc).as_ptr()) }
+        let this = unsafe { Value::encode_ptr(Thread::current().allocate(proc).as_ptr()) };
+        this
     }
 
     pub fn make_closed_procedure(
@@ -626,14 +638,7 @@ impl Into<Result<bool, Value>> for Trampoline {
     }
 }
 
-impl Into<Trampoline> for Result<Value, Value> {
-    fn into(self) -> Trampoline {
-        match self {
-            Ok(v) => Trampoline::Return(v),
-            Err(v) => Trampoline::Throw(v),
-        }
-    }
-}
+
 
 /// Accepts a list of (parameter, value) pairs and a callback.
 ///
@@ -658,4 +663,46 @@ pub fn parameterize<T>(
     }
 
     result
+}
+
+impl FromResidual<Result<Infallible, Value>> for Trampoline {
+    fn from_residual(residual: Result<Infallible, Value>) -> Self {
+        match residual {
+            Ok(_) => unreachable!(),
+            Err(v) => Trampoline::Throw(v),
+        }
+    }
+}
+
+impl FromResidual<Result<bool, Value>> for Trampoline {
+    fn from_residual(residual: Result<bool, Value>) -> Self {
+        match residual {
+            Ok(v) => Trampoline::Return(v.into()),
+            Err(v) => Trampoline::Throw(v),
+        }
+    }
+}
+
+impl FromResidual<Result<Value, Value>> for Trampoline {
+    fn from_residual(residual: Result<Value, Value>) -> Self {
+        match residual {
+            Ok(v) => Trampoline::Return(v),
+            Err(v) => Trampoline::Throw(v),
+        }
+    }
+}
+
+impl<T: Into<Value>> Into<Trampoline> for Result<T, Value> {
+    fn into(self) -> Trampoline {
+        match self {
+            Ok(v) => Trampoline::Return(v.into()),
+            Err(v) => Trampoline::Throw(v),
+        }
+    }
+}
+
+impl Into<Value> for () {
+    fn into(self) -> Value {
+        Value::make_void()
+    }
 }

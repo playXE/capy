@@ -23,6 +23,10 @@ macro_rules! raise_exn {
     ($id:ident, $eargs:expr, $msg:literal $(,)? $($arg:expr),*) => {
         $crate::error::finish_exn_impl($crate::error::Exception::$id, $crate::error::EXN_TABLE[$crate::error::Exception::$id as usize].args, $eargs, format!($msg, $($arg),*), None, false)
     };
+
+    ($t: ty, $id:ident, $eargs:expr, $msg:literal $(,)? $($arg:expr),*) => {
+        $crate::error::finish_exn_impl::<$t>($crate::error::Exception::$id, $crate::error::EXN_TABLE[$crate::error::Exception::$id as usize].args, $eargs, format!($msg, $($arg),*), None, false)
+    };
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -614,7 +618,7 @@ fn do_out_of_range(
         raise_exn!(
             FailContract,
             &[],
-            "{}: {}index is {}\n  {}index: {}\n  {}{}{}{}]\n  {}: {}",
+            "{}: {} index is {}\n  {}index: {}\n  {}{}{}{}]\n  {}: {}",
             name,
             which,
             if small_end {
@@ -679,32 +683,32 @@ pub fn out_of_range<T>(
 
 fn do_raise_range_error(who: &str, args: &[Value]) -> Trampoline {
     if !args[0].symbolp() {
-        return wrong_contract(who, "symbol?", 0, args.len() as _, args).into();
+        return wrong_contract::<()>(who, "symbol?", 0, args.len() as _, args).into();
     }
 
     if !args[1].strp() {
-        return wrong_contract(who, "string?", 1, args.len() as _, args).into();
+        return wrong_contract::<()>(who, "string?", 1, args.len() as _, args).into();
     }
 
     if !args[2].strp() {
-        return wrong_contract(who, "string?", 2, args.len() as _, args).into();
+        return wrong_contract::<()>(who, "string?", 2, args.len() as _, args).into();
     }
 
     if !args[3].intp() || args[3].get_type() != Type::Bignum {
-        return wrong_contract(who, "exact-integer?", 3, args.len() as _, args).into();
+        return wrong_contract::<()>(who, "exact-integer?", 3, args.len() as _, args).into();
     }
 
     if !args[5].intp() || args[5].get_type() != Type::Bignum {
-        return wrong_contract(who, "exact-integer?", 5, args.len() as _, args).into();
+        return wrong_contract::<()>(who, "exact-integer?", 5, args.len() as _, args).into();
     }
 
     if !args[6].intp() || args[6].get_type() != Type::Bignum {
-        return wrong_contract(who, "exact-integer?", 6, args.len() as _, args).into();
+        return wrong_contract::<()>(who, "exact-integer?", 6, args.len() as _, args).into();
     }
 
     if args.len() > 7 {
         if !args[7].falsep() && !args[7].intp() && args[7].get_type() != Type::Bignum {
-            return wrong_contract(who, "(or/c exact-integer? #f)", 7, args.len() as _, args)
+            return wrong_contract::<()>(who, "(or/c exact-integer? #f)", 7, args.len() as _, args)
                 .into();
         }
     }

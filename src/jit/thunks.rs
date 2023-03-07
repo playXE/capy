@@ -31,10 +31,8 @@ pub unsafe extern "C" fn grow_tail_rands(vm: &mut Vm, to: usize) {
 
 #[no_mangle]
 pub unsafe extern "C" fn make_closure(vm: &mut Vm, code: extern "C" fn(&mut Vm, Value, *const Value, usize, &mut u8) -> Value, nenv: usize, mina: usize, maxa: usize) -> Value {
-    vm.mutator().safepoint();
     let env = Value::make_vector(vm.mutator, nenv as _, Value::make_null());
     let proc = Value::make_nativeprocedure(vm.mutator, code as usize, mina as _, maxa as _, env);
-
     proc
 }
 
