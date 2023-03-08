@@ -34,6 +34,7 @@ use crate::{raise_exn, value::SCHEME_MAX_ARGS};
 use once_cell::sync::Lazy;
 use r7rs_parser::expr::Interner;
 use rsgc::thread::Thread;
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 pub mod env;
 
@@ -870,7 +871,6 @@ pub mod cps {
                 _ => unreachable!(),
             }
         } else {
-
             if aexp == intern("%call/cc") {
                 let k = kunique_name();
                 let r = runique_name();
@@ -878,9 +878,15 @@ pub mod cps {
                 let k2 = kunique_name();
                 let formals = Value::make_list(Thread::current(), &[k, r]);
 
-
                 let resume = make_call(k, Value::make_cons(r2, Value::make_null()));
-                let resume_lambda = Value::make_list(Thread::current(), &[intern("lambda"), Value::make_list(Thread::current(), &[k2, r2]), resume]);
+                let resume_lambda = Value::make_list(
+                    Thread::current(),
+                    &[
+                        intern("lambda"),
+                        Value::make_list(Thread::current(), &[k2, r2]),
+                        resume,
+                    ],
+                );
 
                 let body = make_call(r, Value::make_list(Thread::current(), &[k, resume_lambda]));
 
@@ -949,17 +955,29 @@ pub mod cps {
                 }
 
                 "#%app" => {
-                    let rv = runique_name();
-                    let cont = Value::make_list(
-                        Thread::current(),
-                        &[
-                            intern("lambda"),
-                            Value::make_cons(rv, Value::make_null()),
-                            k(rv),
-                        ],
-                    );
+                    let fun = exp.cadr();
 
-                    t_c(exp, cont)
+                    if false && fun.symbolp() && PRIMITIVE_LIST.contains(fun.strsym()) {
+                        let args = exp.cddr();
+
+                        let args = t_k_star(args, &|aexp| aexp);
+
+                        k(Value::make_cons(
+                            intern("#%prim"),
+                            Value::make_cons(fun, args),
+                        ))
+                    } else {
+                        let rv = runique_name();
+                        let cont = Value::make_list(
+                            Thread::current(),
+                            &[
+                                intern("lambda"),
+                                Value::make_cons(rv, Value::make_null()),
+                                k(rv),
+                            ],
+                        );
+                        t_c(exp, cont)
+                    }
                 }
 
                 _ => unreachable!("invalid expression: {}", exp),
@@ -1034,12 +1052,24 @@ pub mod cps {
                     let fun = exp.cadr();
                     let args = exp.cddr();
 
-                    t_k(fun, &|f| {
-                        t_k_star(args, &|aexps| make_call(f, Value::make_cons(c, aexps)))
-                    })
+                    if false && fun.symbolp() && PRIMITIVE_LIST.contains(fun.strsym()) {
+                        let args = t_k_star(args, &|aexp| aexp);
+
+                        make_call(
+                            c,
+                            Value::make_cons(
+                                Value::make_cons(intern("#%prim"), Value::make_cons(fun, args)),
+                                Value::make_null(),
+                            ),
+                        )
+                    } else {
+                        t_k(fun, &|f| {
+                            t_k_star(args, &|aexps| make_call(f, Value::make_cons(c, aexps)))
+                        })
+                    }
                 }
 
-                "lambda" => m(exp),
+                "lambda" => make_call(c, Value::make_list(Thread::current(), &[m(exp)])),
 
                 _ => unreachable!("unknwon expression: {}", exp),
             }
@@ -1059,18 +1089,18 @@ pub mod cps {
     }
 }
 
-
 pub mod redex {
-    use crate::bool::equal;
-
     use super::*;
 
     /// Redex removal pass. It will iterate `n` times and remove redexes.
     pub fn redex_transform(e: Value, n: &mut usize) -> Value {
+        if *n == 0 {
+            return e;
+        }
         *n -= 1;
         let new = redex_convert(e);
         if *n == 0 {
-            new 
+            new
         } else {
             redex_transform(new, n)
         }
@@ -1082,15 +1112,22 @@ pub mod redex {
                 "#%app" => {
                     let proc = e.cadr();
                     let args = e.cddr();
-
+                    
                     let proc = redex_convert(proc);
                     let args = Value::list_map(Thread::current(), args, redex_convert);
 
                     make_call(proc, args)
                 }
-                "lambda" => {
-                    redex_lambda(e)
+                "#%prim" => {
+                    let proc = e.cadr();
+                    let args = e.cddr();
+
+                    let proc = redex_convert(proc);
+                    let args = Value::list_map(Thread::current(), args, redex_convert);
+
+                    Value::make_cons(intern("#%prim"), Value::make_cons(proc, args))
                 }
+                "lambda" => redex_lambda(e),
 
                 "set!" => {
                     let var = redex_convert(e.cadr());
@@ -1103,14 +1140,7 @@ pub mod redex {
                     let var = redex_convert(e.cadr());
                     let val = redex_convert(e.caddr());
 
-                    Value::make_list(
-                        Thread::current(),
-                        &[
-                            intern("#%set-box!"),
-                            var,
-                            val,
-                        ],
-                    )
+                    Value::make_list(Thread::current(), &[intern("#%set-box!"), var, val])
                 }
 
                 "if" => {
@@ -1123,44 +1153,46 @@ pub mod redex {
 
                 "begin" => {
                     let exprs = Value::list_map(Thread::current(), e.cdr(), redex_convert);
-                
+
                     make_begin2(exprs)
                 }
 
-                _ => e
+                _ => e,
             }
         } else {
             e
         }
     }
 
+    fn redex_convert_body(body: Value) -> Value {
+        if body.nullp() {
+            body
+        } else if body.cdr().nullp() {
+            redex_convert(body.car())
+        } else {
+            Value::list_map(Thread::current(), body, redex_convert)
+        }
+    }
 
-    /// 
-    /// ```text
+    ///
+    /// ```text 
     /// (lambda (a1 a2) (foo a1 a2))
     /// ->
     /// (foo a1 a2)
     /// ```
     fn redex_lambda(e: Value) -> Value {
         let formals = e.cadr();
-        let body = e.caddr();
+        let body = redex_convert_body(e.cddr());
+
+        Value::make_list(
+            Thread::current(),
+            &[
+                intern("lambda"),
+                formals,
+                body,
+            ],
+        )
         
-        if body.is_list() 
-            && body.pairp()
-            && body.car().strsym() == "#%app"
-            
-        {
-            println!("body: {}", e);
-            // check if application arguments are equal to formals:
-            if equal(formals, body.cddr()) {
-                println!("reduce to: {}", body.cadr());
-                body.cadr()
-            } else {
-                e
-            }
-        } else {
-            e
-        }
     }
 }
 
@@ -2350,8 +2382,6 @@ pub fn make_null_terminated(formals: Value) -> Value {
     }
 }
 
-
-
 pub fn desugar(exp: Value, defs: &mut Value) -> Result<Value, Value> {
     let exp = pass1::desugar_definitions(exp, defs)?;
     Ok(exp)
@@ -2392,3 +2422,123 @@ pub fn is_global_ref(exp: Value) -> bool {
 pub fn ref_name(exp: Value) -> Value {
     exp.cadr()
 }
+
+/// List of primitive procedures that can be directly called from CPSed code
+/// without going through CPS conversion.
+pub static PRIMITIVE_LIST: Lazy<HashSet<&'static str>> = Lazy::new(|| {
+    [
+        "=",
+        "+",
+        "-",
+        "*",
+        "/",
+        "cons",
+        "car",
+        "cdr",
+        "null?",
+        "pair?",
+        "symbol?",
+        "string?",
+        "number?",
+        "boolean?",
+        "procedure?",
+        "vector?",
+        "vector-ref",
+        "vector-set!",
+        "vector-length",
+        "vector->list",
+        "list->vector",
+        "vector-fill!",
+        "vector-copy!",
+        "vector-copy",
+        "vector-append",
+        "string=?",
+        "string<?",
+        "string>?",
+        "string<=?",
+        "string>=?",
+        "string-length",
+        "string-ref",
+        "string-set!",
+        "string-append",
+        "string->list",
+        "list->string",
+        "string-copy",
+        "string-copy!",
+        "string-fill!",
+        "string->vector",
+        "vector->string",
+        "char=?",
+        "char<?",
+        "char>?",
+        "char<=?",
+        "char>=?",
+        "char-alphabetic?",
+        "char-numeric?",
+        "char-whitespace?",
+        "char-upper-case?",
+        "char-lower-case?",
+        "char->integer",
+        "integer->char",
+        "char-upcase",
+        "char-downcase",
+        "make-vector",
+        "make-string",
+        "make-bytevector",
+        "string",
+        "bytevector?",
+        "bytevector",
+        "bytevector-length",
+        "bytevector-u8-ref",
+        "bytevector-s8-ref",
+        "bytevector-u8-set!",
+        "bytevector-s8-set!",
+        "bytevector-copy",
+        "bytevector-copy!",
+        "bytevector-append",
+        "bytevector->list",
+        "list->bytevector",
+        "bytevector->string",
+        "string->bytevector",
+        "bytevector-fill!",
+        "exact->inexact",
+        "inexact->exact",
+        "exact?",
+        "inexact?",
+        "number->string",
+        "string->number",
+        "floor",
+        "ceiling",
+        "truncate",
+        "round",
+        "exp",
+        "log",
+        "sin",
+        "cos",
+        "tan",
+        "asin",
+        "acos",
+        "atan",
+        "sqrt",
+        "expt",
+        "abs",
+        "quotient",
+        "remainder",
+        "modulo",
+        "gcd",
+        "eq?",
+        "eqv?",
+        "equal?",
+        "not",
+        "set-car!",
+        "set-cdr!",
+        "eof-object?",
+        "eof-object",
+        "port?",
+        "or",
+        "and",
+    ]
+    .iter()
+    .copied()
+    .collect()
+});

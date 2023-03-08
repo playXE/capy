@@ -261,6 +261,16 @@ pub enum Type {
     Port,
 }
 
+impl Type {
+    pub fn from_u8(t: u8) -> Option<Type> {
+        if t > Type::Port as u8 {
+            None
+        } else {
+            Some(unsafe { std::mem::transmute(t) })
+        }
+    }
+}
+
 /// A Scheme object header.
 ///
 /// It stores object type and some internal flags.

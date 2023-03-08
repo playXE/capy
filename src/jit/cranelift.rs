@@ -270,7 +270,7 @@ impl JIT {
         unsafe {
             let code = self.module.get_finalized_function(toplevel_id);
             let clos = make_closure(crate::vm::vm(), std::mem::transmute(code), 0, 1, 1);
-            println!("clos: {:x}", clos.raw());
+           
             clos 
         }
     }

@@ -159,6 +159,7 @@ pub struct Vm {
     stack: Vec<Value>,
     pub(crate) tail_rands: ArrayList<Value>,
     pub(crate) tail_rator: Value,
+    pub(crate) winders: Value,
 }
 
 pub static RETURN_CONT: Lazy<Value> = Lazy::new(|| {
@@ -180,6 +181,7 @@ impl Vm {
             sp: 0,
             stack,
             tail_rator: Value::make_void(),
+            winders: Value::make_null(),
         }
     }
     pub fn make_char(&mut self, c: char) -> Value {
@@ -397,6 +399,14 @@ impl Vm {
                         n = self.tail_rands.len() + push_cont as usize;
                         continue 'apply;
                     }
+
+                    Trampoline::ReturnReplaceCont(k) => {
+                        self.popn(n + 1);
+                        self.push(self.tail_rator)?;
+                        self.push(k)?;
+                        n = 1;
+                        continue 'apply
+                    }
                 }
             } else if rator.closed_primitive_procedurep() {
                 let rator = rator.downcast_closed_primitive_proc();
@@ -437,6 +447,14 @@ impl Vm {
                         n = self.tail_rands.len() + push_cont as usize;
                         continue 'apply;
                     }
+
+                    Trampoline::ReturnReplaceCont(k) => {
+                        self.popn(n + 1);
+                        self.push(self.tail_rator)?;
+                        self.push(k)?;
+                        n = 1;
+                        continue 'apply;
+                    }
                 }
             } else if rator.returncontp() {
                 let val = rands[0];
@@ -465,6 +483,8 @@ impl Vm {
                         n = self.tail_rands.len() + 1;
                         continue 'apply;
                     }
+
+                    _ => unreachable!()
                 }
             } else {
                 unreachable_unchecked()
@@ -601,6 +621,7 @@ impl Object for Vm {
 
         self.tail_rator.trace(visitor);
         self.tail_rands.trace(visitor);
+        self.winders.trace(visitor);
     }
 }
 
@@ -612,10 +633,13 @@ pub enum Trampoline {
     /// In case of primitive procedures, the value that is stored in the variant
     /// will be passed as an arugment to the continuation.
     Return(Value) = 0,
+    
     /// Throw a value from a procedure.
     Throw(Value) = 1,
     /// Tail call a procedure
     TailCall(bool) = 2,
+
+    ReturnReplaceCont(Value) = 3,
 }
 
 impl Into<Result<Value, Value>> for Trampoline {
@@ -623,7 +647,8 @@ impl Into<Result<Value, Value>> for Trampoline {
         match self {
             Trampoline::Return(v) => Ok(v),
             Trampoline::Throw(v) => Err(v),
-            Trampoline::TailCall(_) => unreachable!(),
+            _ => unreachable!(),
+
         }
     }
 }
@@ -633,7 +658,7 @@ impl Into<Result<bool, Value>> for Trampoline {
         match self {
             Trampoline::Return(v) => Ok(v.is_true()),
             Trampoline::Throw(v) => Err(v),
-            Trampoline::TailCall(_) => unreachable!(),
+            _ => unreachable!(),
         }
     }
 }

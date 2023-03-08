@@ -419,6 +419,7 @@ impl Value {
         rec(thread, set1, set2)
     }
 
+
     pub fn list_intersection_many(thread: &mut Thread, sets: &[Value]) -> Value {
         fn rec(thread: &mut Thread, set1: Value, sets: &[Value]) -> Value {
             if sets.is_empty() {
@@ -483,6 +484,23 @@ impl Value {
             list = list.cdr();
         }
     }
+
+    /// Returns the list after the first pos elements of lst.
+    pub fn list_tail(mut lst: Value, pos: usize) -> Value {
+        if !lst.is_list() {
+            panic!("list_tail: list is not a list");
+        }
+
+        for _ in 0..pos {
+            if lst.nullp() {
+                panic!("list_tail: list is too short");
+            }
+
+            lst = lst.cdr();
+        }
+
+        lst
+    }   
 }
 
 macro_rules! gen_ass {
@@ -750,6 +768,33 @@ define_proc! {
     }
 }
 
+define_proc! {
+    extern "list-tail", list_tail(_vm, args) 2, 2 => {
+        let arg = args[0];
+        let n = args[1];
+        if arg.is_list() {
+            if n.intp() {
+                let n = n.int() as usize;
+                let mut lst = arg;
+
+                for _ in 0..n {
+                    if lst.pairp() {
+                        lst = lst.cdr();
+                    } else {
+                        return wrong_contract::<()>("list-tail", &format!("(or/c list? (eq? length {})", n), 0, 1, args).into();
+                    }
+                }
+
+                Trampoline::Return(lst)
+            } else {
+                wrong_contract::<()>("list-tail", "exact-integer?", 1, 1, args).into()
+            }
+        } else {
+            wrong_contract::<()>("list-tail", "list?", 0, 1, args).into()
+        }
+    }
+}
+
 
 pub fn initialize_list(env: Value) {
     environment_set(env, intern("assv"), *ASSV_PROC);
@@ -762,6 +807,7 @@ pub fn initialize_list(env: Value) {
     environment_set(env, intern("list?"), *IS_LIST_PROC);
     environment_set(env, intern("length"), *LENGTH_PROC);
     environment_set(env, intern("list*"), *LIST_STAR_PROC);
+    environment_set(env, intern("list-tail"), *LIST_TAIL_PROC);
 
 
 }

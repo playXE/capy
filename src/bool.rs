@@ -212,3 +212,15 @@ pub static EQUAL_PROC: Lazy<Value> = Lazy::new(|| {
         2,
     )
 });
+
+define_proc! {
+    extern "not", not(_vm, args) 1, 1 => {
+        let obj = args[0];
+
+        if obj.falsep() {
+            return Trampoline::Return(Value::make_true());
+        }
+
+        return Trampoline::Return(Value::make_false());
+    }
+}

@@ -28,3 +28,9 @@ cranelift-module = "0.93"
 capstone = "0.11"
 [profile.release]
 opt-level = "z"
+
+[[bin]]
+name = "bootstrap"
+
+[[bin]]
+name = "capy"

@@ -1,16 +1,14 @@
 use capy::{
     compiler::{expr_to_value, *},
-    jit::cranelift::JIT,
-    pp::pretty_print,
-    r5rs::interaction_environment,
     structure::struct_ref,
     util::arraylist::ArrayList,
     value::Value,
-    vm::intern,
+    vm::intern, fasl::FaslWriter, pp::pretty_print,
 };
 use r7rs_parser::{expr::NoIntern, parser::Parser};
 use rsgc::prelude::*;
 use termcolor::StandardStream;
+
 
 fn main() {
     env_logger::init();
@@ -20,7 +18,16 @@ fn main() {
         heap.add_core_root_set();
         let vm = capy::vm::vm();
 
-        let src = std::fs::read_to_string("test.scm").unwrap();
+        let slib_path = std::env::var("SCHEME_LIBRARY_PATH").unwrap_or_else(|_| {
+            std::env::current_dir()
+                .unwrap()
+                .join("lib")
+                .to_str()
+                .unwrap()
+                .to_string()
+        });
+
+        let src = std::fs::read_to_string(&format!("{}/init.scm", slib_path)).unwrap();
 
         let mut nointern = NoIntern;
         let mut parser = Parser::new(&mut nointern, &src, false);
@@ -38,7 +45,7 @@ fn main() {
             exprs2.push(vm.mutator(), expr_to_value(&nointern, &e));
         }
 
-        let mut st = StandardStream::stdout(termcolor::ColorChoice::Always);
+      
         let body = Value::make_list(vm.mutator(), &exprs2);
 
         let begin = make_begin2(body);
@@ -52,7 +59,12 @@ fn main() {
             }
         };
 
-        let cps = redex::redex_transform(cps::t_c(desugared, intern("|%toplevel-cont")), &mut 2);
+        let cps = redex::redex_transform(cps::t_c(desugared, intern("|%toplevel-cont")), &mut 0);
+
+        let mut st = StandardStream::stdout(termcolor::ColorChoice::Always);
+
+        pretty_print(cps, &mut st).unwrap();
+        println!("");
 
         let toplevel_code = Value::make_list(
             vm.mutator(),
@@ -63,11 +75,8 @@ fn main() {
             ],
         );
 
-        println!(">after cps conversion:");
-        pretty_print(toplevel_code, &mut st).unwrap();
-        print!("\n");
 
-
+        
         let uncovered = uncover_assigned(toplevel_code);
         let assigned = convert_assignments(uncovered);
 
@@ -77,12 +86,15 @@ fn main() {
         let (toplevel, lambdas) = lambda_lifting::lift_lambdas(m.cdddr().cdr(), true);
         m.cdddr().set_pair_cdr(toplevel);
 
-        let mut jit = JIT::default();
-        let env = interaction_environment();
+        let mut file = std::fs::File::create(&format!("{}/init.fasl", slib_path)).unwrap();
 
-        let cstart = std::time::Instant::now();
-        let code = jit.compile(env, defs, lambdas, m);
-        println!(
+        let mut writer = FaslWriter::new(&mut file);
+
+        writer.start(defs, m, lambdas).unwrap();
+
+        println!("init.fasl written");
+
+        /*println!(
             ">compiled in {:.4}ms",
             cstart.elapsed().as_micros() as f64 / 1000.0
         );
@@ -101,7 +113,7 @@ fn main() {
             Err(e) => {
                 println!("{}", struct_ref(e, 0));
             }
-        }
+        }*/
 
         Ok(())
     });

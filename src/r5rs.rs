@@ -1,13 +1,14 @@
 //! List of R4RS procedure definitions
 
-
 use once_cell::sync::Lazy;
 use rsgc::thread::Thread;
 
 use crate::{
     compiler::env::{environment_set, make_environment},
+    error::wrong_contract,
+    fun, list, number, ports, string,
     value::Value,
-    vm::{intern, Trampoline}, number, error::wrong_contract, list, fun, string, ports
+    vm::{intern, Trampoline, Runtime},
 };
 
 define_proc! {
@@ -73,6 +74,7 @@ define_proc! {
     }
 }
 
+
 define_proc! {
     extern "set-car!", set_car(vm, args) 2, 2 => {
         let arg1 = args[0];
@@ -112,7 +114,6 @@ define_proc! {
     }
 }
 
-
 define_proc! {
     extern "gc", gc(_vm, _args) 0, 0 => {
         rsgc::heap::heap::heap().request_gc();
@@ -132,6 +133,52 @@ define_proc! {
     }
 }
 
+define_proc! {
+    extern "%compile", compile(vm, args) 1, 2 => {
+        let env = if args.len() > 1 {
+            if args[1].environmentp() {
+                args[1]
+            } else {
+                return wrong_contract::<()>("%compile", "environment?", 1, 2, args).into()
+            }
+        } else {
+            interaction_environment()
+        };
+
+        let code = args[0];
+
+        let mut defs = Value::make_null();
+        let desugared = crate::compiler::desugar(code, &mut defs)?;
+
+        let cps = crate::compiler::redex::redex_transform(crate::compiler::cps::t_c(desugared, intern("|%toplevel-cont")), &mut 2);
+
+        let toplevel_code = Value::make_list(
+            vm.mutator(),
+            &[
+                intern("lambda"),
+                Value::make_list(Thread::current(), &[intern("|%toplevel-cont")]),
+                cps,
+            ],
+        );
+
+        let uncovered = crate::compiler::uncover_assigned(toplevel_code);
+        let assigned = crate::compiler::convert_assignments(uncovered);
+
+
+        let m = crate::compiler::meaning::meaning(assigned, Value::make_null(), true);
+    
+        let (toplevel, lambdas) = crate::compiler::lambda_lifting::lift_lambdas(m.cdddr().cdr(), true);
+        m.cdddr().set_pair_cdr(toplevel);
+
+        let code = Runtime::get().jit.lock(true).compile(env, defs, lambdas, m);
+
+        Trampoline::Return(code)
+    }
+}
+
+
+
+
 pub fn initialize_r5rs_environment(env: Value) {
     environment_set(env, *NOT_NAME, *NOT_PROC);
     environment_set(env, *IS_BOOLEAN_NAME, *IS_BOOLEAN_PROC);
@@ -139,6 +186,7 @@ pub fn initialize_r5rs_environment(env: Value) {
     environment_set(env, intern("eq?"), *crate::bool::EQ_PROC);
     environment_set(env, intern("eqv?"), *crate::bool::EQV_PROC);
     environment_set(env, intern("equal?"), *crate::bool::EQUAL_PROC);
+    environment_set(env, intern("not"), *crate::bool::NOT_PROC);
 
     environment_set(env, *IS_PAIR_NAME, *IS_PAIR_PROC);
     environment_set(env, *CONS_NAME, *CONS_PROC);
@@ -149,12 +197,15 @@ pub fn initialize_r5rs_environment(env: Value) {
     environment_set(env, *IS_NULL_NAME, *IS_NULL_PROC);
     environment_set(env, *GC_NAME, *GC_PROC);
     environment_set(env, *MAKE_PARAMETER_NAME, *MAKE_PARAMETER_PROC);
-   
+
+    environment_set(env, *COMPILE_NAME, *COMPILE_PROC);
+
     ports::initialize_port(env);
     number::initialize_env(env);
     list::initialize_list(env);
     fun::initialize_fun(env);
     string::initialize_string(env);
+    super::vector::initialize_vector(env);
 }
 
 pub static INTERACTION_ENVIRONMENT: Lazy<Value> = Lazy::new(|| {
@@ -164,7 +215,6 @@ pub static INTERACTION_ENVIRONMENT: Lazy<Value> = Lazy::new(|| {
     crate::vm::Runtime::get().add_global_root(param);
     param
 });
-
 
 pub fn interaction_environment() -> Value {
     *INTERACTION_ENVIRONMENT.parameter_value()

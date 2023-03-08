@@ -53,6 +53,10 @@ impl Value {
         cassert!(is_environment(self));
         unsafe { Handle::from_raw(self.raw() as *mut u8) }
     }
+
+    pub fn environmentp(self) -> bool {
+        is_environment(self)
+    }
 }
 
 pub fn environment_name(env: Value) -> Value {
