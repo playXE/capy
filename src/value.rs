@@ -8,8 +8,13 @@ use rsgc::{
 use std::mem::size_of;
 
 use crate::{
+    ports_v2::{
+        port_extract_string, port_input_pred, port_open_bytevector, port_output_pred, Port,
+        SCM_PORT_DIRECTION_OUT,
+    },
+    print::Printer,
     util::string::String,
-    vm::{Trampoline, Vm, Runtime, intern}, ports_v2::{port_output_pred, port_input_pred, Port, port_open_bytevector, SCM_PORT_DIRECTION_OUT, port_extract_string}, print::Printer,
+    vm::{intern, Runtime, Trampoline, Vm},
 };
 
 pub const SCHEME_MAX_ARGS: i32 = 0x3FFFFFFE;
@@ -37,13 +42,12 @@ impl Object for Value {
             unsafe {
                 let ptr = self.0 as *mut u8;
                 let handle = Handle::<dyn Object>::from_raw(ptr);
-                
+
                 handle.trace(visitor);
             }
         }
     }
 }
-
 
 impl Allocation for Value {}
 
@@ -195,7 +199,6 @@ impl Drop for ValueLock {
     }
 }
 
-
 static TRUE_VAL: Hdr = Hdr::new(Type::True);
 static FALSE_VAL: Hdr = Hdr::new(Type::False);
 static UNDEF_VAL: Hdr = Hdr::new(Type::Undef);
@@ -236,7 +239,7 @@ pub enum Type {
     Identifier,
     Gloc,
     Module,
-    
+
     PrimitiveProcedure,
     ClosedPrimitiveProcedure,
     Parameter,
@@ -498,9 +501,7 @@ impl Value {
 
     pub fn make_char_cached(c: char) -> Value {
         if c.is_ascii() {
-            unsafe {
-                *CHAR_CACHE.get_unchecked(c as usize)
-            }
+            unsafe { *CHAR_CACHE.get_unchecked(c as usize) }
         } else {
             Value::make_char(Thread::current(), c)
         }
@@ -1034,11 +1035,10 @@ impl Value {
     pub fn make_byte_vector_from(thread: &mut Thread, init: impl AsRef<[u8]>) -> Value {
         let init = init.as_ref();
         let len = init.len() as u32;
-        let mut bv = ByteVector::new(thread, len, 0);
-        unsafe {
-            
-            bv.byte_vector_as_slice_mut().copy_from_slice(init);
-        }
+        let bv = ByteVector::new(thread, len, 0);
+
+        bv.byte_vector_as_slice_mut().copy_from_slice(init);
+
         bv
     }
 
@@ -1294,20 +1294,23 @@ impl Value {
     }
 }
 
-
 impl std::fmt::Debug for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         {
             let port = Port::new(Thread::current());
-            port_open_bytevector(port, intern("Debug"), SCM_PORT_DIRECTION_OUT, Value::make_false(), Value::make_false());
+            port_open_bytevector(
+                port,
+                intern("Debug"),
+                SCM_PORT_DIRECTION_OUT,
+                Value::make_false(),
+                Value::make_false(),
+            );
             let mut printer = Printer::new(crate::vm::vm(), port);
             match printer.write(*self) {
-                Ok(_) => {
-                    match printer.flush() {
-                        Ok(_) => write!(f, "{}", port_extract_string(port).unwrap().str()),
-                        Err(_) => write!(f, "Error flushing port"),
-                    }
-                }
+                Ok(_) => match printer.flush() {
+                    Ok(_) => write!(f, "{}", port_extract_string(port).unwrap().str()),
+                    Err(_) => write!(f, "Error flushing port"),
+                },
                 Err(_) => write!(f, "Error writing to port"),
             }
         }

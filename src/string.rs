@@ -8,7 +8,7 @@ use crate::{
     },
     raise_exn,
     value::Value,
-    vm::intern,
+    vm::{intern, vm}, print::Printer,
 };
 
 pub fn do_format(
@@ -123,12 +123,14 @@ pub fn do_format(
     let mut i = 0;
     let mut start = 0;
 
+    let mut printer = Printer::new(vm(), port);
+
     while i < format.len() {
         if bytes[i] == b'~' {
             if start < i {
                 /*port.put_string(std::str::from_utf8(&bytes[start..i]).unwrap())
                 .map_err(map_io_error)?;*/
-                port_puts(port, std::str::from_utf8(&bytes[start..i]).unwrap())?;
+                printer.puts(std::str::from_utf8(&bytes[start..i]).unwrap())?;
             }
             i += 1;
 
@@ -159,26 +161,31 @@ pub fn do_format(
             } else {
                 match bytes[i] {
                     b'~' => {
-                        port_puts(port, "~")?;
+                        printer.puts("~")?;
                     }
 
                     b'%' | b'n' | b'N' => {
-                        port_puts(port, "\n")?;
+                        printer.puts("\n")?;
                         //port.put_string("\n").map_err(map_io_error)?;
                     }
 
                     b'c' | b'C' | b'a' | b'A' => {
-                        port_puts(port, &format!("{}", args[used]))?;
+                        printer.escape = false;
+                        
+                        printer.write(args[used])?;
                         //port.display(args[used]).map_err(map_io_error)?;
                         used += 1;
                     }
                     b's' | b'S' => {
-                        port_puts(port, &format!("{}", args[used]))?;
+                        printer.escape = true;
+                        printer.write(args[used])?;
+                        //port_puts(port, &format!("{}", args[used]))?;
                         used += 1;
                     }
 
                     b'v' | b'P' => {
-                        port_puts(port, &format!("{}", args[used]))?;
+                        printer.escape = true;
+                        printer.write(args[used])?;
                         used += 1;
                     }
 

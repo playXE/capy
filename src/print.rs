@@ -4,7 +4,10 @@ use std::collections::hash_map::RandomState;
 
 use rsgc::{prelude::Handle, system::collections::hashmap::HashMap};
 
-use crate::{ports_v2::*, value::{Value, Type}};
+use crate::{
+    ports_v2::*,
+    value::{Type, Value},
+};
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum EscapeMode {
@@ -20,8 +23,8 @@ pub struct Printer<'a> {
     column_limit: i32,
     shared_tag: i32,
     radix: i32,
-    escape: bool,
-    unwrap: bool,
+    pub escape: bool,
+    pub unwrap: bool,
     flush: bool,
     r6rs: bool,
 }
@@ -30,7 +33,6 @@ const WRITE_STRING_ESCAPE_CODES: [u8; 9] = [7, 8, 9, 10, 11, 12, 13, 92, 0];
 const WRITE_STRING_ESCAPE_NAMES: [&str; 8] = ["a", "b", "t", "n", "v", "f", "r", "\\"];
 
 impl<'a> Printer<'a> {
-    
     pub fn new(vm: &'a mut crate::vm::Vm, port: Handle<Port>) -> Self {
         Self {
             vm,
@@ -156,7 +158,6 @@ impl<'a> Printer<'a> {
         let mut utf8 = [0; 4];
         let bytes = cnvt_ucs4_to_utf8(ucs4, &mut utf8);
 
-
         for i in 0..bytes {
             port_put_byte(self.port, utf8[i])?;
         }
@@ -215,7 +216,7 @@ impl<'a> Printer<'a> {
                 ht.put(self.vm.mutator(), obj, Value::make_true());
                 return;
             }
-        } 
+        }
 
         if obj.pairp() {
             ht.put(self.vm.mutator(), obj, Value::make_false());
@@ -240,7 +241,11 @@ impl<'a> Printer<'a> {
         self._write(Some(ht), obj)
     }
 
-    pub fn _write(&mut self, ht: Option<Handle<HashMap<Value, Value>>>, mut obj: Value) -> Result<(), Value> {
+    pub fn _write(
+        &mut self,
+        ht: Option<Handle<HashMap<Value, Value>>>,
+        mut obj: Value,
+    ) -> Result<(), Value> {
         if let Some(mut ht) = ht {
             let value = ht.get(&obj);
 
@@ -260,7 +265,8 @@ impl<'a> Printer<'a> {
         }
 
         if obj.pairp() {
-            let abbreviated = obj.cdr().pairp() && obj.cddr().nullp() && self.write_abbreviated(obj.car())?;
+            let abbreviated =
+                obj.cdr().pairp() && obj.cddr().nullp() && self.write_abbreviated(obj.car())?;
 
             if abbreviated {
                 obj = obj.cdr();
@@ -299,7 +305,7 @@ impl<'a> Printer<'a> {
 
                     self._write(ht, e.car())?;
 
-                    if self.column_limit != 0  && self.port.column > self.column_limit {
+                    if self.column_limit != 0 && self.port.column > self.column_limit {
                         port_puts(self.port, " ...)")?;
                         return Ok(());
                     }
@@ -309,7 +315,6 @@ impl<'a> Printer<'a> {
                     self._write(ht, e)?;
                     break;
                 }
-
             }
 
             if !abbreviated {
@@ -332,8 +337,38 @@ impl<'a> Printer<'a> {
         } else if obj.charp() {
             self.puts(obj.char_val().to_string().as_str())
         } else if obj.strp() {
-            self.puts(obj.str())
-            // self.write_string(obj.str().as_bytes())
+            
+            if self.escape {
+                self.puts("\"")?;
+                self.write_string(obj.str().as_bytes())?;
+                self.puts("\"")
+            } else {
+                self.puts(obj.str())
+            }
+        } else if obj.portp() {
+            let port = obj.downcast_port();
+
+            
+
+            if port.direction == SCM_PORT_DIRECTION_BOTH {
+                if port_textual_pred(port) {
+                    self.puts("#<textual-port>")
+                } else {
+                    self.puts("#<binary-port>")
+                }
+            } else if port.direction == SCM_PORT_DIRECTION_IN {
+                if port_textual_pred(port) {
+                    self.puts("#<input-port>")
+                } else {
+                    self.puts("#<binary-input-port>")
+                }
+            } else {
+                if port_textual_pred(port) {
+                    self.puts("#<output-port>")
+                } else {
+                    self.puts("#<binary-output-port>")
+                }
+            }
         } else if obj.symbolp() {
             self.puts(obj.strsym())
         } else if obj.vectorp() {
@@ -387,7 +422,7 @@ impl<'a> Printer<'a> {
             }
         } else if obj.doublep() {
             self.puts(obj.double_val().to_string().as_str())
-         }else if obj.structp() {
+        } else if obj.structp() {
             self.puts("#<")?;
             self._write(ht, obj.struct_stype().name)?;
             self.puts(">")

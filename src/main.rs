@@ -1,8 +1,8 @@
 use capy::{
-    compiler::{env::{make_environment, environment_get}, expr_to_value, *},
+    compiler::{expr_to_value, *},
     jit::cranelift::JIT,
     pp::pretty_print,
-    r5rs::{initialize_r5rs_environment, interaction_environment},
+    r5rs::interaction_environment,
     structure::struct_ref,
     util::arraylist::ArrayList,
     value::Value,
@@ -51,8 +51,6 @@ fn main() {
                 return Ok(());
             }
         };
-        //pretty_print(desugared, &mut st).unwrap();
-        //print!("\n");
 
         let cps = redex::redex_transform(cps::t_c(desugared, intern("|%toplevel-cont")), &mut 2);
 
@@ -69,15 +67,13 @@ fn main() {
         pretty_print(toplevel_code, &mut st).unwrap();
         print!("\n");
 
-        //println!(">after assignment conversion:");
+
         let uncovered = uncover_assigned(toplevel_code);
         let assigned = convert_assignments(uncovered);
 
-        //pretty_print(assigned, &mut st).unwrap();
-        //print!("\n");
 
         let m = meaning::meaning(assigned, Value::make_null(), true);
-
+    
         let (toplevel, lambdas) = lambda_lifting::lift_lambdas(m.cdddr().cdr(), true);
         m.cdddr().set_pair_cdr(toplevel);
 
@@ -86,7 +82,10 @@ fn main() {
 
         let cstart = std::time::Instant::now();
         let code = jit.compile(env, defs, lambdas, m);
-        println!(">compiled in {:.4}ms", cstart.elapsed().as_micros() as f64 / 1000.0);
+        println!(
+            ">compiled in {:.4}ms",
+            cstart.elapsed().as_micros() as f64 / 1000.0
+        );
         let start = std::time::Instant::now();
         let val = vm.apply(code, &[]);
 
@@ -100,7 +99,6 @@ fn main() {
                 print!("\n");
             }
             Err(e) => {
-
                 println!("{}", struct_ref(e, 0));
             }
         }

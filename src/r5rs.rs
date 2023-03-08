@@ -7,7 +7,7 @@ use rsgc::thread::Thread;
 use crate::{
     compiler::env::{environment_set, make_environment},
     value::Value,
-    vm::{intern, Trampoline}, number, error::wrong_contract, list, fun, string
+    vm::{intern, Trampoline}, number, error::wrong_contract, list, fun, string, ports
 };
 
 define_proc! {
@@ -132,22 +132,6 @@ define_proc! {
     }
 }
 
-define_proc! { 
-    extern "display", display(_vm, args) 1, 1 => {
-        let arg = args[0];
-        print!("{}", arg);
-        Trampoline::Return(Value::make_void())
-    }
-}
-
-define_proc! {
-    extern "displayln", displayln(_vm, args) 1, 1 => {
-        let arg = args[0];
-        println!("{}", arg);
-        Trampoline::Return(Value::make_void())
-    }
-}
-
 pub fn initialize_r5rs_environment(env: Value) {
     environment_set(env, *NOT_NAME, *NOT_PROC);
     environment_set(env, *IS_BOOLEAN_NAME, *IS_BOOLEAN_PROC);
@@ -165,10 +149,8 @@ pub fn initialize_r5rs_environment(env: Value) {
     environment_set(env, *IS_NULL_NAME, *IS_NULL_PROC);
     environment_set(env, *GC_NAME, *GC_PROC);
     environment_set(env, *MAKE_PARAMETER_NAME, *MAKE_PARAMETER_PROC);
-    environment_set(env, *DISPLAY_NAME, *DISPLAY_PROC);
-    environment_set(env, *DISPLAYLN_NAME, *DISPLAYLN_PROC);
-
-
+   
+    ports::initialize_port(env);
     number::initialize_env(env);
     list::initialize_list(env);
     fun::initialize_fun(env);
