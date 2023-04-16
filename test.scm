@@ -1,9 +1,6 @@
-(define src (make-file-input-port "test.scm"))
-
-(define (read-to-eof port)
-    (define val (read port))
-    (if (eof-object? val)
-        '()
-        (cons val (read-to-eof port))))
-
-(displayln (read-to-eof src))
+(define (ack m n)
+      (if (= m 0)
+      (+ n 1)
+      (if (= n 0)
+          (ack (- m 1) 1)
+          (ack (- m 1) (ack m (- n 1))))))
