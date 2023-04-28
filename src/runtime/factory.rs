@@ -3,12 +3,12 @@
 use rsgc::sync::mutex::RawMutex;
 
 use super::bigint::BigInt;
-use super::context::Context;
-use super::object::{ScmByteVector, ScmString, ScmVector};
+use super::vm::VM;
+use super::object::{ScmByteVector, ScmString, ScmVector, ScmSymbol};
 use super::value::ScmValue;
 use super::{object, value};
 
-impl Context {
+impl VM {
     pub fn make_int(&mut self, value: i64) -> ScmValue {
         if value as i32 as i64 == value {
             /* fast path: NaN-boxed int32 */
@@ -159,5 +159,23 @@ impl Context {
         }
 
         list
+    }
+
+    pub fn make_symbol(&mut self, name: impl AsRef<str>, generated: bool) -> ScmValue {
+        let name = name.as_ref();
+        let mut symbol = self.mutator.allocate_varsize::<ScmSymbol>(name.len() + 1);
+        unsafe {
+            let symbol_ref = symbol.assume_init_mut();
+
+            symbol_ref.header.typ = value::Type::Symbol;
+            symbol_ref.header.lock = RawMutex::INIT;
+            symbol_ref.len = name.len() as u32 + 1;
+            symbol_ref.generated = generated;
+            symbol_ref.uninterned = true;
+            symbol_ref.data.as_mut_ptr().copy_from_nonoverlapping(name.as_ptr(), name.len());
+            symbol_ref.data.as_mut_ptr().add(name.len()).write(0);
+
+            ScmValue::encode_object_value(symbol.assume_init())
+        }
     }
 }

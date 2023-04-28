@@ -1,7 +1,7 @@
-use super::context::Context;
+use super::vm::VM;
 use super::value::ScmValue;
 
-pub fn memq(_cx: &mut Context, k: ScmValue, ls: ScmValue) -> ScmValue {
+pub fn memq(_cx: &mut VM, k: ScmValue, ls: ScmValue) -> ScmValue {
     let mut ls = ls;
     loop {
         if ls.is_null() {
@@ -17,7 +17,23 @@ pub fn memq(_cx: &mut Context, k: ScmValue, ls: ScmValue) -> ScmValue {
     }
 }
 
-pub fn append(cx: &mut Context, ls: ScmValue, values: impl Iterator<Item = ScmValue>) -> ScmValue {
+pub fn assq(_cx: &mut VM, k: ScmValue, ls: ScmValue) -> ScmValue {
+    let mut ls = ls;
+    loop {
+        if ls.is_null() {
+            return ScmValue::encode_bool_value(false);
+        }
+
+        let car = ls.car();
+        if car.car() == k {
+            return car;
+        }
+
+        ls = ls.cdr();
+    }
+}
+
+pub fn append(cx: &mut VM, ls: ScmValue, values: impl Iterator<Item = ScmValue>) -> ScmValue {
     let mut ls = ls;
     let mut last = ScmValue::encode_null_value();
 
@@ -42,24 +58,38 @@ pub fn append(cx: &mut Context, ls: ScmValue, values: impl Iterator<Item = ScmVa
     ls
 }
 
-pub fn append_one(cx: &mut Context, ls: ScmValue, value: ScmValue) -> ScmValue {
-    let mut ls = ls;
-    let mut last = ScmValue::encode_null_value();
+pub fn append_one(cx: &mut VM, mut l1: ScmValue, l2: ScmValue) -> ScmValue {
+    let mut first;
+    let mut last = None::<ScmValue>;
+    let mut v;
 
-    while !ls.is_null() {
-        last = ls;
-        ls = ls.cdr();
+    first = None;
+
+    while l1.is_pair() {
+        v = cx.make_pair(l1.car(), ScmValue::encode_null_value());
+
+        if first.is_none() {
+            first = Some(v);
+        } else {
+            cx.mutator.write_barrier(last.unwrap().get_object());
+            last.unwrap().set_cdr(v);
+        }
+
+        last = Some(v);
+        l1 = l1.cdr();
     }
 
-    let pair = cx.make_pair(value, ScmValue::encode_null_value());
-
-    if last.is_null() {
-        ls = pair;
-    } else {
-        last.set_cdr(pair);
+    if !l1.is_null() {
+        panic!("append_one: not a proper list");
     }
 
-    ls
+    if last.is_none() {
+        return l2;
+    }
+
+    cx.mutator.write_barrier(last.unwrap().get_object());
+    last.unwrap().set_cdr(l2);
+    first.unwrap()
 }
 
 pub fn proper_list_length(ls: ScmValue) -> Option<usize> {
@@ -78,7 +108,7 @@ pub fn proper_list_length(ls: ScmValue) -> Option<usize> {
     }
 }
 
-pub fn reverse(cx: &mut Context, ls: ScmValue) -> ScmValue {
+pub fn reverse(cx: &mut VM, ls: ScmValue) -> ScmValue {
     let mut ls = ls;
     let mut newls = ScmValue::encode_null_value();
 
@@ -91,7 +121,7 @@ pub fn reverse(cx: &mut Context, ls: ScmValue) -> ScmValue {
     newls
 }
 
-pub fn map(cx: &mut Context, ls: ScmValue, mut f: impl FnMut(&mut Context, ScmValue) -> ScmValue) -> ScmValue {
+pub fn map(cx: &mut VM, ls: ScmValue, mut f: impl FnMut(&mut VM, ScmValue) -> ScmValue) -> ScmValue {
     let mut ls = ls;
     let mut newls = ScmValue::encode_null_value();
 
@@ -101,6 +131,8 @@ pub fn map(cx: &mut Context, ls: ScmValue, mut f: impl FnMut(&mut Context, ScmVa
         newls = pair;
         ls = ls.cdr();
     }
+    
+    let rev = reverse(cx, newls);
 
-    reverse(cx, newls)
+    rev
 }

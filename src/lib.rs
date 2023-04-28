@@ -4,4 +4,5 @@ pub mod utils;
 pub mod runtime;
 pub mod jit;
 pub mod compiler;
+pub mod bytecode;
 //pub mod heap;

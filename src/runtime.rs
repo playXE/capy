@@ -1,10 +1,11 @@
 pub mod bigint;
-pub mod context;
+pub mod vm;
 pub mod env;
 pub mod factory;
 pub mod object;
 pub mod pure_nan;
 pub mod list;
+pub mod callframe;
 pub mod value;
 pub mod fmt;
 
@@ -18,19 +19,19 @@ use rsgc::{
 use self::{object::ScmSymbol, value::{Type, ScmValue}};
 
 pub struct Runtime {
-    contexts: Mutex<*mut context::Context>,
+    contexts: Mutex<*mut vm::VM>,
     symbols: Symbols,
 }
 
 impl Runtime {
-    pub fn context<'a>(&'a self) -> &mut context::Context {
-        if let Some(ctx) = context::get_context() {
+    pub fn context<'a>(&'a self) -> &mut vm::VM {
+        if let Some(ctx) = vm::get_context() {
             ctx
         } else {
             unsafe {
                 self.attach_context();
             }
-            context::get_context().unwrap()
+            vm::get_context().unwrap()
         }
     }
 
@@ -40,7 +41,7 @@ impl Runtime {
             thread.is_registered(),
             "Current thread is not attached to RSGC runtime"
         );
-        let ctx = Box::new(context::Context::new(thread));
+        let ctx = Box::new(vm::VM::new(thread));
 
         let mut contexts = self.contexts.lock(true);
 
@@ -55,7 +56,7 @@ impl Runtime {
 
         *contexts = ptr;
 
-        context::CONTEXT.with(|cptr| {
+        vm::CONTEXT.with(|cptr| {
             cptr.get().write(ptr);
         });
     }

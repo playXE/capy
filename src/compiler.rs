@@ -16,8 +16,9 @@
 //! ```
 
 pub mod il;
-pub mod anf;
 pub mod desugar;
+pub mod alphatize;
+pub mod anf;
 
 use std::collections::HashSet;
 
