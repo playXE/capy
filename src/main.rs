@@ -1,19 +1,32 @@
-use b3::macroassembler::assembler::link_buffer::LinkBuffer;
-use b3::macroassembler::assembler::macro_assembler_x86_common::{
-    RelationalCondition, ResultCondition,
+use capy::{
+    list::{scm_append, scm_list, scm_list_ref},
+    value::Value,
 };
-use b3::macroassembler::assembler::{abstract_macro_assembler::*, *};
-use b3::macroassembler::jit::gpr_info::*;
-use capy::runtime::callframe::{CallFrame, generate_vm_entry};
+use rsgc::thread::{main_thread, Thread};
 
 fn main() {
-    let mut link_buffer = generate_vm_entry(|masm, entry, _, _, _| {
-        masm.call_op(Some(entry));
+    let _ = main_thread(Default::default(), |_| {
+        let ls1 = scm_list(
+            Thread::current(),
+            &[
+                Value::encode_int32(1),
+                Value::encode_int32(2),
+                Value::encode_int32(3),
+            ],
+        );
+        let ls2 = scm_list(
+            Thread::current(),
+            &[
+                Value::encode_int32(4),
+                Value::encode_int32(5),
+                Value::encode_int32(6),
+            ],
+        );
+
+        let ls3 = scm_append(Thread::current(), ls1, ls2);
+
+        println!("{:?}", scm_list_ref(ls3, 5));
+
+        Ok(())
     });
-
-    let mut out = String::new();
-
-    let code = link_buffer.finalize_with_disassembly(true, "", &mut out).unwrap();
-
-    println!("{}", out);
 }
