@@ -30,12 +30,12 @@ use std::{
 
 use crate::{
     cmp::scm_equal,
-    comp::env,
+    
     compaux::{scm_identifier_env, scm_make_identifier, scm_unwrap_syntax, scm_wrap_identifier},
     compile::env_lookup_int,
     list::{
         list_to_vector, scm_acons, scm_append2, scm_assq, scm_cons, scm_is_list, scm_last_pair,
-        scm_length, scm_memq, scm_reverse, scm_reversex, vector_to_list,
+        scm_length, scm_memq, scm_reversex, vector_to_list,
     },
     module::scm_identifier_to_bound_gloc,
     object::{Identifier, Module, ObjectHeader, Type},
@@ -46,7 +46,7 @@ use crate::{
 };
 use once_cell::sync::Lazy;
 use rsgc::{
-    heap::{heap::heap, root_processor::SimpleRoot},
+
     prelude::{Allocation, Handle, Object},
     system::array::Array,
     thread::Thread,
@@ -355,6 +355,7 @@ impl PatternContext {
 
                 let save_elli = self.ellipsis;
                 self.ellipsis = Value::encode_bool_value(false);
+
                 let r = self.compile_rule1(thread, form.cadr(), spat, false)?;
                 self.ellipsis = save_elli;
                 return Ok(r);
@@ -362,7 +363,7 @@ impl PatternContext {
             let mut pp;
             scm_for_each!(declared pp, form, {
                 if self.ellipsis_following(pp) {
-                 
+                    
                     if patternp && ellipsis_seen {
                         return Err(make_string(thread,
                             &format!("in definition of macro {:?}: Ellipses are not allowed to appear within the same list/vector more than once in a pattern: {:?}", self.name, form)
@@ -445,14 +446,16 @@ impl PatternContext {
                     spat.vars = scm_append2(thread, spat.vars, outermost.vars);
 
                 } else {
+                    
                     let r = self.compile_rule1(thread, pp.car(), spat, patternp)?;
+                    //println!("append {:?} head={:?}", r, h);
                     template_append1(thread, &mut h, &mut t, r);
                 }
             });
 
             if !pp.is_null() {
                 let r = self.compile_rule1(thread, pp, spat, patternp)?;
-
+                
                 template_append1(thread, &mut h, &mut t, r);
             }
 
@@ -656,6 +659,8 @@ fn compile_rules(
             ctx.pvcnt = 0;
             ctx.maxlev = 0;
 
+           // println!("rule {:?}", rule);
+
             ctx.form = rule.car();
 
             if !ctx.form.is_pair() {
@@ -663,12 +668,12 @@ fn compile_rules(
             }
             t.write_barrier(pat);
 
-            pat.pattern = ctx.compile_rule1(t, ctx.form.cdr(), tmpl, true)?;
-            println!("1) Compiled {:?} to {:?}",ctx.form.cdr(), pat.pattern);
+            pat.pattern = ctx.compile_rule1(t, ctx.form.cdr(), pat, true)?;
+            //println!("1) Compiled {:?} to {:?}",ctx.form.cdr(), pat.pattern);
             ctx.form = rule.cadr();
             t.write_barrier(tmpl);
             tmpl.pattern = ctx.compile_rule1(t, ctx.form, tmpl, false)?;
-            println!("2) Compiled {:?} to {:?}",ctx.form, tmpl.pattern);
+            //println!("2) Compiled {:?} to {:?}",ctx.form, tmpl.pattern);
             sr.rules.get_unchecked_mut(i).pattern = pat.pattern;
             sr.rules.get_unchecked_mut(i).template = tmpl.pattern;
             sr.rules.get_unchecked_mut(i).num_pvars = ctx.pvcnt as _;
@@ -703,6 +708,7 @@ pub fn scm_compile_syntax_rules(
     Ok(sr)
 }
 
+#[derive(Debug)]
 struct MatchVar {
     branch: Value,
     sprout: Value,
@@ -725,8 +731,8 @@ fn get_pvref_value(pvref: Value, mvec: &[MatchVar], indices: &[i32], exlev: &mut
 
     let mut tree = mvec[count as usize].root;
 
-    for i in 1..level {
-        for j in 0..indices[i as usize] {
+    for i in 1..=level {
+        for _ in 0..indices[i as usize] {
             if !tree.is_pair() {
                 *exlev = i as i32;
                 return Value::encode_undefined_value();
@@ -828,10 +834,10 @@ fn exit_subpattern(t: &mut Thread, subpat: Handle<SyntaxPattern>, mvec: &mut [Ma
 fn match_insert(t: &mut Thread, pvref: Value, matched: Value, mvec: &mut [MatchVar]) {
     let count = pvref.pvref().count;
     if pvref.pvref().level == 0 {
-        println!("matched {:?}", matched);
+        //println!("matched {:?}", matched);
         mvec[count as usize].root = matched;
     } else {
-        println!("matched {:?}", matched);
+        //println!("matched {:?}", matched);
         mvec[count as usize].branch = scm_cons(t, matched, mvec[count as usize].branch);
     }
 }
@@ -971,6 +977,8 @@ fn realize_template_rec(
     id_alist: &mut Value,
     exlev: &mut i32,
 ) -> Value {
+
+    
     if template.is_pair() {
         let mut h = Value::encode_null_value();
         let mut t = Value::encode_null_value();
@@ -983,22 +991,25 @@ fn realize_template_rec(
                 if r.is_undefined() {
                     return r;
                 }
-
-                template_append(thread, &mut h, &mut t, template);
+               
+                template_append(thread, &mut h, &mut t, r);
+                //println!("realize pattern in pair append {:?} head={:?}", r, h);
             } else {
                 let r = realize_template_rec(thread, sr, e, mvec, level, indices, id_alist, exlev);
 
                 if r.is_undefined() {
                     return r;
                 }
-
-                template_append1(thread, &mut h, &mut t, template);
+                //println!("2) realize pattern in pair append {:?} head={:?}", r, h);
+                template_append1(thread, &mut h, &mut t, r);
+                
             }
 
             template = template.cdr();
         }
 
         if !template.is_null() {
+           
             let r =
                 realize_template_rec(thread, sr, template, mvec, level, indices, id_alist, exlev);
             if r.is_undefined() {
@@ -1012,10 +1023,12 @@ fn realize_template_rec(
             template_append(thread, &mut h, &mut t, template);
         }
 
+        
         return h;
     }
 
     if template.is_pvref() {
+        
         let v = get_pvref_value(template, mvec, indices, exlev);
 
         return v;
@@ -1039,6 +1052,8 @@ fn realize_template_rec(
                 id_alist,
                 exlev,
             );
+
+            //println!("realize template {:?} to {:?}", pat.pattern, r);
 
             if r.is_undefined() {
                 if *exlev < pat.level as i32 {
@@ -1102,7 +1117,7 @@ pub fn synrule_expand(
 
     for i in 0..sr.num_rules {
         init_mvec(&mut mvec);
-
+        //println!("pattern #{:?}: {:?}", i, sr[i as usize].pattern);
         if match_synrule(
             t,
             form.cdr(),
@@ -1111,6 +1126,12 @@ pub fn synrule_expand(
             env,
             &mut mvec,
         ) {
+            /*print!("success #{:?}:", i);
+            for i in 0..sr[i as usize].num_pvars {
+                print!("{:?} ", mvec[i as usize]);
+            }
+
+            println!();*/
             let expanded = realize_template(t, sr, &sr[i as usize], &mvec);
 
             return Ok(expanded);

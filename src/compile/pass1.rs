@@ -16,7 +16,7 @@ use crate::{
     macros::{scm_compile_syntax_rules, synrule_expand},
     module::{
         is_global_identifier_eq, scm_find_module, scm_import_module, scm_insert_binding,
-        scm_insert_syntax_binding, scm_insert_syntax_rule_binding, scm_make_module,
+        scm_insert_syntax_rule_binding, scm_make_module,
     },
     object::{Identifier, Module, ObjectHeader, Type},
     scm_dolist,
@@ -138,7 +138,6 @@ pub fn pass1(program: Value, cenv: Value) -> Result<Handle<IForm>, Value> {
                     todo!()
                 }
             }
-            _ => todo!(),
         }
     }
 
@@ -738,7 +737,6 @@ pub fn define_syntax() {
         let name = form.cadr();
         let literals = form.caddr();
         let rules = form.cdddr();
-        println!("{:?} {:?}", literals, rules);
         let sr = scm_compile_syntax_rules(
             name,
             form,
