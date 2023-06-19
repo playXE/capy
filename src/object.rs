@@ -1,13 +1,20 @@
-use std::{mem::{size_of, offset_of}, hash::Hash, ops::{Deref, DerefMut}, fmt::{Display, Debug, Formatter}};
+use std::{
+    fmt::{Debug, Display, Formatter},
+    hash::Hash,
+    mem::{offset_of, size_of},
+    ops::{Deref, DerefMut},
+};
 
-use rsgc::{prelude::{Handle, Object, Allocation}, system::collections::hashmap::HashMap};
+use rsgc::{
+    prelude::{Allocation, Handle, Object},
+    system::collections::hashmap::HashMap,
+};
 
-use crate::value::Value;
+use crate::{compile::IForm, value::Value};
 
 #[repr(C)]
 pub struct ObjectHeader {
     pub(crate) typ: Type,
-
 }
 
 impl ObjectHeader {
@@ -38,8 +45,14 @@ pub enum Type {
     Symbol,
     Module,
     GLOC,
-
-
+    Syntax,
+    Macro,
+    SyntaxRules,
+    ReaderReference,
+    LVar,
+    Synrules,
+    Synpattern,
+    Pvref,
 }
 
 #[repr(C)]
@@ -202,7 +215,11 @@ pub struct Str {
     pub(crate) data: [u8; 0],
 }
 
-
+impl Str {
+    pub fn as_str(&self) -> &Str {
+        &*self
+    }
+}
 
 impl Object for Str {}
 impl Allocation for Str {
@@ -405,7 +422,6 @@ impl PartialEq for Str {
     }
 }
 
-
 /// A module keeps "toplevel environment", which maps names of free
 /// variables (symbols) to a location (GLOCs).
 #[repr(C)]
@@ -464,148 +480,33 @@ impl Object for GLOC {
 
 impl Allocation for GLOC {}
 
-
-/* 
+/// Syntax is a built-in procedure to compile given form.
 #[repr(C)]
-pub struct Class {
-    pub(crate) object: ObjectHeader,
-    pub(crate) parent: Option<Handle<Class>>,
-    pub(crate) name: Handle<Str>,
-    /// Offset of the first field in the instance. It is calculated 
-    /// as the sum of the sizes of all fields in the parent classes: 
-    /// ```text
-    /// class.field_start = parent.field_start + parent.fields.len()
-    /// ```
-    pub(crate) field_start: u16,
-    /// Array of strings. String at index N is the name of the field at index `N + field_start` in the instance.
-    pub(crate) fields: HashMap<Handle<Str>, u16>,
-    /// Map of method names to method bodies.
-    pub(crate) methods: HashMap<Handle<Str>, u32>,
-    pub(crate) method_bodies: Handle<Array>,
-    pub(crate) static_methods: HashMap<Handle<Str>, u32>,
-    pub(crate) static_method_bodies: Handle<Array>,
+pub struct Syntax {
+    pub(crate) header: ObjectHeader,
+    pub(crate) callback: fn(Value, Value) -> Result<Handle<IForm>, Value>,
 }
 
-impl Object for Class {
+impl Object for Syntax {
+    fn trace(&self, _visitor: &mut dyn rsgc::prelude::Visitor) {}
+}
+impl Allocation for Syntax {}
+
+/// An object to keep unrealized circular reference (e.g. #N=) during
+/// 'read'.  It is replaced by the reference value before exiting 'read',
+/// and it shouldn't leak out to the normal Scheme program, except the
+/// code that handles it explicitly (like read-time constructor).
+/// This object is also used in `scm_unwrap_syntax` to track circular structures.
+#[repr(C)]
+pub struct ReaderReference {
+    pub(crate) header: ObjectHeader,
+    pub(crate) value: Value,
+}
+
+impl Object for ReaderReference {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
-        if let Some(parent) = &self.parent {
-            parent.trace(visitor);
-        }
-
-        self.name.trace(visitor);
-        self.fields.trace(visitor);
-        self.methods.trace(visitor);
-        self.method_bodies.trace(visitor);
-        self.static_methods.trace(visitor);
-        self.static_method_bodies.trace(visitor);
+        self.value.trace(visitor);
     }
 }
 
-impl Allocation for Class {}
-
-#[repr(C)]
-pub struct Str {
-    pub(crate) object: ObjectHeader,
-    pub(crate) length: u32,
-    pub(crate) _pad: u32,
-    pub(crate) data: [u8; 0],
-}
-
-impl Object for Str {}
-impl Allocation for Str {
-    const VARSIZE: bool = true;
-    const VARSIZE_ITEM_SIZE: usize = size_of::<u8>();
-    const VARSIZE_NO_HEAP_PTRS: bool = true;
-    const VARSIZE_OFFSETOF_CAPACITY: usize = offset_of!(Str, length);
-    const VARSIZE_OFFSETOF_LENGTH: usize = offset_of!(Str, length);
-    const VARSIZE_OFFSETOF_VARPART: usize = offset_of!(Str, data);
-}
-
-impl Hash for Str {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        let str: &str = self;
-        str.hash(state);
-    }
-}
-
-impl AsRef<str> for Str {
-    fn as_ref(&self) -> &str {
-        self
-    }
-}
-
-impl Deref for Str {
-    type Target = str;
-
-    fn deref(&self) -> &Self::Target {
-        unsafe {
-            std::str::from_utf8_unchecked(std::slice::from_raw_parts(self.data.as_ptr(), self.length as usize))
-        }
-    }
-}
-
-impl PartialEq for Str {
-    fn eq(&self, other: &Self) -> bool {
-        self.as_ref() == other.as_ref()
-    }
-}
-
-impl Eq for Str {}
-
-#[repr(C)]
-pub struct Array {
-    pub(crate) object: ObjectHeader,
-    pub(crate) length: u32,
-    pub(crate) _pad: u32,
-    pub(crate) data: [Value; 0],
-}
-
-impl Object for Array {
-    fn trace_range(&self, from: usize, to: usize, visitor: &mut dyn rsgc::prelude::Visitor) {
-        let ptr = self.data.as_ptr();
-        for i in from..to {
-            unsafe {
-                (*ptr.add(i)).trace(visitor);
-            }
-        }
-    }
-}
-
-
-impl Allocation for Array {
-    const VARSIZE: bool = true;
-    const VARSIZE_ITEM_SIZE: usize = size_of::<Value>();
-    const VARSIZE_NO_HEAP_PTRS: bool = false;
-    const VARSIZE_OFFSETOF_CAPACITY: usize = offset_of!(Array, length);
-    const VARSIZE_OFFSETOF_LENGTH: usize = offset_of!(Array, length);
-    const VARSIZE_OFFSETOF_VARPART: usize = offset_of!(Array, data);
-}
-
-#[repr(C)]
-pub struct Instance {
-    pub(crate) object: ObjectHeader,
-    /// Number of fields in the instance. Exist here only for RSGC
-    /// to be able to trace the fields.
-    pub(crate) length: u32,
-    pub(crate) fields: [Value; 0],
-}
-
-impl Object for Instance {
-    fn trace_range(&self, from: usize, to: usize, visitor: &mut dyn rsgc::prelude::Visitor) {
-        let ptr = self.fields.as_ptr();
-        for i in from..to {
-            unsafe {
-                (*ptr.add(i)).trace(visitor);
-            }
-        }
-    }
-}
-
-impl Allocation for Instance {
-    const VARSIZE: bool = true;
-    const VARSIZE_ITEM_SIZE: usize = size_of::<Value>();
-    const VARSIZE_NO_HEAP_PTRS: bool = false;
-    const VARSIZE_OFFSETOF_CAPACITY: usize = offset_of!(Instance, length);
-    const VARSIZE_OFFSETOF_LENGTH: usize = offset_of!(Instance, length);
-    const VARSIZE_OFFSETOF_VARPART: usize = offset_of!(Instance, fields);
-}*/
+impl Allocation for ReaderReference {}

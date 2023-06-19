@@ -31,11 +31,15 @@ use rsgc::{system::collections::hashmap::HashMap as HashTable, thread::Thread};
 use std::collections::{hash_map::RandomState, HashMap};
 
 use crate::{
-    list::{scm_cons, scm_memq},
-    object::{Module, ObjectHeader, Symbol, Type, GLOC},
-    scm_error, scm_for_each,
-    symbol::{make_symbol, scm_symbol_sans_prefix},
-    value::Value, compaux::scm_unwrap_identifier,
+    compaux::{scm_identifier_global_binding, scm_unwrap_identifier},
+    compile::IForm,
+    list::{scm_cons, scm_list, scm_memq},
+    macros::SyntaxRules,
+    object::{Identifier, Module, ObjectHeader, Symbol, Syntax, Type, GLOC},
+    scm_for_each,
+    string::make_string,
+    symbol::scm_symbol_sans_prefix,
+    value::Value,
 };
 type Modules = Mutex<HashMap<Handle<Symbol>, Value>>;
 
@@ -84,6 +88,55 @@ pub(crate) fn init_modules() {
             }
         },
     ));
+    let mut mpl = Value::encode_null_value();
+    let mut mods = MODULES.lock(true);
+    let t = Thread::current();
+    macro_rules! init_mod {
+        ($mod: ident, $mname: expr, $inttab: expr) => {
+            unsafe {
+                let mname = $crate::symbol::make_symbol($mname, true);
+                $mod = _make_module(mname, $inttab).into();
+
+                mods.insert(mname.symbol(), $mod);
+                t.write_barrier($mod.module());
+                $mod.module().parents = if mpl.is_null() {
+                    Value::encode_null_value()
+                } else {
+                    $crate::list::scm_list(t, &[mpl.car()])
+                };
+
+                mpl = scm_cons(t, $mod, mpl);
+                t.write_barrier($mod.module());
+                $mod.module().mpl = mpl;
+            }
+        };
+    }
+
+    init_mod!(NULL_MODULE, "null", None);
+    init_mod!(SCHEME_MODULE, "scheme", None);
+    init_mod!(KEYWORD_MODULE, "keyword", None);
+    init_mod!(CAPY_MODULE, "capy", None);
+    init_mod!(GF_MODULE, "capy.gf", None);
+    init_mod!(USER_MODULE, "user", None);
+
+    mpl = mpl.cdr(); // default mpl does not include user module
+
+    unsafe {
+        DEFAULT_PARENTS = scm_list(t, &[mpl.car()]);
+        DEFAULT_MPL = mpl;
+
+        mpl = DEFAULT_MPL;
+    }
+
+    init_mod!(INTERNAL_MODULE, "capy.internal", None);
+    init_mod!(REQBASE_MODULE, "capy.require-base", None);
+
+    mpl = unsafe { KEYWORD_MODULE.module().mpl };
+    init_mod!(
+        CKEYWORD_MODULE,
+        "capy.keyword",
+        Some(KEYWORD_MODULE.module().internal)
+    );
 }
 
 static mut DEFAULT_PARENTS: Value = Value::encode_null_value();
@@ -108,6 +161,54 @@ def_mod! {
     KEYWORD_MODULE,
     CKEYWORD_MODULE,
     REQBASE_MODULE
+}
+
+pub fn scm_default_parents() -> Value {
+    unsafe { DEFAULT_PARENTS }
+}
+
+pub fn scm_default_mpl() -> Value {
+    unsafe { DEFAULT_MPL }
+}
+
+pub fn scm_bootstrap_module() -> Value {
+    unsafe { BOOTSTRAP_MODULE }
+}
+
+pub fn scm_null_module() -> Value {
+    unsafe { NULL_MODULE }
+}
+
+pub fn scm_scheme_module() -> Value {
+    unsafe { SCHEME_MODULE }
+}
+
+pub fn scm_capy_module() -> Value {
+    unsafe { CAPY_MODULE }
+}
+
+pub fn scm_internal_module() -> Value {
+    unsafe { INTERNAL_MODULE }
+}
+
+pub fn scm_gf_module() -> Value {
+    unsafe { GF_MODULE }
+}
+
+pub fn scm_user_module() -> Value {
+    unsafe { USER_MODULE }
+}
+
+pub fn scm_keyword_module() -> Value {
+    unsafe { KEYWORD_MODULE }
+}
+
+pub fn scm_ckeyword_module() -> Value {
+    unsafe { CKEYWORD_MODULE }
+}
+
+pub fn scm_reqbase_module() -> Value {
+    unsafe { REQBASE_MODULE }
 }
 
 fn _make_module(
@@ -161,46 +262,59 @@ fn lookup_module_create(name: Handle<Symbol>) -> (Handle<Module>, bool) {
 pub fn scm_make_module(
     name: Option<Handle<Symbol>>,
     error_if_exists: bool,
-) -> Option<Handle<Module>> {
+) -> Result<Option<Handle<Module>>, Value> {
     if name.is_none() {
-        return Some(_make_module(Value::encode_bool_value(false), None));
+        return Ok(Some(_make_module(Value::encode_bool_value(false), None)));
     }
 
     let (r, created) = lookup_module_create(name.unwrap());
 
     if !created {
         if error_if_exists {
-            scm_error!(
+            /*scm_error!(
                 "couldn't create module '{}': named module already exists",
                 name.unwrap()
-            );
+            );*/
+            return Err(make_string(
+                Thread::current(),
+                &format!(
+                    "couldn't create module '{}': named module already exists",
+                    name.unwrap()
+                ),
+            )
+            .into());
         } else {
-            return None;
+            return Ok(None);
         }
     }
 
-    Some(r)
+    Ok(Some(r))
 }
 
-pub fn scm_find_module(name: Handle<Symbol>, create: bool, quiet: bool) -> Option<Handle<Module>> {
+pub fn scm_find_module(
+    name: Handle<Symbol>,
+    create: bool,
+    quiet: bool,
+) -> Result<Option<Handle<Module>>, Value> {
     if create {
         let (m, _created) = lookup_module_create(name);
 
-        Some(m)
+        Ok(Some(m))
     } else {
         if let Some(m) = lookup_module(name) {
-            Some(m)
+            Ok(Some(m))
         } else {
             if quiet {
-                None
+                Ok(None)
             } else {
-                scm_error!("module '{}' not found", name)
+                //scm_error!("module '{}' not found", name)
+                Err(make_string(Thread::current(), &format!("module '{}' not found", name)).into())
             }
         }
     }
 }
-
-fn err_sealed(source: Value, target: Handle<Module>) -> ! {
+#[must_use]
+fn err_sealed(source: Value, target: Handle<Module>) -> Value {
     let what = if source.is_xtype(Type::Module) {
         "import a module"
     } else {
@@ -208,19 +322,38 @@ fn err_sealed(source: Value, target: Handle<Module>) -> ! {
     };
 
     if Value::encode_object_value(target) == unsafe { REQBASE_MODULE } {
-        scm_error!(
-            "Attempted to {} ({:?}) into capy.require-base. 
-            This may be caused by trying to 'use' or 'require' a file in which no module is defined. 
+        /*scm_error!(
+            "Attempted to {} ({:?}) into capy.require-base.
+            This may be caused by trying to 'use' or 'require' a file in which no module is defined.
              Make sure the file has define-module/select-module or define-library at the beginning.",
              what, source
+        )*/
+        return make_string(
+            Thread::current(),
+            &format!(
+                "Attempted to {} ({:?}) into capy.require-base. 
+        This may be caused by trying to 'use' or 'require' a file in which no module is defined. 
+         Make sure the file has define-module/select-module or define-library at the beginning.",
+                what, source
+            ),
         )
+        .into();
     } else {
-        scm_error!(
+        /*scm_error!(
             "Attempted to {} ({:?}) in a sealed module: '{:?}'",
             what,
             source,
             target.name
+        )*/
+
+        return make_string(
+            Thread::current(),
+            &format!(
+                "Attempted to {} ({:?}) in a sealed module: '{:?}'",
+                what, source, target.name
+            ),
         )
+        .into();
     }
 }
 
@@ -404,6 +537,8 @@ fn search_binding(
                 return Some(v.gloc());
             }
         }
+
+        searched.add_visited(m);
     });
 
     None
@@ -439,9 +574,9 @@ pub fn scm_make_binding(
     symbol: Handle<Symbol>,
     value: Value,
     flags: i32,
-) -> Handle<GLOC> {
+) -> Result<Handle<GLOC>, Value> {
     if module.sealed {
-        err_sealed(Value::encode_object_value(symbol), module);
+        Err(err_sealed(Value::encode_object_value(symbol), module))
     } else {
         let mut existing = false;
 
@@ -488,18 +623,26 @@ pub fn scm_make_binding(
         g.value = value;
         let _ = flags;
 
-        g
+        Ok(g)
     }
 }
 
-pub fn scm_define(module: Handle<Module>, name: Handle<Symbol>, value: Value) -> Value {
-    let g = scm_make_binding(module, name, value, 0);
-    Value::encode_object_value(g)
+pub fn scm_define(
+    module: Handle<Module>,
+    name: Handle<Symbol>,
+    value: Value,
+) -> Result<Value, Value> {
+    let g = scm_make_binding(module, name, value, 0)?;
+    Ok(Value::encode_object_value(g))
 }
 
-pub fn scm_define_const(module: Handle<Module>, name: Handle<Symbol>, value: Value) -> Value {
-    let g = scm_make_binding(module, name, value, SCM_BINDING_CONST);
-    Value::encode_object_value(g)
+pub fn scm_define_const(
+    module: Handle<Module>,
+    name: Handle<Symbol>,
+    value: Value,
+) -> Result<Value, Value> {
+    let g = scm_make_binding(module, name, value, SCM_BINDING_CONST)?;
+    Ok(Value::encode_object_value(g))
 }
 
 /// # Injecting hidden binding
@@ -512,9 +655,9 @@ pub fn scm_define_const(module: Handle<Module>, name: Handle<Symbol>, value: Val
 ///   Since we assume MODULE is for intermediate modules, we only
 ///   insert bindings to the external table, for those modules are
 ///   only searched in the 'import' path.
-pub fn scm_hide_binding(mut module: Handle<Module>, symbol: Handle<Symbol>) {
+pub fn scm_hide_binding(mut module: Handle<Module>, symbol: Handle<Symbol>) -> Result<(), Value> {
     if module.sealed {
-        err_sealed(Value::encode_object_value(symbol), module);
+        Err(err_sealed(Value::encode_object_value(symbol), module))
     } else {
         let mut err_exists = false;
         let mods = MODULES.lock(true);
@@ -547,7 +690,10 @@ pub fn scm_hide_binding(mut module: Handle<Module>, symbol: Handle<Symbol>) {
         drop(mods);
 
         if err_exists {
-            scm_error!("hide-binding: binding already exists: {}", symbol);
+            //scm_error!("hide-binding: binding already exists: {}", symbol);
+            Err(make_string(Thread::current(), "hide-binding: binding already exists").into())
+        } else {
+            Ok(())
         }
     }
 }
@@ -576,9 +722,9 @@ pub fn scm_alias_binding(
     target_name: Handle<Symbol>,
     origin: Handle<Module>,
     origin_name: Handle<Symbol>,
-) -> bool {
+) -> Result<bool, Value> {
     if target.sealed {
-        err_sealed(Value::encode_object_value(target_name), target);
+        Err(err_sealed(Value::encode_object_value(target_name), target))
     } else {
         let g = scm_find_binding(origin, origin_name, SCM_BINDING_EXTERNAL);
         if let Some(g) = g {
@@ -594,42 +740,51 @@ pub fn scm_alias_binding(
                 Value::encode_object_value(g),
             );
             drop(mods);
-            true
+            Ok(true)
         } else {
-            false
+            Ok(false)
         }
     }
 }
 
-pub fn scm_import_module(mut module: Handle<Module>, imported: Value, prefix: Value) -> Value {
+pub fn scm_import_module(
+    mut module: Handle<Module>,
+    imported: Value,
+    prefix: Value,
+) -> Result<Value, Value> {
     if module.sealed {
-        err_sealed(imported, module);
+        return Err(err_sealed(imported, module));
     }
 
     let imp = if imported.is_xtype(Type::Module) {
         Some(imported.module())
     } else if imported.is_xtype(Type::Symbol) {
-        scm_find_module(imported.symbol(), false, false)
+        scm_find_module(imported.symbol(), false, false)?
     } else if imported.is_xtype(Type::Identifier) {
-        scm_find_module(scm_unwrap_identifier(imported.identifier()), false, false)
+        scm_find_module(scm_unwrap_identifier(imported.identifier()), false, false)?
     } else {
-        scm_error!("module name or module required, but got {:?}", imported);
+        //scm_error!("module name or module required, but got {:?}", imported);
+        return Err(make_string(Thread::current(), "module name or module required").into());
     };
 
     if imp.is_none() {
-        scm_error!("module not found: {:?}", imported);
+        //scm_error!("module not found: {:?}", imported);
+        return Err(make_string(Thread::current(), "module not found").into());
     }
     let imp = imp.unwrap();
     if prefix.is_xtype(Type::Symbol) {
         // TODO: Wrapper module
     }
 
-    let p = scm_cons(Thread::current(), Value::encode_object_value(imp), Value::encode_null_value());
+    let p = scm_cons(
+        Thread::current(),
+        Value::encode_object_value(imp),
+        Value::encode_null_value(),
+    );
 
     let mods = MODULES.lock(true);
 
     {
-        
         let mut prev = p;
         Thread::current().write_barrier(p.pair());
         p.pair().cdr = module.imported;
@@ -653,5 +808,67 @@ pub fn scm_import_module(mut module: Handle<Module>, imported: Value, prefix: Va
 
     drop(mods);
 
-    module.imported
+    Ok(module.imported)
+}
+
+pub fn scm_insert_binding(
+    module: Handle<Module>,
+    name: Handle<Symbol>,
+    value: Value,
+    flags: i32,
+    fresh: bool,
+) -> Result<Value, Value> {
+    // when 'fresh' is #t insert only if there's no binding yet
+    if fresh && !scm_global_variable_ref(module, name, SCM_BINDING_STAY_IN_MODULE).is_undefined() {
+        Ok(Value::encode_bool_value(false))
+    } else {
+        scm_make_binding(module, name, value, flags).map(|x| x.into())
+    }
+}
+
+pub fn scm_insert_syntax_binding(
+    module: Handle<Module>,
+    name: Handle<Symbol>,
+    cb: fn(Value, Value) -> Result<Handle<IForm>, Value>,
+) -> Result<Value, Value> {
+    scm_insert_binding(
+        module,
+        name,
+        Thread::current()
+            .allocate(Syntax {
+                header: ObjectHeader::new(Type::Syntax),
+                callback: cb,
+            })
+            .into(),
+        0,
+        true,
+    )
+}
+
+pub fn scm_insert_syntax_rule_binding(
+    module: Handle<Module>,
+    name: Handle<Symbol>,
+    sr: Handle<SyntaxRules>,
+) -> Result<Value, Value> {
+    scm_insert_binding(module, name, sr.into(), 0, true)
+}
+
+pub fn scm_identifier_to_bound_gloc(id: Handle<Identifier>) -> Option<Handle<GLOC>> {
+    let g = scm_identifier_global_binding(id);
+
+    g.filter(|x| !x.value.is_undefined())
+}
+
+pub fn is_global_identifier_eq(id1: Value, id2: Value) -> bool {
+    if !id1.is_xtype(Type::Identifier) || !id2.is_xtype(Type::Identifier) {
+        return false;
+    }
+
+    let g1 = scm_identifier_to_bound_gloc(id1.identifier());
+    let g2 = scm_identifier_to_bound_gloc(id2.identifier());
+
+    match (g1, g2) {
+        (Some(g1), Some(g2)) => g1.as_ptr() == g2.as_ptr(),
+        _ => false,
+    }
 }

@@ -1,6 +1,13 @@
-use std::fmt::Debug;
+use std::{fmt::Debug, hash::Hash};
 
-use crate::object::{Bytevector, Module, ObjectHeader, Pair, Str, Symbol, Type, Vector, GLOC, Identifier};
+use crate::{
+    compile::LVar,
+    macros::SyntaxRules,
+    object::{
+        Bytevector, Identifier, Module, ObjectHeader, Pair, ReaderReference, Str, Symbol, Syntax,
+        Type, Vector, GLOC,
+    },
+};
 
 use super::pure_nan::*;
 use rsgc::prelude::{Allocation, Handle, Object};
@@ -199,7 +206,7 @@ impl Value {
 
     #[inline]
     pub fn is_object(self) -> bool {
-        self.is_pointer() /*&& !self.is_empty()*/
+        self.is_pointer() && !self.is_empty()
     }
     #[inline]
     pub fn get_int32(self) -> i32 {
@@ -306,7 +313,7 @@ impl<T: Object> Into<Value> for Handle<T> {
 
 impl Object for Value {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
-        if self.is_object() {
+        if self.is_object() && !self.is_empty() {
             self.get_object().trace(visitor);
         }
     }
@@ -342,6 +349,44 @@ impl Value {
             Type::Double => self.is_double(),
             _ => self.is_xtype(x),
         }
+    }
+
+    pub fn get_type(self) -> Type {
+        if self.is_object() && !self.is_empty() {
+            let hdr = unsafe {
+                let ptr = std::mem::transmute::<_, *const ObjectHeader>(self.get_object());
+                let hdr = ptr as *const ObjectHeader;
+                (*hdr).typ
+            };
+
+            return hdr;
+        }
+
+        if self.is_null() {
+            return Type::Null;
+        }
+
+        if self.is_undefined() {
+            return Type::Undefined;
+        }
+
+        if self.is_true() {
+            return Type::True;
+        }
+
+        if self.is_false() {
+            return Type::False;
+        }
+
+        if self.is_int32() {
+            return Type::Int32;
+        }
+
+        if self.is_double() {
+            return Type::Double;
+        }
+
+        unreachable!()
     }
 
     pub fn gloc(self) -> Handle<GLOC> {
@@ -422,6 +467,10 @@ impl Value {
         self.cdr().cdr().cdr().car()
     }
 
+    pub fn cdddr(self) -> Value {
+        self.cdr().cdr().cdr()
+    }
+
     pub fn cddddr(self) -> Value {
         self.cdr().cdr().cdr().cdr()
     }
@@ -432,6 +481,197 @@ impl Value {
 
     pub fn cdadr(self) -> Value {
         self.cdr().car().cdr()
+    }
+
+    pub fn set_cdr(self, val: Value) {
+        assert!(self.is_xtype(Type::Pair));
+        {
+            (*self.pair()).cdr = val;
+        }
+    }
+
+    pub fn set_car(self, val: Value) {
+        assert!(self.is_xtype(Type::Pair));
+        {
+            (*self.pair()).car = val;
+        }
+    }
+
+    pub fn vector_ref(self, idx: usize) -> Value {
+        assert!(self.is_xtype(Type::Vector));
+        {
+            self.vector()[idx]
+        }
+    }
+
+    pub fn vector_set(self, idx: usize, val: Value) {
+        assert!(self.is_xtype(Type::Vector));
+        {
+            self.vector()[idx] = val;
+        }
+    }
+
+    pub fn bytevector_ref(self, idx: usize) -> u8 {
+        assert!(self.is_xtype(Type::Bytevector));
+        {
+            self.bytevector()[idx]
+        }
+    }
+
+    pub fn bytevector_set(self, idx: usize, val: u8) {
+        assert!(self.is_xtype(Type::Bytevector));
+        {
+            self.bytevector()[idx] = val;
+        }
+    }
+
+    pub fn vector_len(self) -> usize {
+        assert!(self.is_xtype(Type::Vector));
+        {
+            self.vector().len()
+        }
+    }
+
+    pub fn bytevector_len(self) -> usize {
+        assert!(self.is_xtype(Type::Bytevector));
+        {
+            self.bytevector().len()
+        }
+    }
+
+    pub fn is_identifier(self) -> bool {
+        self.is_xtype(Type::Identifier) || self.is_xtype(Type::Symbol)
+    }
+
+    pub fn is_wrapped_identifier(self) -> bool {
+        self.is_xtype(Type::Identifier)
+    }
+
+    pub fn is_pair(self) -> bool {
+        self.is_xtype(Type::Pair)
+    }
+
+    pub fn is_vector(self) -> bool {
+        self.is_xtype(Type::Vector)
+    }
+
+    pub fn is_syntax(self) -> bool {
+        self.is_xtype(Type::Syntax)
+    }
+
+    pub fn is_synrules(self) -> bool {
+        self.is_xtype(Type::Synrules)
+    }
+
+    pub fn syntax_rules(self) -> Handle<SyntaxRules> {
+        assert!(self.is_xtype(Type::Synrules));
+        unsafe { std::mem::transmute(self.0.ptr) }
+    }
+
+    pub fn is_module(self) -> bool {
+        self.is_xtype(Type::Module)
+    }
+
+    pub fn is_string(self) -> bool {
+        self.is_xtype(Type::Str)
+    }
+
+    pub fn is_symbol(self) -> bool {
+        self.is_xtype(Type::Symbol)
+    }
+
+    pub fn is_lvar(self) -> bool {
+        self.is_xtype(Type::LVar)
+    }
+
+    pub fn lvar(self) -> Handle<LVar> {
+        assert!(self.is_xtype(Type::LVar));
+        unsafe { std::mem::transmute(self.0.ptr) }
+    }
+
+    pub fn syntax(self) -> Handle<Syntax> {
+        assert!(self.is_xtype(Type::Syntax));
+        unsafe { std::mem::transmute(self.0.ptr) }
+    }
+
+    pub fn strsym<'a>(&self) -> &'a str {
+        assert!(self.is_xtype(Type::Str) || self.is_xtype(Type::Symbol));
+        if self.is_string() {
+            // SAFETY: `Value` is transparent wrapper around pointer types
+            let s: &Handle<Str> = unsafe { std::mem::transmute(self) };
+
+            &**s
+        } else {
+            let s: &Handle<Symbol> = unsafe { std::mem::transmute(self) };
+
+            &**s
+        }
+    }
+
+    pub fn first(self) -> Value {
+        self.car()
+    }
+
+    pub fn second(self) -> Value {
+        self.cdr().car()
+    }
+
+    pub fn third(self) -> Value {
+        self.cdr().cdr().car()
+    }
+
+    pub fn fourth(self) -> Value {
+        self.cdr().cdr().cdr().car()
+    }
+
+    pub fn fifth(self) -> Value {
+        self.cdr().cdr().cdr().cdr().car()
+    }
+
+    pub fn sixth(self) -> Value {
+        self.cdr().cdr().cdr().cdr().cdr().car()
+    }
+
+    pub fn seventh(self) -> Value {
+        self.cdr().cdr().cdr().cdr().cdr().cdr().car()
+    }
+
+    pub fn eighth(self) -> Value {
+        self.cdr().cdr().cdr().cdr().cdr().cdr().cdr().car()
+    }
+
+    pub fn ninth(self) -> Value {
+        self.cdr().cdr().cdr().cdr().cdr().cdr().cdr().cdr().car()
+    }
+
+    pub fn tenth(self) -> Value {
+        self.cdr()
+            .cdr()
+            .cdr()
+            .cdr()
+            .cdr()
+            .cdr()
+            .cdr()
+            .cdr()
+            .cdr()
+            .car()
+    }
+
+    pub fn is_reader_reference(self) -> bool {
+        self.is_xtype(Type::ReaderReference)
+    }
+
+    pub fn is_reader_reference_realized(self) -> bool {
+        self.is_xtype(Type::ReaderReference) && !self.reader_reference().value.is_undefined()
+    }
+
+    pub fn reader_reference(self) -> Handle<ReaderReference> {
+        assert!(self.is_xtype(Type::ReaderReference));
+        unsafe { std::mem::transmute(self) }
+    }
+
+    pub fn to_bool(self) -> bool {
+        !self.is_false() || !self.is_empty()
     }
 }
 
@@ -452,6 +692,33 @@ impl Debug for Value {
         } else if self.is_double() {
             write!(f, "{}", self.get_double())
         } else if self.is_object() {
+            if self.is_pair() {
+                write!(f, "(")?;
+                let mut obj = *self;
+                while obj.is_pair() {
+                    write!(f, "{:?}", obj.car())?;
+                    obj = obj.cdr();
+                    if !obj.is_pair() {
+                        break;
+                    } else {
+                        write!(f, " ")?;
+                    }
+                }
+                if !obj.is_null() {
+                    write!(f, " . {:?})", obj)?;
+                } else {
+                    write!(f, ")")?;
+                }
+
+                return Ok(());
+            }
+
+            if self.is_xtype(Type::Synpattern) {
+                return crate::macros::pattern_print(f, *self);
+            } else if self.is_xtype(Type::Pvref) {
+                return crate::macros::pvref_print(f, *self);
+            }
+
             let obj = *self;
             if obj.is_xtype(Type::Str) {
                 write!(f, "{}", obj.string())
@@ -463,6 +730,13 @@ impl Debug for Value {
                     "#<module '{:?}' at 0x{:x}>",
                     obj.module().name,
                     self.get_raw()
+                )
+            } else if obj.is_xtype(Type::Identifier) {
+                write!(
+                    f,
+                    "#<identifier {:?}@{:?}>",
+                    self.identifier().module.module().name,
+                    self.identifier().name
                 )
             } else {
                 let obj = unsafe {
@@ -492,5 +766,11 @@ impl PartialEq<str> for Value {
         } else {
             false
         }
+    }
+}
+
+impl Hash for Value {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.get_raw().hash(state);
     }
 }

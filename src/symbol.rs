@@ -1,61 +1,88 @@
-use std::{mem::MaybeUninit, sync::atomic::AtomicUsize};
+use std::{collections::hash_map::Entry, mem::MaybeUninit, sync::atomic::AtomicUsize};
 
-use dashmap::DashMap;
-use once_cell::sync::Lazy;
 use rsgc::{
     heap::{heap::heap, root_processor::SimpleRoot},
     prelude::{Handle, Object, Visitor},
+    sync::mutex::Mutex,
     thread::Thread,
 };
+use std::collections::HashMap;
 
-use crate::{object::Symbol, value::Value};
+use crate::{
+    object::{ObjectHeader, Symbol, Type},
+    value::Value,
+};
 
-static OTABLE: Lazy<DashMap<&'static str, Handle<Symbol>>> = Lazy::new(|| DashMap::new());
+//static OTABLE: Lazy<DashMap<&'static str, Handle<Symbol>>> = Lazy::new(|| DashMap::new());
 
 fn trace_symbols(visitor: &mut dyn Visitor) {
-    {
-        for symbol in OTABLE.iter() {
-            symbol.value().trace(visitor);
+    unsafe {
+        let symtab = SYMTAB.assume_init_ref();
+        let symtab = symtab.unsafe_get();
+
+        for symbol in symtab.values() {
+            symbol.trace(visitor);
         }
+        //for symbol in OTABLE.iter() {
+        //    symbol.value().trace(visitor);
+        //}
     }
 }
 
 pub(crate) fn init_symbols() {
+    unsafe {
+        SYMTAB = MaybeUninit::new(Mutex::new(HashMap::new()));
+    }
+
     heap().add_root(SimpleRoot::new("Symbols", "sym", |proc| {
         trace_symbols(proc.visitor());
     }));
 }
 
+static mut SYMTAB: MaybeUninit<Mutex<HashMap<&str, Handle<Symbol>>>> = MaybeUninit::uninit();
+
 pub fn make_symbol(name: &str, interned: bool) -> Value {
     if interned {
         // Fast path
-        let otable = &*OTABLE;
-        if let Some(symbol) = otable.get(name) {
-            return Value::encode_object_value(*symbol.value());
+        unsafe {
+            let symtab = SYMTAB.assume_init_ref();
+            if let Some(sym) = symtab.lock(true).get(name) {
+                return Value::encode_object_value(*sym);
+            }
         }
     }
 
-    let mut sym = Thread::current().allocate_varsize::<Symbol>(name.len() + 1);
+    let mut sym = Thread::current().allocate_varsize::<Symbol>(name.len());
 
     // # SAFETY:
-    // 
+    //
     // `allocate_varsize()` allocates enough space to hold the `Symbol` struct plus the length of the name plus 1 for the null terminator.
     // Memory is zeroed and pointer is valid.
     unsafe {
         let ptr = sym.assume_init_mut();
+        (*ptr).object = ObjectHeader::new(Type::Symbol);
         (*ptr)
             .data
             .as_mut_ptr()
             .copy_from_nonoverlapping(name.as_ptr(), name.len());
-        (*ptr).data.as_mut_ptr().add(name.len()).write(0);
         (*ptr).interned = interned;
         (*ptr).generated = false;
 
         let sym = sym.assume_init();
-        
+
         if interned {
-            let otable = &*OTABLE;
-            otable.insert(std::mem::transmute(&**sym), sym);
+            match SYMTAB
+                .assume_init_ref()
+                .lock(true)
+                .entry(std::mem::transmute({
+                    let s: &str = &sym;
+                    s
+                })) {
+                Entry::Occupied(entry) => return Value::encode_object_value(*entry.get()),
+                Entry::Vacant(entry) => {
+                    entry.insert(sym);
+                }
+            }
         }
         Value::encode_object_value(sym)
     }
@@ -87,7 +114,7 @@ pub fn scm_symbol_sans_prefix(s: Handle<Symbol>, p: Handle<Symbol>) -> Value {
     if let Some(n) = s.strip_prefix(&**p) {
         return make_symbol(n, true);
     } else {
-        return Value::encode_bool_value(false)
+        return Value::encode_bool_value(false);
     }
 }
 

@@ -1,5 +1,3 @@
-use std::marker::PhantomData;
-
 macro_rules! op {
     ($($op: ident $val: expr),*) => {
         $(
@@ -23,7 +21,7 @@ op! {
     ACC_INT32 4,
     ACC_STORE 5, // Stores the value in the accumulator to the given register
     ACC_LOAD 6, // Loads the value from the given register to the accumulator
-    
+
     ACC_GLOBAL 7,
     ACC_ENV 8,
     ACC_BOX 9, // `AccBox rN` boxes the value in the register `rN` and stores it in the accumulator
@@ -73,33 +71,16 @@ op! {
     JUMP_IF_TRUE 48,
 
     MAKE_CLOSURE 49,
-    
+
     LAST 128,
 
     WIDE16 129,
     WIDE32 130
 }
 
-
 pub const OP_NARROW: u8 = 0;
 pub const OP_WIDE16: u8 = 1;
 pub const OP_WIDE32: u8 = 2;
-
-
-
-macro_rules! opcode_decl {
-    ($name: ident $op_b: ident => {
-        args: {
-            $($arg: ident: $arg_ty: ty),*
-        },  
-        meta: {
-            $($meta: ident: $meta_ty: ty),*
-        }
-    }) => {
-        
-    };
-}
-
 
 pub trait Fits<T: Copy, const SIZE: u8, const C: bool> {
     type Target;

@@ -1,31 +1,51 @@
 use capy::{
-    list::{scm_append, scm_list, scm_list_ref},
+    comp::ast::r7rs_to_value,
+    compile::{make_cenv, pass1::pass1},
+    list::{scm_cons, scm_reverse},
+    module::scm_user_module,
+    scm_dolist,
     value::Value,
 };
-use rsgc::thread::{main_thread, Thread};
+use r7rs_parser::expr::NoIntern;
+use rsgc::{
+    prelude::HeapArguments,
+    thread::{main_thread, Thread},
+};
 
 fn main() {
-    let _ = main_thread(Default::default(), |_| {
-        let ls1 = scm_list(
-            Thread::current(),
-            &[
-                Value::encode_int32(1),
-                Value::encode_int32(2),
-                Value::encode_int32(3),
-            ],
-        );
-        let ls2 = scm_list(
-            Thread::current(),
-            &[
-                Value::encode_int32(4),
-                Value::encode_int32(5),
-                Value::encode_int32(6),
-            ],
-        );
+    env_logger::init();
+    let _ = main_thread(HeapArguments::from_env(), |heap| {
+        heap.add_core_root_set();
 
-        let ls3 = scm_append(Thread::current(), ls1, ls2);
+        capy::init();
+        capy::vm::scm_init_vm();
+        let cenv = make_cenv(scm_user_module().module(), Value::encode_null_value());
 
-        println!("{:?}", scm_list_ref(ls3, 5));
+        let file = std::fs::read_to_string("test.scm").unwrap();
+        let mut i = NoIntern;
+        let mut parser = r7rs_parser::parser::Parser::new(&mut i, &file, false);
+        let mut sexp = Value::encode_null_value();
+        let t = Thread::current();
+        while !parser.finished() {
+            let expr = parser.parse(true).unwrap();
+            let expr = r7rs_to_value(t, &expr);
+
+            sexp = scm_cons(t, expr, sexp);
+        }
+
+        sexp = scm_reverse(t, sexp);
+        let mut out = termcolor::StandardStream::stdout(termcolor::ColorChoice::Always);
+        scm_dolist!(sexp, sexp, {
+            match pass1(sexp, cenv) {
+                Ok(expr) => {
+                    expr.pretty_print(&mut out).unwrap();
+                    println!();
+                }
+                Err(e) => {
+                    println!("Err: {:?}", e);
+                }
+            }
+        });
 
         Ok(())
     });
