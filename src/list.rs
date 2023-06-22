@@ -1,7 +1,7 @@
 use rsgc::{prelude::Handle, thread::Thread};
 
 use crate::{
-    object::{ObjectHeader, Pair, Type, Vector},
+    object::{ExtendedPair, ObjectHeader, Pair, Type, Vector},
     value::Value,
     vector::make_vector,
 };
@@ -12,6 +12,16 @@ pub fn scm_cons(t: &mut Thread, car: Value, cdr: Value) -> Value {
         car,
         cdr,
     }))
+}
+
+pub fn scm_econs(t: &mut Thread, attr: Value, car: Value, cdr: Value) -> Value {
+    let pair = t.allocate(ExtendedPair {
+        object: ObjectHeader::new(Type::Pair),
+        car,
+        cdr,
+        attr,
+    });
+    Value::encode_object_value(pair)
 }
 
 pub fn scm_memq(obj: Value, list: Value) -> Value {

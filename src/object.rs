@@ -2,25 +2,41 @@ use std::{
     fmt::{Debug, Display, Formatter},
     hash::Hash,
     mem::{offset_of, size_of},
-    ops::{Deref, DerefMut},
+    ops::{Deref, DerefMut, Index},
 };
 
+use rsgc::utils::bitfield::BitField;
 use rsgc::{
     prelude::{Allocation, Handle, Object},
-    system::collections::hashmap::HashMap,
+    system::{array::Array, collections::hashmap::HashMap},
+    thread::Thread,
 };
 
-use crate::{compile::IForm, value::Value};
+use crate::{compile::IForm, string::make_string, value::Value, vm::callframe::CallFrame};
+
+pub const EXTENDED_PAIR_BIT: usize = 0;
+pub const EXTENDED_PAIR_BIT_SIZE: usize = 1;
+pub type ExtendedPairBitfield = BitField<EXTENDED_PAIR_BIT_SIZE, EXTENDED_PAIR_BIT, false>;
 
 #[repr(C)]
 pub struct ObjectHeader {
     pub(crate) typ: Type,
+    pub(crate) flags: u32
 }
 
 impl ObjectHeader {
     #[inline(always)]
     pub(crate) const fn new(typ: Type) -> Self {
-        Self { typ }
+        Self { typ, flags: 0 }
+    }
+
+    #[inline(always)]
+    pub const fn is_extended_pair(&self) -> bool {
+        ExtendedPairBitfield::decode(self.flags as u64) != 0 
+    }
+
+    pub fn set_extended_pair(&mut self, value: bool) {
+        self.flags = ExtendedPairBitfield::update(value as _, self.flags as u64) as u32;
     }
 }
 
@@ -39,6 +55,7 @@ pub enum Type {
     Rational,
     Str,
     Vector,
+    Values,
     Pair,
     Bytevector,
     Identifier,
@@ -53,7 +70,30 @@ pub enum Type {
     Synrules,
     Synpattern,
     Pvref,
+
+    CodeBlock,
+    Procedure,
+    NativeProcedure,
+    ClosedNativeProcedure,
 }
+
+#[repr(C)]
+pub struct ExtendedPair {
+    pub(crate) object: ObjectHeader,
+    pub(crate) car: Value,
+    pub(crate) cdr: Value,
+    pub(crate) attr: Value,
+}
+
+impl Object for ExtendedPair {
+    fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
+        self.car.trace(visitor);
+        self.cdr.trace(visitor);
+        self.attr.trace(visitor);
+    }
+}
+
+impl Allocation for ExtendedPair {}
 
 #[repr(C)]
 pub struct Pair {
@@ -61,6 +101,7 @@ pub struct Pair {
     pub(crate) car: Value,
     pub(crate) cdr: Value,
 }
+
 
 impl Object for Pair {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
@@ -510,3 +551,224 @@ impl Object for ReaderReference {
 }
 
 impl Allocation for ReaderReference {}
+
+#[repr(C)]
+pub struct CodeBlock {
+    pub(crate) header: ObjectHeader,
+    pub name: Value,
+    /// vector of constants
+    pub literals: Value,
+    /// vector of code blocks
+    pub fragments: Handle<Array<Handle<CodeBlock>>>,
+    pub(crate) code_len: u32,
+    pub(crate) code: [u8; 0],
+}
+
+impl CodeBlock {
+    pub fn start_ip(&self) -> *const u8 {
+        self.code.as_ptr()
+    }
+
+    pub fn code(&self) -> &[u8] {
+        unsafe { std::slice::from_raw_parts(self.code.as_ptr(), self.code_len as usize) }
+    }
+}
+
+impl Index<usize> for CodeBlock {
+    type Output = u8;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        unsafe { self.code.get_unchecked(index) }
+    }
+}
+
+impl Object for CodeBlock {
+    fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
+        self.name.trace(visitor);
+        self.literals.trace(visitor);
+        self.fragments.trace(visitor);
+    }
+}
+
+impl Allocation for CodeBlock {
+    const VARSIZE: bool = true;
+    const VARSIZE_ITEM_SIZE: usize = 1;
+    const VARSIZE_NO_HEAP_PTRS: bool = true;
+    const VARSIZE_OFFSETOF_CAPACITY: usize = offset_of!(CodeBlock, code_len);
+    const VARSIZE_OFFSETOF_LENGTH: usize = offset_of!(CodeBlock, code_len);
+    const VARSIZE_OFFSETOF_VARPART: usize = offset_of!(CodeBlock, code);
+}
+
+#[repr(C)]
+pub struct Procedure {
+    pub(crate) header: ObjectHeader,
+    pub(crate) name: Value,
+    pub code: Handle<CodeBlock>,
+    pub(crate) env_size: u32,
+    pub(crate) captures: [Value; 0],
+}
+
+impl Object for Procedure {
+    fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
+        self.name.trace(visitor);
+        self.code.trace(visitor);
+    }
+
+    fn trace_range(&self, from: usize, to: usize, visitor: &mut dyn rsgc::prelude::Visitor) {
+        for i in from..to {
+            unsafe {
+                self.captures.get_unchecked(i).trace(visitor);
+            }
+        }
+    }
+}
+
+impl Allocation for Procedure {
+    const VARSIZE: bool = true;
+    const VARSIZE_ITEM_SIZE: usize = size_of::<Value>();
+    const VARSIZE_NO_HEAP_PTRS: bool = false;
+    const VARSIZE_OFFSETOF_CAPACITY: usize = offset_of!(Procedure, env_size);
+    const VARSIZE_OFFSETOF_LENGTH: usize = offset_of!(Procedure, env_size);
+    const VARSIZE_OFFSETOF_VARPART: usize = offset_of!(Procedure, captures);
+}
+
+#[repr(C)]
+pub struct NativeProcedure {
+    pub(crate) header: ObjectHeader,
+    pub(crate) name: Value,
+    pub(crate) mina: u32,
+    pub(crate) maxa: u32,
+    pub(crate) callback: fn(&mut CallFrame) -> ScmResult,
+}
+
+impl Object for NativeProcedure {
+    fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
+        self.name.trace(visitor);
+    }
+}
+
+impl Allocation for NativeProcedure {}
+
+#[repr(C)]
+pub struct ClosedNativeProcedure {
+    pub(crate) header: ObjectHeader,
+    pub(crate) name: Value,
+    pub(crate) mina: u32,
+    pub(crate) maxa: u32,
+    pub(crate) callback: fn(&mut CallFrame, &mut [Value]) -> ScmResult,
+    pub(crate) env_size: u32,
+    pub(crate) captures: [Value; 0],
+}
+
+impl Object for ClosedNativeProcedure {
+    fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
+        self.name.trace(visitor);
+    }
+
+    fn trace_range(&self, from: usize, to: usize, visitor: &mut dyn rsgc::prelude::Visitor) {
+        for i in from..to {
+            unsafe {
+                self.captures.get_unchecked(i).trace(visitor);
+            }
+        }
+    }
+}
+
+impl Allocation for ClosedNativeProcedure {
+    const VARSIZE: bool = true;
+    const VARSIZE_ITEM_SIZE: usize = size_of::<Value>();
+    const VARSIZE_NO_HEAP_PTRS: bool = false;
+    const VARSIZE_OFFSETOF_CAPACITY: usize = offset_of!(ClosedNativeProcedure, env_size);
+    const VARSIZE_OFFSETOF_LENGTH: usize = offset_of!(ClosedNativeProcedure, env_size);
+    const VARSIZE_OFFSETOF_VARPART: usize = offset_of!(ClosedNativeProcedure, captures);
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub struct ScmResult {
+    pub(crate) tag: u8,
+    pub(crate) value: Value,
+}
+
+impl ScmResult {
+    pub const OK: u8 = 0;
+    pub const TAIL: u8 = 1;
+    pub const ERR: u8 = 2;
+
+    pub fn ok(value: Value) -> Self {
+        Self {
+            tag: Self::OK,
+            value,
+        }
+    }
+
+    pub fn tail(value: Value) -> Self {
+        Self {
+            tag: Self::TAIL,
+            value,
+        }
+    }
+
+    pub fn err(value: Value) -> Self {
+        Self {
+            tag: Self::ERR,
+            value,
+        }
+    }
+
+    pub fn is_ok(&self) -> bool {
+        self.tag == Self::OK
+    }
+
+    pub fn is_tail(&self) -> bool {
+        self.tag == Self::TAIL
+    }
+
+    pub fn is_err(&self) -> bool {
+        self.tag == Self::ERR
+    }
+
+    pub fn value(&self) -> Value {
+        self.value
+    }
+}
+
+pub const MAX_ARITY: u32 = 0x7FFFFFFF;
+
+pub fn check_arity(mina: u32, maxa: u32, argc: usize) -> bool {
+    if argc < mina as usize {
+        false
+    } else if argc > maxa as usize {
+        false
+    } else {
+        true
+    }
+}
+
+pub fn wrong_arity(name: Value, argc: u32, mina: u32, maxa: u32) -> Value {
+    let t = Thread::current();
+
+    (if mina == maxa {
+        make_string(
+            t,
+            &format!("{:?}: expected {} arguments, got {}", name, mina, argc),
+        )
+    } else if maxa == MAX_ARITY {
+        make_string(
+            t,
+            &format!(
+                "{:?}: expected at least {} arguments, got {}",
+                name, mina, argc
+            ),
+        )
+    } else {
+        make_string(
+            t,
+            &format!(
+                "{:?}: expected between {} and {} arguments, got {}",
+                name, mina, maxa, argc
+            ),
+        )
+    })
+    .into()
+}

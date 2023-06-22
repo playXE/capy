@@ -52,10 +52,10 @@ use rsgc::{
     thread::Thread,
 };
 
+// no need to trace these symbols, they are registered in the global symbol table
+// that is already traced.
 pub static ELLIPSIS: Lazy<Value> = Lazy::new(|| make_symbol("...", true));
 pub static UNDERBAR: Lazy<Value> = Lazy::new(|| make_symbol("_", true));
-
-pub(crate) fn init_macro() {}
 
 #[repr(C)]
 pub struct SyntaxRules {
@@ -472,6 +472,7 @@ impl PatternContext {
             }
 
             if !scm_memq(form, self.literals).is_false() {
+               
                 if patternp {
                     let m = self.module;
                     let e = self.env;
@@ -603,6 +604,7 @@ fn compile_rules(
     module: Handle<Module>,
     env: Value,
 ) -> Result<Value, Value> {
+    
     let t = Thread::current();
 
     let num_rules = scm_length(rules)
@@ -993,14 +995,12 @@ fn realize_template_rec(
                 }
                
                 template_append(thread, &mut h, &mut t, r);
-                //println!("realize pattern in pair append {:?} head={:?}", r, h);
             } else {
                 let r = realize_template_rec(thread, sr, e, mvec, level, indices, id_alist, exlev);
 
                 if r.is_undefined() {
                     return r;
                 }
-                //println!("2) realize pattern in pair append {:?} head={:?}", r, h);
                 template_append1(thread, &mut h, &mut t, r);
                 
             }

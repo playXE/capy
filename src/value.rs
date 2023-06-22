@@ -5,7 +5,7 @@ use crate::{
     macros::SyntaxRules,
     object::{
         Bytevector, Identifier, Module, ObjectHeader, Pair, ReaderReference, Str, Symbol, Syntax,
-        Type, Vector, GLOC,
+        Type, Vector, GLOC, ExtendedPair, Procedure,
     },
 };
 
@@ -405,7 +405,7 @@ impl Value {
     }
 
     pub fn vector(self) -> Handle<Vector> {
-        assert!(self.is_xtype(Type::Vector));
+        assert!(self.is_xtype(Type::Vector) || self.is_xtype(Type::Values));
         unsafe { std::mem::transmute(self.0.ptr) }
     }
 
@@ -440,6 +440,22 @@ impl Value {
         assert!(self.is_xtype(Type::Pair));
         {
             (*self.pair()).cdr
+        }
+    }
+
+    pub fn extended_pair_attr(self) -> Value {
+        debug_assert!(self.is_extended_pair());
+        unsafe {
+            let pair: Handle<ExtendedPair> = std::mem::transmute(self.0.ptr);
+            pair.attr 
+        }
+    }
+
+    pub fn set_extended_pair_attr(self, attr: Value) {
+        debug_assert!(self.is_extended_pair());
+        unsafe {
+            let mut pair: Handle<ExtendedPair> = std::mem::transmute(self.0.ptr);
+            pair.attr = attr;
         }
     }
 
@@ -511,6 +527,13 @@ impl Value {
         }
     }
 
+    pub fn values_ref(self, idx: usize) -> Value {
+        assert!(self.is_xtype(Type::Values));
+        {
+            self.vector()[idx]
+        }
+    }
+
     pub fn bytevector_ref(self, idx: usize) -> u8 {
         assert!(self.is_xtype(Type::Bytevector));
         {
@@ -526,7 +549,7 @@ impl Value {
     }
 
     pub fn vector_len(self) -> usize {
-        assert!(self.is_xtype(Type::Vector));
+        assert!(self.is_xtype(Type::Vector) || self.is_xtype(Type::Values));
         {
             self.vector().len()
         }
@@ -549,6 +572,10 @@ impl Value {
 
     pub fn is_pair(self) -> bool {
         self.is_xtype(Type::Pair)
+    }
+
+    pub fn is_extended_pair(self) -> bool {
+        self.is_xtype(Type::Pair) && self.object_header().is_extended_pair()
     }
 
     pub fn is_vector(self) -> bool {
@@ -584,6 +611,14 @@ impl Value {
         self.is_xtype(Type::LVar)
     }
 
+    pub fn object_header(self) -> ObjectHeader {
+        debug_assert!(self.is_object());
+        unsafe {
+            let ptr = self.get_raw() as usize;
+            (ptr as *const ObjectHeader).read()
+        }
+    }
+
     pub fn lvar(self) -> Handle<LVar> {
         assert!(self.is_xtype(Type::LVar));
         unsafe { std::mem::transmute(self.0.ptr) }
@@ -593,7 +628,7 @@ impl Value {
         assert!(self.is_xtype(Type::Syntax));
         unsafe { std::mem::transmute(self.0.ptr) }
     }
-
+    
     pub fn strsym<'a>(&self) -> &'a str {
         assert!(self.is_xtype(Type::Str) || self.is_xtype(Type::Symbol));
         if self.is_string() {
@@ -672,6 +707,29 @@ impl Value {
 
     pub fn to_bool(self) -> bool {
         !self.is_false() || !self.is_empty()
+    }
+
+    pub fn is_procedure(self) -> bool {
+        self.is_xtype(Type::Procedure)
+            || self.is_xtype(Type::NativeProcedure)
+            || self.is_xtype(Type::ClosedNativeProcedure)
+    }
+
+    pub fn is_native_procedure(self) -> bool {
+        self.is_xtype(Type::NativeProcedure) || self.is_xtype(Type::ClosedNativeProcedure)
+    }
+
+    pub fn is_closed_native_procedure(self) -> bool {
+        self.is_xtype(Type::ClosedNativeProcedure)
+    }
+
+    pub fn is_vm_procedure(self) -> bool {
+        self.is_xtype(Type::Procedure)
+    }
+
+    pub fn procedure(self) -> Handle<Procedure> {
+        assert!(self.is_procedure());
+        unsafe { std::mem::transmute(self) }
     }
 }
 

@@ -16,7 +16,7 @@ use crate::{
     macros::{scm_compile_syntax_rules, synrule_expand},
     module::{
         is_global_identifier_eq, scm_find_module, scm_import_module, scm_insert_binding,
-        scm_insert_syntax_rule_binding, scm_make_module,
+        scm_insert_syntax_rule_binding, scm_make_module, scm_export_symbols,
     },
     object::{Identifier, Module, ObjectHeader, Type},
     scm_dolist,
@@ -78,7 +78,7 @@ pub fn pass1_call(
 ) -> Result<Handle<IForm>, Value> {
     if let IForm::Lambda(_) = &*proc {
         let mut alist = ArrayList::with_capacity(Thread::current(), scm_length(args).unwrap());
-
+    
         scm_dolist!(arg, args, {
             alist.push(Thread::current(), pass1(arg, cenv)?);
         });
@@ -126,6 +126,7 @@ pub fn pass1(program: Value, cenv: Value) -> Result<Handle<IForm>, Value> {
             }
             GlobalCall::Macro(m) => {
                 if m.is_synrules() {
+                    
                     let form = synrule_expand(
                         Thread::current(),
                         program,
@@ -133,6 +134,7 @@ pub fn pass1(program: Value, cenv: Value) -> Result<Handle<IForm>, Value> {
                         cenv_frames(cenv),
                         m.syntax_rules(),
                     )?;
+                   
                     pass1(form, cenv)
                 } else {
                     todo!()
@@ -226,7 +228,9 @@ pub fn expand_inlined_procedure(
     iform: Handle<IForm>,
     iargs: &[Handle<IForm>],
 ) -> Result<Handle<IForm>, Value> {
+    
     if let IForm::Lambda(ref lambda) = &*iform {
+        
         let args = adjust_arglist(lambda.reqargs, lambda.optarg, iargs, lambda.name)?;
         let lvars = &lambda.lvars;
 
@@ -692,6 +696,12 @@ pub fn define_syntax() {
         }
     });
 
+    define_syntax!("export", None, form, cenv, {
+        scm_export_symbols(cenv_module(cenv), form.cdr())?;
+
+        Ok(make_iform(IForm::Const(Value::encode_undefined_value())))
+    });
+
     define_syntax!("import", None, form, cenv, {
         fn ensure(m: Value) -> Result<Handle<Module>, Value> {
             let o = m;
@@ -946,6 +956,7 @@ fn pass1_body_rec(
                             head.syntax_rules(),
                         )?;
 
+    
                         return pass1_body_rec(
                             scm_list_star(Thread::current(), &[form, rest]),
                             mframe,

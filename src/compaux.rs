@@ -1,6 +1,4 @@
 use std::collections::hash_map::RandomState;
-
-use r7rs_parser::expr::Sym;
 use rsgc::{
     prelude::Handle,
     system::collections::hashmap::{Entry, HashMap},

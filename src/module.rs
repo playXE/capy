@@ -26,6 +26,7 @@ use once_cell::sync::Lazy;
 use rsgc::{
     prelude::{Handle, Object},
     sync::mutex::Mutex,
+    system::collections::hashmap::Entry,
 };
 use rsgc::{system::collections::hashmap::HashMap as HashTable, thread::Thread};
 use std::collections::{hash_map::RandomState, HashMap};
@@ -38,7 +39,7 @@ use crate::{
     object::{Identifier, Module, ObjectHeader, Symbol, Syntax, Type, GLOC},
     scm_for_each,
     string::make_string,
-    symbol::scm_symbol_sans_prefix,
+    symbol::{make_symbol, scm_symbol_sans_prefix},
     value::Value,
 };
 type Modules = Mutex<HashMap<Handle<Symbol>, Value>>;
@@ -871,4 +872,77 @@ pub fn is_global_identifier_eq(id1: Value, id2: Value) -> bool {
         (Some(g1), Some(g2)) => g1.as_ptr() == g2.as_ptr(),
         _ => false,
     }
+}
+static RENAME: Lazy<Value> = Lazy::new(|| make_symbol("rename", true));
+pub fn scm_export_symbols(mut module: Handle<Module>, specs: Value) -> Result<(), Value> {
+    let mut overwritten = Value::encode_null_value();
+
+    scm_for_each!(lp, specs, {
+        let spec = lp.car();
+
+        if !(spec.is_symbol()
+            || (spec.is_pair()
+                && spec.cdr().is_pair()
+                && spec.cddr().is_pair()
+                && spec.cddr().cdr().is_null()
+                && spec.car() == *RENAME
+                && spec.cadr().is_symbol()
+                && spec.cddr().car().is_symbol()))
+        {
+            return Err(make_string(Thread::current(), "invalid export spec").into());
+        }
+    });
+
+    let modules = MODULES.lock(true);
+    let t = Thread::current();
+    scm_for_each!(lp, specs, {
+        let spec = lp.car();
+        let (name, exported_name) = if spec.is_symbol() {
+            (spec.symbol(), spec.symbol())
+        } else {
+            (spec.cadr().symbol(), spec.cddr().car().symbol())
+        };
+
+        let mut e = module.external.get(&exported_name).copied();
+
+        if let Some(entry) = e {
+            let g = entry.gloc();
+            let n: Value = name.into();
+            if g.name != n {
+                let ls = scm_list(t, &[exported_name.into(), g.name.into(), name.into()]);
+                overwritten = scm_cons(t, ls, overwritten);
+
+                module.external.remove(&exported_name);
+                e = None;
+            }
+        }
+
+        if e.is_none() {
+            let m = module;
+            let g = match module.internal.entry(name) {
+                Entry::Occupied(e) => e.get().gloc(),
+                Entry::Vacant(e) => {
+                    let g = t.allocate(GLOC {
+                        object: ObjectHeader::new(Type::GLOC),
+                        name: name.into(),
+                        module: m.into(),
+                        value: Value::encode_undefined_value(),
+                        hidden: false,
+                        getter: None,
+                        setter: None,
+                    });
+
+                    e.insert(g.into());
+
+                    g
+                }
+            };
+
+            module.external.put(t, exported_name, g.into());
+        }
+    });
+
+    drop(modules);
+
+    Ok(())
 }

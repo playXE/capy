@@ -1,12 +1,12 @@
 use capy::{
-    comp::ast::r7rs_to_value,
-    compile::{make_cenv, pass1::pass1},
+    
+    compile::{make_cenv, pass1::pass1, r7rs_to_value, bytecompiler::ByteCompiler},
     list::{scm_cons, scm_reverse},
     module::scm_user_module,
     scm_dolist,
-    value::Value,
+    value::Value, op::{Opcode, disassembly}, fun::make_procedure, vm::{interpreter::_vm_entry_trampoline, scm_vm},
 };
-use r7rs_parser::expr::NoIntern;
+use r7rs_parser::{expr::NoIntern, parser::Parser};
 use rsgc::{
     prelude::HeapArguments,
     thread::{main_thread, Thread},
@@ -19,33 +19,28 @@ fn main() {
 
         capy::init();
         capy::vm::scm_init_vm();
-        let cenv = make_cenv(scm_user_module().module(), Value::encode_null_value());
-
-        let file = std::fs::read_to_string("test.scm").unwrap();
-        let mut i = NoIntern;
-        let mut parser = r7rs_parser::parser::Parser::new(&mut i, &file, false);
-        let mut sexp = Value::encode_null_value();
         let t = Thread::current();
-        while !parser.finished() {
-            let expr = parser.parse(true).unwrap();
-            let expr = r7rs_to_value(t, &expr);
 
-            sexp = scm_cons(t, expr, sexp);
-        }
+        let source = std::fs::read_to_string("test.scm").unwrap();
+        let mut i = NoIntern;
+        let mut parser = Parser::new(&mut i, &source, false);
 
-        sexp = scm_reverse(t, sexp);
-        let mut out = termcolor::StandardStream::stdout(termcolor::ColorChoice::Always);
-        scm_dolist!(sexp, sexp, {
-            match pass1(sexp, cenv) {
-                Ok(expr) => {
-                    expr.pretty_print(&mut out).unwrap();
-                    println!();
-                }
-                Err(e) => {
-                    println!("Err: {:?}", e);
-                }
+        let module = scm_user_module().module();
+
+        let mut bc = ByteCompiler::new(t);
+
+        match bc.compile_toplevel(t, "test.scm", module, &mut parser)
+        {
+            Ok(proc) => {
+                let proc = proc.procedure();
+                let mut out = termcolor::StandardStream::stdout(termcolor::ColorChoice::Always);
+                disassembly(proc.code, &mut out).unwrap();
             }
-        });
+
+            Err(e) => {
+                println!("error: {:?}", e);
+            }
+        }
 
         Ok(())
     });

@@ -13,8 +13,6 @@ use crate::{
     value::Value,
 };
 
-//static OTABLE: Lazy<DashMap<&'static str, Handle<Symbol>>> = Lazy::new(|| DashMap::new());
-
 fn trace_symbols(visitor: &mut dyn Visitor) {
     unsafe {
         let symtab = SYMTAB.assume_init_ref();

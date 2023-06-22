@@ -1,4 +1,5 @@
 use pretty::{BoxAllocator, DocAllocator, DocBuilder};
+use r7rs_parser::expr::{Expr, NoIntern};
 use rsgc::{
     prelude::{Allocation, Handle, Object},
     system::arraylist::ArrayList,
@@ -8,12 +9,12 @@ use termcolor::{Color, ColorSpec, WriteColor};
 
 use crate::{
     compaux::{scm_identifier_env, scm_identifier_global_binding, scm_make_identifier},
-    list::scm_acons,
+    list::{scm_acons, scm_cons, scm_econs},
     object::{Module, ObjectHeader, Syntax, Type},
     scm_dolist, scm_for_each,
     symbol::make_symbol,
     value::Value,
-    vm::scm_current_module,
+    vm::scm_current_module, vector::{make_bytevector_from_slice, make_vector}, string::make_string, op::Opcode,
 };
 
 pub enum IForm {
@@ -33,6 +34,13 @@ pub enum IForm {
     Cons(Cons),
     List(List),
     Define(Define),
+    Asm(Asm),
+    It,
+}
+
+pub struct Asm {
+    pub op: Opcode,
+    pub args: ArrayList<Handle<IForm>>
 }
 
 impl Object for IForm {
@@ -56,6 +64,8 @@ impl Object for IForm {
             IForm::Cons(c) => c.trace(visitor),
             IForm::List(l) => l.trace(visitor),
             IForm::Define(d) => d.trace(visitor),
+            IForm::Asm(a) => a.args.trace(visitor),
+            _ => (),
         }
     }
 }
@@ -514,6 +524,7 @@ pub fn make_iform(iform: IForm) -> Handle<IForm> {
     Thread::current().allocate(iform)
 }
 
+
 pub fn make_seq(src: Value, seq: &[Handle<IForm>]) -> Handle<IForm> {
     make_iform(IForm::Seq(Seq {
         origin: src,
@@ -557,7 +568,10 @@ pub(crate) fn init_compiler() {
     pass1::define_syntax();
 }
 
+//pub mod anf;
 pub mod pass1;
+pub mod pass2;
+pub mod bytecompiler;
 
 impl IForm {
     pub fn pretty<'a, D>(&self, allocator: &'a D) -> DocBuilder<'a, D, ColorSpec>
@@ -632,96 +646,91 @@ impl IForm {
             }
 
             IForm::Seq(seq) => {
-                let mut doc = allocator
-                    .text("seq")
+                let body_pret = allocator.intersperse(
+                    seq.body.iter().map(|form| form.pretty(allocator)),
+                    allocator.hardline(),
+                );
+
+                allocator
+                    .text("begin")
                     .annotate(ColorSpec::new().set_fg(Some(Color::Blue)).clone())
-                    .append(allocator.space());
-                doc = doc.append(allocator.hardline());
-
-                for (i, f) in seq.body.iter().enumerate() {
-                    if i != 0 {
-                        doc = doc.append(allocator.hardline());
-                    }
-                    doc = doc.append(allocator.space());
-                    doc = doc.append(f.pretty(allocator));
-                }
-
-                doc.group().align().parens()
+                    .append(allocator.space())
+                    .append(body_pret)
+                    .nest(1)
+                    .group()
+                    .parens()
             }
 
             IForm::Call(call) => {
-                let mut doc = allocator
-                    .text("call")
-                    .append(allocator.space())
-                    .append(call.proc.pretty(allocator));
-                for arg in call.args.iter() {
-                    doc = doc
-                        .append(allocator.softline())
-                        .append(arg.pretty(allocator));
-                }
+                let proc_pret = call.proc.pretty(allocator);
+                let args_pret = allocator.intersperse(
+                    call.args.iter().map(|arg| arg.pretty(allocator)),
+                    allocator.line(),
+                );
 
-                doc.align().group().parens()
+                allocator
+                    .text("call")
+                    .annotate(ColorSpec::new().set_fg(Some(Color::Blue)).clone())
+                    .append(allocator.space())
+                    .append(proc_pret)
+                    .append(allocator.space())
+                    .append(args_pret)
+                    .group()
+                    .parens()
             }
 
             IForm::Lambda(lam) => {
                 // (lambda (arg ...) body ...)
-                let mut doc = allocator
+                let args_pret = allocator
+                    .intersperse(
+                        lam.lvars.iter().map(|lvar| {
+                            allocator
+                                .text(format!("{:?}", lvar.name))
+                                .annotate(ColorSpec::new().set_fg(Some(Color::Red)).clone())
+                        }),
+                        allocator.space(),
+                    )
+                    .parens();
+
+                allocator
                     .text("lambda")
                     .annotate(ColorSpec::new().set_fg(Some(Color::Blue)).clone())
-                    .append(allocator.space());
-
-                let mut args = allocator.text("(");
-                for (i, arg) in lam.lvars.iter().enumerate() {
-                    if i != 0 {
-                        args = args.append(allocator.space());
-                    }
-                    args = args.append(format!("{:?}", arg.name));
-                }
-                args = args.append(")");
-
-                doc = doc.append(args);
-                doc = doc.append(allocator.softline());
-                doc = doc.nest(4);
-                doc = doc.append(lam.body.pretty(allocator));
-
-                doc.group().align().parens()
+                    .append(allocator.space())
+                    .append(args_pret)
+                    .append(allocator.line())
+                    .append(lam.body.pretty(allocator))
+                    .nest(1)
+                    .group()
+                    .parens()
             }
 
             IForm::Let(var) => {
                 // (let ((var init) ...) body ...)
-                let mut doc = allocator.text("let");
-                if var.scope == LetScope::Rec {
-                    doc = doc.append("rec");
-                };
-                doc = doc
+                let bindings_pret = allocator
+                    .intersperse(
+                        var.lvars.iter().zip(var.inits.iter()).map(|(n, e)| {
+                            allocator
+                                .text(format!("{:?}", n.name))
+                                .annotate(ColorSpec::new().set_fg(Some(Color::Red)).clone())
+                                .append(allocator.space())
+                                .append(e.pretty(allocator))
+                                .group()
+                                .brackets()
+                        }),
+                        allocator.line(),
+                    )
+                    .parens();
+
+                allocator
+                    .text("let")
                     .annotate(ColorSpec::new().set_fg(Some(Color::Blue)).clone())
-                    .append(allocator.space());
-
-                let mut vars = allocator.text("(");
-
-                for i in 0..var.lvars.len() {
-                    let lvar = var.lvars[i];
-                    let init = var.inits[i];
-
-                    if i != 0 || i != var.lvars.len() - 1 {
-                        vars = vars.append(allocator.softline());
-                    }
-
-                    vars = vars
-                        .append("(")
-                        .append(format!("{:?}", lvar.name))
-                        .append(allocator.space())
-                        .append(init.pretty(allocator))
-                        .append(")");
-                }
-
-                vars = vars.append(")");
-
-                doc = doc.append(vars);
-                doc = doc.append(allocator.softline());
-                doc = doc.append(var.body.pretty(allocator));
-
-                doc.group().align().parens()
+                    .append(allocator.space())
+                    .append(bindings_pret)
+                    .append(allocator.line())
+                    .append(var.body.pretty(allocator))
+                    .nest(1)
+                    .group()
+                    .parens()
             }
 
             IForm::If(cond) => allocator
@@ -729,15 +738,14 @@ impl IForm {
                 .annotate(ColorSpec::new().set_fg(Some(Color::Blue)).clone())
                 .append(allocator.space())
                 .append(cond.cond.pretty(allocator))
-                .append(allocator.line())
-                .nest(4)
-                .append(cond.cons.pretty(allocator).indent(2))
-                .append(allocator.line())
-                .append(cond.alt.pretty(allocator).indent(2))
+                .append(allocator.softline())
+                .append(cond.cons.pretty(allocator))
+                .append(allocator.softline())
+                .append(cond.alt.pretty(allocator))
                 .group()
-                .parens()
-                .align(),
+                .parens(),
 
+            IForm::It => allocator.text("it").annotate(ColorSpec::new().set_fg(Some(Color::Blue)).clone()),
             _ => todo!(),
         }
     }
@@ -747,5 +755,116 @@ impl IForm {
         self.pretty(&allocator).1.render_colored(70, out)?;
 
         Ok(())
+    }
+}
+fn r7rs_to_value_k(thread: &mut Thread, expr: &Expr<NoIntern>, cont: &mut dyn FnMut(Value)) {
+    match expr {
+        Expr::Bool(x) => cont(Value::encode_bool_value(*x)),
+        Expr::Fixnum(i) => cont(Value::encode_int32(*i)),
+        Expr::Float(f) => cont(Value::encode_f64_value(*f)),
+        Expr::Pair(car, cdr) => r7rs_to_value_k(thread, car, &mut |car| {
+            r7rs_to_value_k(Thread::current(), cdr, &mut |cdr| {
+                cont(scm_cons(Thread::current(), car, cdr))
+            })
+        }),
+
+        Expr::ByteVector(x) => cont(make_bytevector_from_slice(thread, x).into()),
+        Expr::Str(x) => cont(make_string(thread, x).into()),
+        Expr::Symbol(x) => cont(make_symbol(x, true)),
+        Expr::GrowableVector(x) | Expr::ImmutableVector(x) => {
+            let vec = make_vector(thread, x.len());
+            for (i, e) in x.iter().enumerate() {
+                r7rs_to_value_k(thread, e, &mut move |e| {
+                    let mut vec = vec;
+                    Thread::current().write_barrier(vec);
+                    vec[i] = e;
+                });
+            }
+            cont(vec.into())
+        }
+
+        Expr::Null => cont(Value::encode_null_value()),
+        Expr::Syntax(loc, e) => {
+            
+            if let Expr::Pair(car, cdr) = &**e {
+                let mut pos = make_vector(thread, 2);
+                pos[0] = Value::encode_int32(loc.line as i32);
+                pos[1] = Value::encode_int32(loc.col as i32);
+                let car = r7rs_to_value(thread, car);
+                let cdr = r7rs_to_value(thread, cdr);
+                let p = scm_econs(thread, pos.into(), car, cdr).into();
+
+                cont(p)
+            } else {
+                r7rs_to_value_k(thread, e, cont)
+            }
+        },
+        _ => unsafe { std::hint::unreachable_unchecked() },
+    }
+}
+
+pub fn r7rs_to_value(thread: &mut Thread, expr: &Expr<NoIntern>) -> Value {
+    let mut ret = Value::encode_null_value();
+    r7rs_to_value_k(thread, expr, &mut |x| ret = x);
+    ret
+}
+
+pub fn ref_count_lvars(mut iform: Handle<IForm>) {
+    match &mut *iform {
+        IForm::LRef(x) => x.lvar.ref_count += 1,
+        IForm::LSet(x) => {
+            x.lvar.set_count += 1;
+        }
+
+        IForm::Call(call) => {
+            for &arg in call.args.iter() {
+                ref_count_lvars(arg);
+            }
+
+            ref_count_lvars(call.proc);
+        }
+
+        IForm::Lambda(l) => {
+            for lvar in l.lvars.iter_mut() {
+                lvar.ref_count += 1;
+            }
+            ref_count_lvars(l.body);
+        }
+
+        IForm::Define(def) => {
+            ref_count_lvars(def.value);
+        }
+
+        IForm::If(x) => {
+            ref_count_lvars(x.cond);
+            ref_count_lvars(x.cons);
+            ref_count_lvars(x.alt);
+        }
+
+        IForm::GSet(x) => {
+            ref_count_lvars(x.value);
+        }
+
+        IForm::Seq(x) => {
+            for &e in x.body.iter() {
+                ref_count_lvars(e);
+            }
+        }
+
+        IForm::Dynenv(e) => {
+            ref_count_lvars(e.body);
+            for (k,v) in e.kvs.iter().copied() {
+                ref_count_lvars(k);
+                ref_count_lvars(v);
+            }
+        }
+
+        IForm::Asm(asm) => {
+            for &arg in asm.args.iter() {
+                ref_count_lvars(arg);
+            }
+        }
+
+        _ => ()
     }
 }

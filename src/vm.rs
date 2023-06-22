@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 use std::mem::MaybeUninit;
+use std::ptr::null_mut;
 
 use rsgc::heap::heap::heap;
 use rsgc::heap::root_processor::SimpleRoot;
@@ -33,6 +34,8 @@ pub struct VM {
     thunk: Value,
     result: Value,
     result_exception: Value,
+    sp: *mut Value,
+    stack: Box<[Value]>,
     module: Option<Handle<Module>>,
 }
 
@@ -91,10 +94,13 @@ pub fn scm_init_vm() {
             result: Value::encode_null_value(),
             result_exception: Value::encode_null_value(),
             module: None,
+            sp: null_mut(),
+            stack: vec![Value::encode_undefined_value(); 4096].into_boxed_slice()
         });
     }
 
     unsafe {
+        scm_vm().sp = scm_vm().stack.last_mut().unwrap() as *mut Value;
         let rt = RUNTIME.assume_init_mut();
         rt.rlock.lock(true);
         rt.threads.push(VM.assume_init_mut());
@@ -112,3 +118,9 @@ pub fn scm_vm<'a>() -> &'a mut VM {
 pub fn scm_current_module() -> Option<Handle<Module>> {
     scm_vm().module
 }
+
+
+pub mod callframe;
+pub mod setjmp;
+pub mod interpreter;
+
