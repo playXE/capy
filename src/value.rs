@@ -5,7 +5,7 @@ use crate::{
     macros::SyntaxRules,
     object::{
         Bytevector, Identifier, Module, ObjectHeader, Pair, ReaderReference, Str, Symbol, Syntax,
-        Type, Vector, GLOC, ExtendedPair, Procedure,
+        Type, Vector, GLOC, ExtendedPair, Procedure, Box,
     },
 };
 
@@ -390,54 +390,54 @@ impl Value {
     }
 
     pub fn gloc(self) -> Handle<GLOC> {
-        assert!(self.is_xtype(Type::GLOC));
+        debug_assert!(self.is_xtype(Type::GLOC));
         unsafe { std::mem::transmute(self.0.ptr) }
     }
 
     pub fn module(self) -> Handle<Module> {
-        assert!(self.is_xtype(Type::Module));
+        debug_assert!(self.is_xtype(Type::Module));
         unsafe { std::mem::transmute(self.0.ptr) }
     }
 
     pub fn pair(self) -> Handle<Pair> {
-        assert!(self.is_xtype(Type::Pair));
+        debug_assert!(self.is_xtype(Type::Pair));
         unsafe { std::mem::transmute(self.0.ptr) }
     }
 
     pub fn vector(self) -> Handle<Vector> {
-        assert!(self.is_xtype(Type::Vector) || self.is_xtype(Type::Values));
+        debug_assert!(self.is_xtype(Type::Vector) || self.is_xtype(Type::Values));
         unsafe { std::mem::transmute(self.0.ptr) }
     }
 
     pub fn bytevector(self) -> Handle<Bytevector> {
-        assert!(self.is_xtype(Type::Bytevector));
+        debug_assert!(self.is_xtype(Type::Bytevector));
         unsafe { std::mem::transmute(self.0.ptr) }
     }
 
     pub fn string(self) -> Handle<Str> {
-        assert!(self.is_xtype(Type::Str));
+        debug_assert!(self.is_xtype(Type::Str));
         unsafe { std::mem::transmute(self.0.ptr) }
     }
 
     pub fn symbol(self) -> Handle<Symbol> {
-        assert!(self.is_xtype(Type::Symbol));
+        debug_assert!(self.is_xtype(Type::Symbol));
         unsafe { std::mem::transmute(self.0.ptr) }
     }
 
     pub fn identifier(self) -> Handle<Identifier> {
-        assert!(self.is_xtype(Type::Identifier));
+        debug_assert!(self.is_xtype(Type::Identifier));
         unsafe { std::mem::transmute(self.0.ptr) }
     }
 
     pub fn car(self) -> Value {
-        assert!(self.is_xtype(Type::Pair));
+        debug_assert!(self.is_xtype(Type::Pair));
         {
             (*self.pair()).car
         }
     }
 
     pub fn cdr(self) -> Value {
-        assert!(self.is_xtype(Type::Pair));
+        debug_assert!(self.is_xtype(Type::Pair));
         {
             (*self.pair()).cdr
         }
@@ -500,63 +500,63 @@ impl Value {
     }
 
     pub fn set_cdr(self, val: Value) {
-        assert!(self.is_xtype(Type::Pair));
+        debug_assert!(self.is_xtype(Type::Pair));
         {
             (*self.pair()).cdr = val;
         }
     }
 
     pub fn set_car(self, val: Value) {
-        assert!(self.is_xtype(Type::Pair));
+        debug_assert!(self.is_xtype(Type::Pair));
         {
             (*self.pair()).car = val;
         }
     }
 
     pub fn vector_ref(self, idx: usize) -> Value {
-        assert!(self.is_xtype(Type::Vector));
+        debug_assert!(self.is_xtype(Type::Vector));
         {
             self.vector()[idx]
         }
     }
 
     pub fn vector_set(self, idx: usize, val: Value) {
-        assert!(self.is_xtype(Type::Vector));
+        debug_assert!(self.is_xtype(Type::Vector));
         {
             self.vector()[idx] = val;
         }
     }
 
     pub fn values_ref(self, idx: usize) -> Value {
-        assert!(self.is_xtype(Type::Values));
+        debug_assert!(self.is_xtype(Type::Values));
         {
             self.vector()[idx]
         }
     }
 
     pub fn bytevector_ref(self, idx: usize) -> u8 {
-        assert!(self.is_xtype(Type::Bytevector));
+        debug_assert!(self.is_xtype(Type::Bytevector));
         {
             self.bytevector()[idx]
         }
     }
 
     pub fn bytevector_set(self, idx: usize, val: u8) {
-        assert!(self.is_xtype(Type::Bytevector));
+        debug_assert!(self.is_xtype(Type::Bytevector));
         {
             self.bytevector()[idx] = val;
         }
     }
 
     pub fn vector_len(self) -> usize {
-        assert!(self.is_xtype(Type::Vector) || self.is_xtype(Type::Values));
+        debug_assert!(self.is_xtype(Type::Vector) || self.is_xtype(Type::Values));
         {
             self.vector().len()
         }
     }
 
     pub fn bytevector_len(self) -> usize {
-        assert!(self.is_xtype(Type::Bytevector));
+        debug_assert!(self.is_xtype(Type::Bytevector));
         {
             self.bytevector().len()
         }
@@ -620,17 +620,17 @@ impl Value {
     }
 
     pub fn lvar(self) -> Handle<LVar> {
-        assert!(self.is_xtype(Type::LVar));
+        debug_assert!(self.is_xtype(Type::LVar));
         unsafe { std::mem::transmute(self.0.ptr) }
     }
 
     pub fn syntax(self) -> Handle<Syntax> {
-        assert!(self.is_xtype(Type::Syntax));
+        debug_assert!(self.is_xtype(Type::Syntax));
         unsafe { std::mem::transmute(self.0.ptr) }
     }
     
     pub fn strsym<'a>(&self) -> &'a str {
-        assert!(self.is_xtype(Type::Str) || self.is_xtype(Type::Symbol));
+        debug_assert!(self.is_xtype(Type::Str) || self.is_xtype(Type::Symbol));
         if self.is_string() {
             // SAFETY: `Value` is transparent wrapper around pointer types
             let s: &Handle<Str> = unsafe { std::mem::transmute(self) };
@@ -701,7 +701,7 @@ impl Value {
     }
 
     pub fn reader_reference(self) -> Handle<ReaderReference> {
-        assert!(self.is_xtype(Type::ReaderReference));
+        debug_assert!(self.is_xtype(Type::ReaderReference));
         unsafe { std::mem::transmute(self) }
     }
 
@@ -728,8 +728,28 @@ impl Value {
     }
 
     pub fn procedure(self) -> Handle<Procedure> {
-        assert!(self.is_procedure());
+        debug_assert!(self.is_procedure());
         unsafe { std::mem::transmute(self) }
+    }
+
+    pub fn is_box(self) -> bool {
+        self.is_xtype(Type::Box)
+    }
+
+    pub fn box_ref(self) -> Value {
+        debug_assert!(self.is_box());
+        unsafe {  
+            let b: Handle<Box> = std::mem::transmute(self);
+            b.value
+        }
+    }
+
+    pub fn box_set(self, value: Value) {
+        debug_assert!(self.is_box());
+        unsafe {  
+            let mut b: Handle<Box> = std::mem::transmute(self);
+            b.value = value;
+        }
     }
 }
 

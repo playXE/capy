@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 use std::mem::MaybeUninit;
 use std::ptr::null_mut;
+use std::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
 
 use rsgc::heap::heap::heap;
 use rsgc::heap::root_processor::SimpleRoot;
@@ -36,7 +37,16 @@ pub struct VM {
     result_exception: Value,
     sp: *mut Value,
     stack: Box<[Value]>,
-    module: Option<Handle<Module>>,
+    pub(crate) module: Option<Handle<Module>>,
+    pub(crate) entry: u64,
+}
+
+impl VM {
+    pub(crate) fn next_entry(&mut self) -> u64 {
+        let entry = self.entry;
+        self.entry = ENTRY.fetch_add(1, Ordering::AcqRel);
+        entry
+    }
 }
 
 impl Object for VM {
@@ -95,7 +105,8 @@ pub fn scm_init_vm() {
             result_exception: Value::encode_null_value(),
             module: None,
             sp: null_mut(),
-            stack: vec![Value::encode_undefined_value(); 4096].into_boxed_slice()
+            stack: vec![Value::encode_undefined_value(); 4096].into_boxed_slice(),
+            entry: 0,
         });
     }
 
@@ -119,8 +130,17 @@ pub fn scm_current_module() -> Option<Handle<Module>> {
     scm_vm().module
 }
 
+pub fn scm_set_current_module(module: Option<Handle<Module>>) {
+    scm_vm().module = module;
+}
 
 pub mod callframe;
 pub mod setjmp;
 pub mod interpreter;
 
+
+/// A simple counter used to identify different VM entrypoints.
+/// 
+/// Used to protect call/cc from being called from a different VM
+/// or call/cc going through a Rust frame.
+static ENTRY: AtomicU64 = AtomicU64::new(0);

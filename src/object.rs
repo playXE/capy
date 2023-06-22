@@ -70,7 +70,7 @@ pub enum Type {
     Synrules,
     Synpattern,
     Pvref,
-
+    Box,
     CodeBlock,
     Procedure,
     NativeProcedure,
@@ -771,4 +771,26 @@ pub fn wrong_arity(name: Value, argc: u32, mina: u32, maxa: u32) -> Value {
         )
     })
     .into()
+}
+
+#[repr(C)]
+pub struct Box {
+    pub(crate) header: ObjectHeader,
+    pub(crate) value: Value,
+}
+
+impl Object for Box {
+    fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
+        self.value.trace(visitor);
+    }
+}
+
+impl Allocation for Box {}
+
+pub fn make_box(t: &mut Thread, value: Value) -> Value {
+    let box_ = t.allocate(Box {
+        header: ObjectHeader::new(Type::Box),
+        value,
+    });
+    box_.into()
 }

@@ -1,15 +1,16 @@
-use std::collections::hash_map::RandomState;
 use rsgc::{
     prelude::Handle,
     system::collections::hashmap::{Entry, HashMap},
     thread::Thread,
 };
+use std::collections::hash_map::RandomState;
 
 use crate::{
     list::scm_cons,
     module::scm_find_binding,
     object::{Identifier, Module, ObjectHeader, ReaderReference, Symbol, Type, GLOC},
     scm_for_each,
+    string::make_string,
     value::Value,
     vector::make_vector,
 };
@@ -230,6 +231,16 @@ pub fn scm_identifier_global_binding(id: Handle<Identifier>) -> Option<Handle<GL
     let z = scm_outermost_identifier(id);
 
     scm_find_binding(z.module.module(), z.name.symbol(), 0)
+}
+
+pub fn scm_identifier_global_ref(id: Handle<Identifier>) -> Result<(Value, Handle<GLOC>), Value> {
+    let gloc = scm_identifier_global_binding(id);
+
+    if let Some(gloc) = gloc {
+        return Ok((gloc.value, gloc));
+    }
+
+    Err(make_string(Thread::current(), &format!("unbound variable: {}", scm_unwrap_identifier(id))).into())
 }
 
 pub fn scm_identifier_to_symbol(id: Value) -> Handle<Symbol> {

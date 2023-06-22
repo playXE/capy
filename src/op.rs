@@ -49,6 +49,8 @@ pub enum Opcode {
     StackSet,
     StackGet,
     Box,
+    /// Boxes stack slot at offset `n` and stores value from stack to it.
+    StackBox,
     BoxRef,
     BoxSet,
 
@@ -153,6 +155,7 @@ pub fn disassembly(code: Handle<CodeBlock>, mut out: impl WriteColor) -> Result<
             | Opcode::AllocBelow
             | Opcode::LdArg
             | Opcode::SetArg
+            | Opcode::StackBox
             | Opcode::GlobalRef
             | Opcode::GlobalSet
             | Opcode::Pack

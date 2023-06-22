@@ -1,12 +1,20 @@
+#![allow(unused_variables, unused_assignments)]
 use rsgc::prelude::Handle;
-use std::intrinsics::unlikely;
-use std::mem::{offset_of, size_of, transmute};
+use std::intrinsics::{likely, unlikely};
+use std::mem::{size_of, transmute};
+use std::panic::AssertUnwindSafe;
 use std::ptr::{null, null_mut};
 
 use super::callframe::CallFrame;
-use super::VM;
+use super::{scm_current_module, scm_vm, VM};
+use crate::compaux::{
+    scm_identifier_global_binding, scm_identifier_global_ref, scm_outermost_identifier,
+};
+use crate::fun::make_closed_procedure;
+use crate::module::{scm_make_binding, SCM_BINDING_CONST};
 use crate::object::{
-    check_arity, wrong_arity, ClosedNativeProcedure, CodeBlock, NativeProcedure, Procedure, Type,
+    check_arity, make_box, wrong_arity, ClosedNativeProcedure, CodeBlock, Module, NativeProcedure,
+    Procedure, Type,
 };
 use crate::op::Opcode;
 use crate::string::make_string;
@@ -181,14 +189,6 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                 }};
             }
 
-            macro_rules! readv {
-                () => {{
-                    let val: Value = pc.cast::<Value>().read();
-                    pc = pc.add(size_of::<Value>());
-                    val
-                }};
-            }
-
             macro_rules! readt {
                 ($t: ty) => {{
                     let val: $t = pc.cast::<$t>().read();
@@ -198,7 +198,6 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
             }
 
             let op = readt!(Opcode);
-
             match op {
                 Opcode::NoOp => {}
                 Opcode::Pop => {
@@ -322,7 +321,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     let mut tail_arg = sp.add(argc as usize);
 
                     let mut cursor = arg_start;
-                   
+
                     for _ in 0..argc {
                         tail_arg = tail_arg.sub(1);
                         cursor = cursor.sub(1);
@@ -331,7 +330,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     }
 
                     sp = cursor;
-                    
+
                     push!(cfr CallFrame {
                         return_pc,
                         caller,
@@ -350,6 +349,106 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     let val = pop!();
 
                     leave_frame!(val);
+                }
+
+                Opcode::StackGet => {
+                    let off = read2!();
+
+                    let val = cfr.sub(1).cast::<Value>().sub(off as _).read();
+
+                    push!(val);
+                }
+
+                Opcode::StackSet => {
+                    let off = read2!();
+                    let val = pop!();
+
+                    cfr.sub(1).cast::<Value>().sub(off as _).write(val);
+                }
+
+                Opcode::StackBox => {
+                    let off = read2!();
+                    let value = pop!();
+
+                    let val = make_box(vm.thread, value);
+                    cfr.sub(1).cast::<Value>().sub(off as _).write(val);
+                }
+
+                Opcode::Box => {
+                    let value = pop!();
+
+                    let val = make_box(vm.thread, value);
+                    push!(val);
+                }
+
+                Opcode::BoxRef => {
+                    let val = pop!();
+                    let val = val.box_ref();
+                    push!(val);
+                }
+
+                Opcode::BoxSet => {
+                    let val = pop!();
+
+                    let value = pop!();
+                    vm.thread.write_barrier(val.get_object());
+                    val.box_set(value);
+                }
+
+                Opcode::MakeClosure => {
+                    let ncaptures = read2!();
+
+                    let code_block = pop!();
+                    let code_block: Handle<CodeBlock> = transmute(code_block);
+
+                    let captures = std::slice::from_raw_parts(sp, ncaptures as usize);
+
+                    let mut closure = make_closed_procedure(vm.thread, code_block, ncaptures as _);
+
+                    closure
+                        .captures
+                        .as_mut_ptr()
+                        .copy_from_nonoverlapping(captures.as_ptr(), ncaptures as _);
+
+                    push!(Value::encode_object_value(closure));
+                }
+
+                Opcode::Define => {
+                    let value = pop!();
+                    let ix = read2!();
+                    let constant = read1!();
+
+                    let id = code_block!().literals.vector_ref(ix as _).identifier();
+                    let id = scm_outermost_identifier(id);
+                    let module = id.module.module();
+                    let name = id.name.symbol();
+
+                    scm_make_binding(
+                        module,
+                        name,
+                        value,
+                        if constant != 0 { SCM_BINDING_CONST } else { 0 },
+                    )?;
+
+                    push!(Value::encode_object_value(name));
+                }
+
+                Opcode::GlobalRef => {
+                    let ix = read2!() as usize;
+
+                    let constant = code_block!().literals.vector_ref(ix as _);
+
+                    if likely(constant.is_xtype(Type::GLOC)) {
+                        push!(constant.gloc().value);
+                    } else {
+                        let (value, gloc) = scm_identifier_global_ref(constant.identifier())?;
+
+                        push!(value);
+                        vm.thread.write_barrier(code_block!().literals.vector());
+                        code_block!()
+                            .literals
+                            .vector_set(ix as _, Value::encode_object_value(gloc));
+                    }
                 }
 
                 Opcode::Add => {
@@ -373,23 +472,52 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
 
 pub unsafe fn _vm_entry_trampoline(
     vm: &mut VM,
+    module: Option<Handle<Module>>,
     callee: Value,
     args: &[Value],
 ) -> Result<Value, Value> {
-    let mut sp = vm.sp;
-    let start = vm.sp;
-    for &arg in args {
-        sp = sp.sub(1);
-        sp.write(arg);
+    let saved = vm.next_entry();
+    let sp = vm.sp;
+    let saved_module = vm.module;
+    vm.module = module;
+
+    let cb = AssertUnwindSafe(|| {
+        let mut sp = vm.sp;
+        let start = vm.sp;
+        for &arg in args {
+            sp = sp.sub(1);
+            sp.write(arg);
+        }
+
+        sp = sp.sub(5);
+        let cfr = sp.cast::<CallFrame>();
+        (*cfr).caller = null_mut();
+        (*cfr).return_pc = null();
+        (*cfr).callee = callee;
+        (*cfr).argc = Value::encode_int32(args.len() as _);
+
+        vm_eval(vm, cfr, 0)
+    });
+
+    let result = std::panic::catch_unwind(|| cb());
+
+    vm.module = saved_module;
+    vm.entry = saved;
+    vm.sp = sp;
+    match result {
+        Ok(val) => val,
+        Err(err) => std::panic::resume_unwind(err),
     }
+}
 
-    sp = sp.sub(5);
-    let cfr = sp.cast::<CallFrame>();
-    (*cfr).caller = null_mut();
-    (*cfr).return_pc = null();
-    (*cfr).callee = callee;
-    (*cfr).argc = Value::encode_int32(args.len() as _);
+pub fn apply(rator: Value, rands: &[Value]) -> Result<Value, Value> {
+    let vm = scm_vm();
 
-    println!("trampoline to {:?}", callee);
-    vm_eval(vm, cfr, 0)
+    unsafe { _vm_entry_trampoline(vm, scm_current_module(), rator, rands) }
+}
+
+pub fn apply_in(module: Handle<Module>, rator: Value, rands: &[Value]) -> Result<Value, Value> {
+    let vm = scm_vm();
+
+    unsafe { _vm_entry_trampoline(vm, Some(module), rator, rands) }
 }

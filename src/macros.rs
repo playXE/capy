@@ -454,9 +454,10 @@ impl PatternContext {
             });
 
             if !pp.is_null() {
-                let r = self.compile_rule1(thread, pp, spat, patternp)?;
                 
-                template_append1(thread, &mut h, &mut t, r);
+                let r = self.compile_rule1(thread, pp, spat, patternp)?;
+              
+                template_append(thread, &mut h, &mut t, r);
             }
 
             return Ok(h);
@@ -888,6 +889,7 @@ fn match_synrule(
     env: Value,
     mvec: &mut [MatchVar],
 ) -> bool {
+   
     if pattern.is_pvref() {
         match_insert(t, pattern, form, mvec);
         return true;
@@ -912,12 +914,13 @@ fn match_synrule(
             mvec,
         );
     }
-
+    
     if pattern.is_pair() {
         while pattern.is_pair() {
             let elt = pattern.car();
 
             if elt.is_syntax_pattern() {
+              
                 return match_subpattern(
                     t,
                     form,
@@ -928,19 +931,23 @@ fn match_synrule(
                     mvec,
                 );
             } else if !form.is_pair() {
+            
                 return false;
             } else {
                 if !match_synrule(t, form.car(), elt, module, env, mvec) {
                     return false;
                 }
 
+               
                 pattern = pattern.cdr();
                 form = form.cdr();
             }
         }
 
         if !pattern.is_null() {
-            return match_synrule(t, form, pattern, module, env, mvec);
+            let x = match_synrule(t, form, pattern, module, env, mvec);
+           
+            return x;
         } else {
             return form.is_null();
         }
@@ -949,7 +956,7 @@ fn match_synrule(
     if pattern.is_vector() {
         todo!()
     }
-
+  
     scm_equal(pattern, form)
 }
 

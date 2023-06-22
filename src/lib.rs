@@ -12,17 +12,20 @@ pub mod object;
 pub mod op;
 pub mod fun;
 pub mod pure_nan;
+pub mod load;
 pub mod string;
 pub mod support;
 pub mod symbol;
 pub mod value;
 pub mod vm;
+pub mod repl;
 
 pub fn init() {
     symbol::init_symbols();
     module::init_modules();
     compile::init_compiler();
     vm::init_runtime();
+    load::init_load();
 }
 
 pub use rsgc::thread::Thread;

@@ -15,14 +15,14 @@ use crate::{
     },
     macros::{scm_compile_syntax_rules, synrule_expand},
     module::{
-        is_global_identifier_eq, scm_find_module, scm_import_module, scm_insert_binding,
-        scm_insert_syntax_rule_binding, scm_make_module, scm_export_symbols,
+        is_global_identifier_eq, scm_export_symbols, scm_find_module, scm_import_module,
+        scm_insert_binding, scm_insert_syntax_rule_binding, scm_make_module,
     },
     object::{Identifier, Module, ObjectHeader, Type},
     scm_dolist,
     string::make_string,
     symbol::{gensym, make_symbol},
-    value::Value,
+    value::Value, vm::interpreter::apply,
 };
 
 macro_rules! global_id {
@@ -78,7 +78,7 @@ pub fn pass1_call(
 ) -> Result<Handle<IForm>, Value> {
     if let IForm::Lambda(_) = &*proc {
         let mut alist = ArrayList::with_capacity(Thread::current(), scm_length(args).unwrap());
-    
+
         scm_dolist!(arg, args, {
             alist.push(Thread::current(), pass1(arg, cenv)?);
         });
@@ -126,7 +126,6 @@ pub fn pass1(program: Value, cenv: Value) -> Result<Handle<IForm>, Value> {
             }
             GlobalCall::Macro(m) => {
                 if m.is_synrules() {
-                    
                     let form = synrule_expand(
                         Thread::current(),
                         program,
@@ -134,7 +133,7 @@ pub fn pass1(program: Value, cenv: Value) -> Result<Handle<IForm>, Value> {
                         cenv_frames(cenv),
                         m.syntax_rules(),
                     )?;
-                   
+
                     pass1(form, cenv)
                 } else {
                     todo!()
@@ -228,9 +227,7 @@ pub fn expand_inlined_procedure(
     iform: Handle<IForm>,
     iargs: &[Handle<IForm>],
 ) -> Result<Handle<IForm>, Value> {
-    
     if let IForm::Lambda(ref lambda) = &*iform {
-        
         let args = adjust_arglist(lambda.reqargs, lambda.optarg, iargs, lambda.name)?;
         let lvars = &lambda.lvars;
 
@@ -668,6 +665,23 @@ pub fn define_syntax() {
         }
     });
 
+    define_syntax!("letrec", None, form, cenv, {
+        pass1_letrec(
+            form,
+            cenv,
+            make_string(Thread::current(), "letrec").into(),
+            LetScope::Rec,
+        )
+    });
+    define_syntax!("letrec*", None, form, cenv, {
+        pass1_letrec(
+            form,
+            cenv,
+            make_string(Thread::current(), "letrec").into(),
+            LetScope::Rec,
+        )
+    });
+
     define_syntax!("define-module", None, form, _cenv, {
         if scm_length(form).filter(|&x| x >= 3).is_some() && scm_is_list(form) {
             let name = form.cadr();
@@ -741,6 +755,38 @@ pub fn define_syntax() {
         )?;
 
         Ok(make_iform(IForm::Const(sr)))
+    });
+
+    define_syntax!("define-syntax", None, form, cenv, {
+        if scm_length(form) == Some(3) {
+            let name = form.cadr();
+            let expr = form.caddr();
+
+            let transformer = apply(super::compile(expr, cenv)?, &[])?;
+
+            let id = if name.is_wrapped_identifier() {
+                rename_toplevel_identifier(name.identifier())
+            } else {
+                scm_make_identifier(name, Some(cenv_module(cenv)), Value::encode_null_value())
+            };
+            
+            assert!(transformer.is_synrules());
+            scm_insert_binding(
+                id.module.module(),
+                scm_unwrap_syntax(name, false).symbol(),
+                transformer,
+                0,
+                false,
+            )?;
+
+            Ok(make_iform(IForm::Const(Value::encode_undefined_value())))
+        } else {
+            Err(make_string(
+                Thread::current(),
+                &format!("(define-syntax name expr) expected"),
+            )
+            .into())
+        }
     });
 
     define_syntax!("define-syntax-rules", None, form, cenv, {
@@ -860,9 +906,9 @@ pub fn pass1_define(
             scm_make_identifier(name, module.into(), Value::encode_null_value())
         };
 
-        let uname = scm_unwrap_syntax(name, false);
+        //let uname = scm_unwrap_syntax(name, false);
 
-        scm_insert_binding(module, uname.symbol(), Value::encode_empty_value(), 0, true)?;
+        //scm_insert_binding(module, uname.symbol(), Value::encode_empty_value(), 0, true)?;
 
         Ok(make_iform(IForm::Define(Define {
             origin: oform,
@@ -956,7 +1002,6 @@ fn pass1_body_rec(
                             head.syntax_rules(),
                         )?;
 
-    
                         return pass1_body_rec(
                             scm_list_star(Thread::current(), &[form, rest]),
                             mframe,
@@ -1221,4 +1266,81 @@ pub fn pass1_vanilla_lambda(
         free_lvars: ArrayList::new(t),
         lifted_var: None,
     })))
+}
+
+pub fn pass1_letrec(
+    form: Value,
+    cenv: Value,
+    name: Value,
+    typ: LetScope,
+) -> Result<Handle<IForm>, Value> {
+    let mut bindings = form.cadr();
+    let mut body = form.cddr();
+
+    if bindings.is_null() {
+        pass1_body(body, cenv)
+    } else {
+        if !scm_is_list(bindings) {
+            return Err(make_string(
+                Thread::current(),
+                &format!("Invalid bindings: '{:?}'", bindings),
+            )
+            .into());
+        }
+
+        let mut t = Thread::current();
+        let mut vars = ArrayList::<Handle<LVar>>::new(Thread::current());
+
+        scm_dolist!(kv, bindings, {
+            let var = kv.car();
+            if !kv.cdr().is_pair() || !kv.cdr().cdr().is_null() {
+                return Err(make_string(t, &format!("Invalid binding: '{:?}'", kv)).into());
+            }
+
+            if !var.is_identifier() {
+                return Err(make_string(t, &format!("Invalid binding: '{:?}'", kv)).into());
+            }
+
+            let lvar = t.allocate(LVar {
+                header: ObjectHeader::new(Type::LVar),
+                name: var,
+                initval: None,
+                ref_count: 0,
+                set_count: 0,
+            });
+
+            vars.push(t, lvar);
+        });
+
+        let newenv = cenv_extend(
+            cenv,
+            scm_list_from_iter(
+                Thread::current(),
+                vars.iter().map(|&lvar| scm_cons(t, lvar.name, lvar.into())),
+            ),
+            make_symbol("LEXICAL", true),
+        );
+
+        let mut inits = ArrayList::with_capacity(t, vars.len());
+        let mut i = 0;
+        scm_dolist!(kv, bindings, {
+            let val = kv.cdr().car();
+            let mut var: Handle<LVar> = vars[i];
+            i += 1;
+            let iexpr = pass1(val, newenv)?;
+            t.write_barrier(var);
+            var.initval = Some(iexpr);
+            inits.push(t, iexpr);
+        });
+
+        let body = pass1_body(body, newenv)?;
+
+        Ok(make_iform(IForm::Let(Let {
+            origin: form,
+            scope: typ,
+            lvars: vars,
+            inits,
+            body,
+        })))
+    }
 }

@@ -589,6 +589,7 @@ pub fn scm_make_binding(
             .unwrap_or(Value::encode_bool_value(false));
 
         let mut g = if v.is_xtype(Type::GLOC) {
+            
             existing = true;
             v.gloc()
         } else {
@@ -821,6 +822,7 @@ pub fn scm_insert_binding(
 ) -> Result<Value, Value> {
     // when 'fresh' is #t insert only if there's no binding yet
     if fresh && !scm_global_variable_ref(module, name, SCM_BINDING_STAY_IN_MODULE).is_undefined() {
+        println!("insert {:?}", scm_global_variable_ref(module, name, SCM_BINDING_STAY_IN_MODULE));
         Ok(Value::encode_bool_value(false))
     } else {
         scm_make_binding(module, name, value, flags).map(|x| x.into())
@@ -945,4 +947,66 @@ pub fn scm_export_symbols(mut module: Handle<Module>, specs: Value) -> Result<()
     drop(modules);
 
     Ok(())
+}
+
+/// Tries to find similar symbol in the module.
+pub fn scm_search_for_symbols(module: Handle<Module>, name: &str) -> Vec<String> {
+    let mut completions = Vec::new();
+
+    for (k, _) in module.internal.iter() {
+       
+        if k.starts_with(name) {
+    
+            completions.push(k.to_string());
+        }
+
+        
+
+    }
+
+    
+
+    let mut searched = ModuleCache::new();
+
+    searched.add_visited(module);
+
+    scm_for_each!(p, module.imported, {
+        let elt = p.car();
+
+        scm_for_each!(mp, elt.module().mpl, {
+            let m = mp.car();
+
+            
+            if searched.is_visited(m.module()) {
+                continue;
+            }
+
+            for (k, _) in m.module().external.iter() {
+                if k.starts_with(name) {
+                    completions.push(k.to_string());
+                }
+            }
+
+            
+
+
+            searched.add_visited(m.module());
+        });
+    });
+
+    scm_for_each!(mp, module.mpl, {
+        let m = mp.car();
+        
+
+        for (k, _) in m.module().internal.iter() {
+            if k.starts_with(name) {
+                completions.push(k.to_string());
+            }
+        }   
+
+        
+        searched.add_visited(m.module());
+    });
+    completions.dedup();
+    completions
 }

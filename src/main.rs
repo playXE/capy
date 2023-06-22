@@ -1,16 +1,19 @@
-use capy::{
-    
-    compile::{make_cenv, pass1::pass1, r7rs_to_value, bytecompiler::ByteCompiler},
-    list::{scm_cons, scm_reverse},
-    module::scm_user_module,
-    scm_dolist,
-    value::Value, op::{Opcode, disassembly}, fun::make_procedure, vm::{interpreter::_vm_entry_trampoline, scm_vm},
-};
-use r7rs_parser::{expr::NoIntern, parser::Parser};
+use std::path::PathBuf;
+
+use capy::{load::scm_vm_load, repl::repl, value::Value};
+
 use rsgc::{
     prelude::HeapArguments,
     thread::{main_thread, Thread},
 };
+
+use structopt::StructOpt;
+
+#[derive(StructOpt)]
+pub struct Args {
+    #[structopt(parse(from_os_str))]
+    pub file: Option<PathBuf>,
+}
 
 fn main() {
     env_logger::init();
@@ -19,27 +22,24 @@ fn main() {
 
         capy::init();
         capy::vm::scm_init_vm();
+
+        let args = Args::from_args();
         let t = Thread::current();
-
-        let source = std::fs::read_to_string("test.scm").unwrap();
-        let mut i = NoIntern;
-        let mut parser = Parser::new(&mut i, &source, false);
-
-        let module = scm_user_module().module();
-
-        let mut bc = ByteCompiler::new(t);
-
-        match bc.compile_toplevel(t, "test.scm", module, &mut parser)
-        {
-            Ok(proc) => {
-                let proc = proc.procedure();
-                let mut out = termcolor::StandardStream::stdout(termcolor::ColorChoice::Always);
-                disassembly(proc.code, &mut out).unwrap();
+        if let Some(file) = args.file.as_ref() {
+            match scm_vm_load(
+                &file.display().to_string(),
+                Value::encode_bool_value(false),
+                None,
+            ) {
+                Ok(x) => {
+                    println!("Ok: {:?}", x);
+                }
+                Err(e) => {
+                    println!("Error: {:?}", e);
+                }
             }
-
-            Err(e) => {
-                println!("error: {:?}", e);
-            }
+        } else {
+            repl();
         }
 
         Ok(())

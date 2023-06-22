@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use r7rs_parser::{
-    expr::NoIntern,
+    expr::{Expr, NoIntern},
     parser::{ParseError, Parser},
 };
 use rsgc::{
@@ -11,7 +11,7 @@ use rsgc::{
 };
 
 use crate::{
-    compile::{make_cenv, pass1::pass1, ref_count_lvars},
+    compile::{make_cenv, pass1::pass1, ref_count_lvars, LetScope},
     fun::make_procedure,
     object::{CodeBlock, Module, ObjectHeader, Type},
     op::Opcode,
@@ -316,6 +316,8 @@ impl ByteCompiler {
 
             current = cc.parent;
         }
+
+        panic!("unresolved local variable: {:?}", lvar.name);
     }
 
     fn set_local(&mut self, lvar: Handle<LVar>, boxed: bool) {
@@ -349,6 +351,15 @@ impl ByteCompiler {
         match &*iform {
             IForm::Const(x) => {
                 self.emit_load(thread, *x);
+                false
+            }
+
+            IForm::Define(def) => {
+                self.compile_iform(thread, def.value, false);
+                self.emit_simple(Opcode::Define);
+                let id = self.add_constant(thread, def.name) as u16;
+                self.code.extend_from_slice(&id.to_le_bytes());
+                self.code.push(0);
                 false
             }
 
@@ -408,7 +419,97 @@ impl ByteCompiler {
                 self.emit_simple(Opcode::PushUndef);
                 false
             }
+
+            IForm::Let(var) => {
+                let mut group = Box::new(BindingGroup {
+                    parent: None,
+                    bindings: HashMap::new(),
+                });
+
+                let init_locals = self.num_locals;
+
+                let exit = match var.scope {
+                    LetScope::Let => {
+                        for (i, &lvar) in var.lvars.iter().enumerate() {
+                            let index = self.next_local_index();
+                            group.bindings.insert(lvar.as_ptr() as usize, index);
+
+                            let init = var.inits[i];
+                            self.compile_iform(thread, init, false);
+
+                            if lvar.is_immutable() {
+                                self.emit_lset(index as _);
+                            } else {
+                                self.emit_simple(Opcode::StackBox);
+                                self.code.extend_from_slice(&(index as u16).to_le_bytes());
+                            }
+                        }
+                        std::mem::swap(&mut self.group, &mut group);
+                        self.group.parent = Some(group);
+
+                        self.compile_iform(thread, var.body, tail)
+                    }
+
+                    LetScope::Rec => {
+                        for (_, &lvar) in var.lvars.iter().enumerate() {
+                            let index = self.next_local_index();
+                            group.bindings.insert(lvar.as_ptr() as usize, index);
+
+                            if !lvar.is_immutable() {
+                                self.emit_simple(Opcode::PushUndef);
+                                self.emit_simple(Opcode::StackBox);
+                                self.code.extend_from_slice(&(index as u16).to_le_bytes());
+                            } else {
+                                self.emit_simple(Opcode::PushUndef);
+                                self.emit_lset(index as _);
+                            }
+                        }
+
+                        std::mem::swap(&mut self.group, &mut group);
+                        self.group.parent = Some(group);
+
+                        for (i, &lvar) in var.lvars.iter().enumerate() {
+                            let init = var.inits[i];
+                            self.compile_iform(thread, init, false);
+
+                            let index = self.group.bindings[&(lvar.as_ptr() as usize)];
+
+                            if lvar.is_immutable() {
+                                self.emit_lset(index as _);
+                            } else {
+                                self.emit_lref(index as _);
+                                self.emit_simple(Opcode::BoxSet);
+                            }
+                        }
+
+                        self.compile_iform(thread, var.body, tail)
+                    }
+                };
+
+                self.group = self.group.parent.take().unwrap();
+                self.num_locals = init_locals;
+                exit
+            }
             _ => todo!(),
+        }
+    }
+
+    pub fn compile_body(&mut self, thread: &mut Thread, expr: Handle<IForm>, argc: usize) {
+        let patch_alloc = self.code.len();
+        for _ in 0..3 {
+            self.emit_simple(Opcode::NoOp);
+        }
+
+        if !self.compile_iform(thread, expr, true) {
+            self.emit_simple(Opcode::Return);
+        }
+
+        if self.max_locals > argc {
+            let diff = self.max_locals - argc;
+            self.code[patch_alloc] = Opcode::Alloc as _;
+            let n = (diff as u16).to_le_bytes();
+            self.code[patch_alloc + 1] = n[0];
+            self.code[patch_alloc + 2] = n[1];
         }
     }
 
@@ -473,6 +574,57 @@ impl ByteCompiler {
         self.code[patch_alloc + 2] = n[1];
 
         let code = self.finalize(thread);
+
+        Ok(make_procedure(thread, code).into())
+    }
+
+    pub fn compile_r7rs_expr(
+        thread: &mut Thread,
+        module: Handle<Module>,
+        expr: &Expr<NoIntern>,
+    ) -> Result<Value, Value> {
+        let cenv = make_cenv(module, Value::encode_null_value());
+
+        let form = pass1(r7rs_to_value(thread, expr), cenv)?;
+
+        ref_count_lvars(form);
+
+        let mut compiler = Self::new(thread);
+        compiler.compile_body(thread, form, 0);
+
+        let code = compiler.finalize(thread);
+
+        Ok(make_procedure(thread, code).into())
+    }
+
+    pub fn compile_while(
+        thread: &mut Thread,
+        mut k: impl FnMut(&mut Thread) -> Result<Option<Handle<IForm>>, Value>,
+    ) -> Result<Value, Value> {
+        let mut bc = Self::new(thread);
+
+        let patch_alloc = bc.code.len();
+        for _ in 0..3 {
+            bc.emit_simple(Opcode::NoOp);
+        }
+        let mut exit = true;
+        while let Some(form) = k(thread)? {
+            if !exit {
+                bc.emit_simple(Opcode::Pop);
+            }
+            exit = bc.compile_iform(thread, form, false);
+        }
+
+        if !exit {
+            bc.emit_simple(Opcode::Return);
+        }
+
+        bc.code[patch_alloc] = Opcode::Alloc as _;
+        let n = (bc.max_locals as u16).to_le_bytes();
+        bc.code[patch_alloc + 1] = n[0];
+        bc.code[patch_alloc + 2] = n[1];
+
+        let code = bc.finalize(thread);
 
         Ok(make_procedure(thread, code).into())
     }

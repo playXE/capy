@@ -14,7 +14,7 @@ use crate::{
     scm_dolist, scm_for_each,
     symbol::make_symbol,
     value::Value,
-    vm::scm_current_module, vector::{make_bytevector_from_slice, make_vector}, string::make_string, op::Opcode,
+    vm::scm_current_module, vector::{make_bytevector_from_slice, make_vector}, string::make_string, op::Opcode, fun::make_procedure,
 };
 
 pub enum IForm {
@@ -868,3 +868,26 @@ pub fn ref_count_lvars(mut iform: Handle<IForm>) {
         _ => ()
     }
 }
+
+/// Compiles a single expression into procedure
+pub fn compile(expr: Value, cenv: Value) -> Result<Value, Value> {
+    let thread = Thread::current();
+
+    let iform = pass1::pass1(expr, cenv)?;
+    ref_count_lvars(iform);
+    let mut bc = bytecompiler::ByteCompiler::new(thread);
+
+    bc.compile_body(thread, iform, 0);
+
+    let code_block = bc.finalize(thread);
+
+    Ok(make_procedure(thread, code_block).into())
+}
+
+pub fn compile_r7rs_expr(expr: &Expr<NoIntern>, cenv: Value) -> Result<Value, Value> {
+    let thread = Thread::current();
+    let expr = r7rs_to_value(thread, expr);
+
+    compile(expr, cenv)
+}
+
