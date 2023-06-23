@@ -503,7 +503,7 @@ pub fn env_lookup_int(name: Value, module: Handle<Module>, mut frames: Value) ->
     if name.is_xtype(Type::Symbol) {
         scm_make_identifier(name, Some(module), frames).into()
     } else {
-        assert!(name.is_xtype(Type::Identifier));
+        assert!(name.is_xtype(Type::Identifier), "name must be an identifier but got {:?}", name);
         name
     }
 }
@@ -553,7 +553,7 @@ pub fn global_call_type(id: Value, _cenv: Value) -> GlobalCall {
         }
         if gval.is_syntax() {
             GlobalCall::Syntax(gval.syntax())
-        } else if gval.is_synrules() {
+        } else if gval.is_macro() {
             GlobalCall::Macro(gval)
         } else {
             // TODO: Macros
@@ -863,6 +863,14 @@ pub fn ref_count_lvars(mut iform: Handle<IForm>) {
             for &arg in asm.args.iter() {
                 ref_count_lvars(arg);
             }
+        }
+
+        IForm::Let(x) => {
+            for init in x.inits.iter().copied() {
+                ref_count_lvars(init);
+            }
+
+            ref_count_lvars(x.body);
         }
 
         _ => ()

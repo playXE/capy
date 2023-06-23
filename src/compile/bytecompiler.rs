@@ -14,7 +14,7 @@ use crate::{
     compile::{make_cenv, pass1::pass1, ref_count_lvars, LetScope},
     fun::make_procedure,
     object::{CodeBlock, Module, ObjectHeader, Type},
-    op::Opcode,
+    op::{Opcode, disassembly},
     string::make_string,
     value::Value,
     vector::make_vector_from_slice,
@@ -43,10 +43,6 @@ struct CaptureGroup {
     captures: Vec<usize>,
 }
 
-enum Access {
-    Local(usize),
-    Capture(usize),
-}
 
 impl CaptureGroup {
     pub fn capture(&mut self, lvar: Handle<LVar>) -> usize {
@@ -177,7 +173,7 @@ impl ByteCompiler {
             code: [],
         };
 
-        unsafe {
+        let code = unsafe {
             let mut ptr = thread.allocate_varsize::<CodeBlock>(self.code.len());
 
             let uninit = ptr.assume_init_mut();
@@ -190,7 +186,11 @@ impl ByteCompiler {
             );
 
             ptr.assume_init()
+        };
+        if true {
+            disassembly(code, termcolor::StandardStream::stderr(termcolor::ColorChoice::Always)).unwrap();
         }
+        code 
     }
 
     pub fn bind(&mut self, lvar: Handle<LVar>, ix: usize) {
@@ -213,7 +213,7 @@ impl ByteCompiler {
                 parent: None,
             }),
         };
-
+       
         for ix in 0..lam.lvars.len() - lam.optarg as usize {
             closure_compiler.emit_ldarg(ix as _);
             let lvar = lam.lvars[ix];
@@ -222,7 +222,7 @@ impl ByteCompiler {
                 closure_compiler.emit_simple(Opcode::Box);
             }
 
-            let ix = self.next_local_index();
+            let ix = closure_compiler.next_local_index();
             closure_compiler.bind(lvar, ix);
         }
 
@@ -232,11 +232,11 @@ impl ByteCompiler {
             closure_compiler
                 .code
                 .extend_from_slice(&(lam.lvars.len() as u16 - 1).to_le_bytes());
-            let ix = self.next_local_index();
+            let ix = closure_compiler.next_local_index();
             closure_compiler.bind(lvar, ix);
         }
 
-        let patch_alloc_ip = self.code.len();
+        /*let patch_alloc_ip = self.code.len();
 
         closure_compiler.emit_simple(Opcode::NoOp);
         closure_compiler.emit_simple(Opcode::NoOp);
@@ -247,21 +247,22 @@ impl ByteCompiler {
         }
 
         if self.max_locals > lam.lvars.len() {
-            let n = ((self.max_locals - lam.lvars.len()) as u16).to_le_bytes();
+            let n = ((closure_compiler.max_locals - lam.lvars.len()) as u16).to_le_bytes();
 
             closure_compiler.code[patch_alloc_ip] = Opcode::Alloc as _;
             closure_compiler.code[patch_alloc_ip + 1] = n[0];
             closure_compiler.code[patch_alloc_ip + 2] = n[1];
-        }
+        }*/
 
+        closure_compiler.compile_body(thread, lam.body, lam.lvars.len());
         let code = closure_compiler.finalize(thread);
-
+        
         if closure_compiler.captures.captures.is_empty() {
             let proc = make_procedure(thread, code);
             self.emit_load(thread, proc.into());
         } else {
             let captures = std::mem::take(&mut closure_compiler.captures.captures);
-            for capture in captures.iter().copied() {
+            for capture in captures.iter().copied().rev() {
                 let lvar = unsafe { std::mem::transmute::<_, Handle<LVar>>(capture) };
                 self.resolve_local(lvar, false);
             }
@@ -310,6 +311,10 @@ impl ByteCompiler {
                 } else {
                     let ix = unsafe { (*this).captures.capture(lvar) };
                     self.emit_closure_ref(ix as _);
+
+                    if !lvar.is_immutable() && unbox {
+                        self.emit_simple(Opcode::BoxRef);
+                    }
                     return;
                 }
             }
@@ -338,7 +343,12 @@ impl ByteCompiler {
                     return;
                 } else {
                     let ix = unsafe { (*this).captures.capture(lvar) };
-                    self.emit_closure_set(ix as _);
+                    if !boxed {
+                        self.emit_closure_set(ix as _);
+                    } else {
+                        self.emit_closure_ref(ix as _);
+                        self.emit_simple(Opcode::BoxSet);
+                    }
                     return;
                 }
             }
@@ -364,7 +374,7 @@ impl ByteCompiler {
             }
 
             IForm::Call(x) => {
-                for arg in x.args.iter() {
+                for arg in x.args.iter().rev() {
                     self.compile_iform(thread, *arg, false);
                 }
 
@@ -391,7 +401,10 @@ impl ByteCompiler {
 
                 exit
             }
-
+            IForm::Lambda(lam) => {
+                self.compile_lambda(thread, lam);
+                false
+            }
             IForm::GRef(x) => {
                 let c = self.add_constant(thread, x.id);
                 self.emit_simple(Opcode::GlobalRef);
@@ -409,6 +422,7 @@ impl ByteCompiler {
                 false
             }
             IForm::LRef(x) => {
+                println!("{}", x.lvar.set_count);
                 self.resolve_local(x.lvar, true);
                 false
             }

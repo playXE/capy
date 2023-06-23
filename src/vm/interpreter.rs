@@ -7,9 +7,7 @@ use std::ptr::{null, null_mut};
 
 use super::callframe::CallFrame;
 use super::{scm_current_module, scm_vm, VM};
-use crate::compaux::{
-    scm_identifier_global_binding, scm_identifier_global_ref, scm_outermost_identifier,
-};
+use crate::compaux::{scm_identifier_global_ref, scm_outermost_identifier};
 use crate::fun::make_closed_procedure;
 use crate::module::{scm_make_binding, SCM_BINDING_CONST};
 use crate::object::{
@@ -31,14 +29,17 @@ use crate::vector::make_vector;
 /// - stack grows from high address to low address.
 pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Result<Value, Value> {
     // actual stack pointer.
-    let mut sp = cfr.sub(1).cast::<Value>();
+    let mut sp = cfr.cast::<Value>();
     let mut cfr = cfr.cast::<CallFrame>();
     let mut pc;
-
+    
     macro_rules! pop {
         () => {{
+            debug_assert!(sp < cfr.cast::<Value>());
             let val = sp.read();
+            
             sp = sp.add(1);
+
             val
         }};
 
@@ -51,7 +52,9 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
 
     macro_rules! push {
         ($val: expr) => {{
+            
             sp = sp.sub(1);
+            debug_assert!(sp < cfr.cast::<Value>());
             sp.write($val);
         }};
 
@@ -63,12 +66,14 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
 
     macro_rules! leave_frame {
         ($val: expr) => {
+            
             if (*cfr).caller.is_null() {
                 return Ok($val);
             } else {
                 pc = (*cfr).return_pc;
                 sp = cfr.add(1).cast::<Value>().add((*cfr).argc.get_int32() as _);
                 cfr = (*cfr).caller;
+
                 push!($val);
             }
         };
@@ -119,14 +124,8 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
             let result = if !callee.is_closed_native_procedure() {
                 (proc.callback)(&mut *cfr)
             } else {
-                let mut closed_proc: Handle<ClosedNativeProcedure> = transmute(callee);
-                (closed_proc.callback)(
-                    &mut *cfr,
-                    std::slice::from_raw_parts_mut(
-                        closed_proc.captures.as_mut_ptr(),
-                        closed_proc.env_size as _,
-                    ),
-                )
+                let closed_proc: Handle<ClosedNativeProcedure> = transmute(callee);
+                (closed_proc.callback)(&mut *cfr)
             };
 
             if result.is_ok() {
@@ -198,6 +197,8 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
             }
 
             let op = readt!(Opcode);
+
+         
             match op {
                 Opcode::NoOp => {}
                 Opcode::Pop => {
@@ -220,15 +221,16 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                 Opcode::LdArg => {
                     let n = read2!();
                     let arg = (*cfr).args.as_ptr().add(n as usize).read();
-
+                    let prev = sp;
                     push!(arg);
                 }
 
                 Opcode::Alloc => {
                     let n = read2!();
 
-                    for _ in 0..n {
+                    for x in 0..n {
                         push!(Value::encode_undefined_value());
+                     
                     }
                 }
 
@@ -307,7 +309,9 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
 
                 Opcode::TailCall => {
                     let argc = read2!();
+                    
                     let callee = pop!();
+                   
                     let caller = (*cfr).caller;
                     let return_pc = (*cfr).return_pc;
 
@@ -354,7 +358,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                 Opcode::StackGet => {
                     let off = read2!();
 
-                    let val = cfr.sub(1).cast::<Value>().sub(off as _).read();
+                    let val = cfr.cast::<Value>().sub(off as usize + 1).read();
 
                     push!(val);
                 }
@@ -362,8 +366,10 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                 Opcode::StackSet => {
                     let off = read2!();
                     let val = pop!();
-
-                    cfr.sub(1).cast::<Value>().sub(off as _).write(val);
+                    let slot = cfr.cast::<Value>().sub(off as usize + 1);
+                    
+                    debug_assert!(slot < cfr.cast::<Value>());
+                    slot.write(val);
                 }
 
                 Opcode::StackBox => {
@@ -371,7 +377,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     let value = pop!();
 
                     let val = make_box(vm.thread, value);
-                    cfr.sub(1).cast::<Value>().sub(off as _).write(val);
+                    cfr.cast::<Value>().sub(off as usize + 1).write(val);
                 }
 
                 Opcode::Box => {
@@ -399,6 +405,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     let ncaptures = read2!();
 
                     let code_block = pop!();
+
                     let code_block: Handle<CodeBlock> = transmute(code_block);
 
                     let captures = std::slice::from_raw_parts(sp, ncaptures as usize);
@@ -409,8 +416,10 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                         .captures
                         .as_mut_ptr()
                         .copy_from_nonoverlapping(captures.as_ptr(), ncaptures as _);
-
+                    
                     push!(Value::encode_object_value(closure));
+
+               
                 }
 
                 Opcode::Define => {
@@ -451,6 +460,14 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     }
                 }
 
+                Opcode::ClosureRef => {
+                    let ix = read2!();
+
+                    let callee = (*cfr).callee.procedure();
+
+                    push!(callee.captures.as_ptr().add(ix as _).read());
+                }
+
                 Opcode::Add => {
                     let val2 = pop!();
                     let val1 = pop!();
@@ -484,7 +501,7 @@ pub unsafe fn _vm_entry_trampoline(
     let cb = AssertUnwindSafe(|| {
         let mut sp = vm.sp;
         let start = vm.sp;
-        for &arg in args {
+        for &arg in args.iter().rev() {
             sp = sp.sub(1);
             sp.write(arg);
         }

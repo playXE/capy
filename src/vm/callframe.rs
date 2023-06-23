@@ -60,3 +60,12 @@ pub struct CallFrame {
     pub callee: Value,
     pub args: [Value; 0],
 }
+
+impl CallFrame {
+    pub fn argument(&self, index: usize) -> Value {
+        debug_assert!(index < self.argc.get_int32() as usize);
+        unsafe {
+            *self.args.as_ptr().add(index)
+        }
+    }
+}

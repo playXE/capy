@@ -13,7 +13,7 @@ use crate::{
         scm_append, scm_assq, scm_cons, scm_is_list, scm_length, scm_list, scm_list_from_iter,
         scm_list_star, scm_map, scm_map2, scm_reverse,
     },
-    macros::{scm_compile_syntax_rules, synrule_expand},
+    macros::scm_compile_syntax_rules,
     module::{
         is_global_identifier_eq, scm_export_symbols, scm_find_module, scm_import_module,
         scm_insert_binding, scm_insert_syntax_rule_binding, scm_make_module,
@@ -22,7 +22,8 @@ use crate::{
     scm_dolist,
     string::make_string,
     symbol::{gensym, make_symbol},
-    value::Value, vm::interpreter::apply,
+    value::Value,
+    vm::interpreter::apply,
 };
 
 macro_rules! global_id {
@@ -125,19 +126,11 @@ pub fn pass1(program: Value, cenv: Value) -> Result<Handle<IForm>, Value> {
                 pass1_call(program, gref, program.cdr(), cenv)
             }
             GlobalCall::Macro(m) => {
-                if m.is_synrules() {
-                    let form = synrule_expand(
-                        Thread::current(),
-                        program,
-                        cenv_module(cenv),
-                        cenv_frames(cenv),
-                        m.syntax_rules(),
-                    )?;
+                let v = pass1(apply(m.r#macro().transformer, &[program, cenv])?, cenv)?;
 
-                    pass1(form, cenv)
-                } else {
-                    todo!()
-                }
+               
+                Ok(v)
+
             }
         }
     }
@@ -167,15 +160,10 @@ pub fn pass1(program: Value, cenv: Value) -> Result<Handle<IForm>, Value> {
 
             h if h.is_syntax() => (h.syntax().callback)(program, cenv),
 
-            h if h.is_synrules() => {
-                let form = synrule_expand(
-                    Thread::current(),
-                    program,
-                    cenv_module(cenv),
-                    cenv_frames(cenv),
-                    h.syntax_rules(),
-                )?;
-                pass1(form, cenv)
+            h if h.is_macro() => {
+                let transformer = h.r#macro().transformer;
+
+                pass1(apply(transformer, &[program, cenv])?, cenv)
             }
 
             h if h.is_false() => {
@@ -433,7 +421,7 @@ pub fn define_syntax() {
                     reqs
                 },
                 scm_length(reqs).unwrap(),
-                if !rest.is_false() { 1 } else { 1 },
+                if !rest.is_false() { 1 } else { 0 },
                 body,
                 cenv,
             )
@@ -545,7 +533,7 @@ pub fn define_syntax() {
 
                 Ok(make_iform(IForm::Let(Let {
                     origin: form,
-                    scope: LetScope::Let,
+                    scope: LetScope::Rec,
                     lvars: vars,
                     inits,
                     body,
@@ -682,6 +670,17 @@ pub fn define_syntax() {
         )
     });
 
+    define_syntax!("let-syntax", None, form, _cenv, {
+        if scm_length(form).filter(|&x| x >= 3).is_some() {
+            let _bindings = form.cadr();
+            let _body = form.cddr();
+
+            todo!()
+        } else {
+            Err(make_string(Thread::current(), "Invalid syntax: let-syntax").into())
+        }
+    });
+
     define_syntax!("define-module", None, form, _cenv, {
         if scm_length(form).filter(|&x| x >= 3).is_some() && scm_is_list(form) {
             let name = form.cadr();
@@ -769,8 +768,15 @@ pub fn define_syntax() {
             } else {
                 scm_make_identifier(name, Some(cenv_module(cenv)), Value::encode_null_value())
             };
-            
-            assert!(transformer.is_synrules());
+
+            if !transformer.is_macro() {
+                return Err(make_string(
+                    Thread::current(),
+                    &format!("define-syntax expects syntax transformer"),
+                )
+                .into());
+            }
+
             scm_insert_binding(
                 id.module.module(),
                 scm_unwrap_syntax(name, false).symbol(),
@@ -971,7 +977,7 @@ fn pass1_body_rec(
             let op = exprs.caar();
             let args = exprs.cdar();
 
-            if vframe.is_false() || scm_assq(op, vframe).is_false() {
+            if (vframe.is_false() || scm_assq(op, vframe).is_false()) && op.is_identifier() {
                 let head = cenv_lookup(cenv, op);
 
                 if !scm_is_list(args) {
@@ -993,17 +999,19 @@ fn pass1_body_rec(
                         return pass1_body_finish(exprs, mframe, vframe, cenv)
                     }
 
-                    head if head.is_synrules() => {
-                        let form = synrule_expand(
+                    head if head.is_macro() => {
+                        /*let form = synrule_expand(
                             Thread::current(),
                             exprs.car(),
                             cenv_module(cenv),
                             cenv_frames(cenv),
                             head.syntax_rules(),
-                        )?;
+                        )?;*/
+
+                        let expanded = apply(head.r#macro().transformer, &[exprs.car(), cenv])?;
 
                         return pass1_body_rec(
-                            scm_list_star(Thread::current(), &[form, rest]),
+                            scm_list_star(Thread::current(), &[expanded, rest]),
                             mframe,
                             vframe,
                             cenv,
@@ -1271,11 +1279,11 @@ pub fn pass1_vanilla_lambda(
 pub fn pass1_letrec(
     form: Value,
     cenv: Value,
-    name: Value,
+    _name: Value,
     typ: LetScope,
 ) -> Result<Handle<IForm>, Value> {
-    let mut bindings = form.cadr();
-    let mut body = form.cddr();
+    let bindings = form.cadr();
+    let body = form.cddr();
 
     if bindings.is_null() {
         pass1_body(body, cenv)
@@ -1288,7 +1296,7 @@ pub fn pass1_letrec(
             .into());
         }
 
-        let mut t = Thread::current();
+        let t = Thread::current();
         let mut vars = ArrayList::<Handle<LVar>>::new(Thread::current());
 
         scm_dolist!(kv, bindings, {

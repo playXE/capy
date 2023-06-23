@@ -81,6 +81,7 @@ pub fn scm_vm_load(
                 full_path.push_str(filename);
 
                 if std::path::Path::new(&full_path).exists() {
+                    entry = entry.cdr();
                     continue;
                 }
             }

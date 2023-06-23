@@ -1,8 +1,9 @@
+#![allow(dead_code)]
 use rsgc::{prelude::Handle, thread::Thread};
 
 use crate::{string::make_string, value::Value};
 
-use super::{make_iform, make_seq, IForm};
+use super::{make_seq, IForm};
 
 fn pass2_rec(
     t: &mut Thread,
@@ -40,9 +41,8 @@ fn pass2_rec(
             }
         }
 
-        IForm::Let(var) => {
-            
-            todo!() 
+        IForm::Let(_var) => {
+            todo!()
         }
 
         _ => Ok(orig),
@@ -50,7 +50,7 @@ fn pass2_rec(
 }
 
 fn branch_cut(
-    mut iform: Handle<IForm>,
+    _iform: Handle<IForm>,
     test_form: Handle<IForm>,
     then_form: Handle<IForm>,
     else_form: Handle<IForm>,

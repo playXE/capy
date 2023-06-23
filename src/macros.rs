@@ -30,23 +30,23 @@ use std::{
 
 use crate::{
     cmp::scm_equal,
-    
     compaux::{scm_identifier_env, scm_make_identifier, scm_unwrap_syntax, scm_wrap_identifier},
-    compile::env_lookup_int,
+    compile::{cenv_frames, cenv_module, env_lookup_int},
+    fun::scm_make_closed_native_procedure,
     list::{
         list_to_vector, scm_acons, scm_append2, scm_assq, scm_cons, scm_is_list, scm_last_pair,
         scm_length, scm_memq, scm_reversex, vector_to_list,
     },
     module::scm_identifier_to_bound_gloc,
-    object::{Identifier, Module, ObjectHeader, Type},
+    object::{Identifier, Macro, Module, ObjectHeader, ScmResult, Type},
     scm_append, scm_append1, scm_for_each,
     string::make_string,
     symbol::make_symbol,
     value::Value,
+    vm::callframe::CallFrame,
 };
 use once_cell::sync::Lazy;
 use rsgc::{
-
     prelude::{Allocation, Handle, Object},
     system::array::Array,
     thread::Thread,
@@ -363,7 +363,7 @@ impl PatternContext {
             let mut pp;
             scm_for_each!(declared pp, form, {
                 if self.ellipsis_following(pp) {
-                    
+
                     if patternp && ellipsis_seen {
                         return Err(make_string(thread,
                             &format!("in definition of macro {:?}: Ellipses are not allowed to appear within the same list/vector more than once in a pattern: {:?}", self.name, form)
@@ -446,7 +446,7 @@ impl PatternContext {
                     spat.vars = scm_append2(thread, spat.vars, outermost.vars);
 
                 } else {
-                    
+
                     let r = self.compile_rule1(thread, pp.car(), spat, patternp)?;
                     //println!("append {:?} head={:?}", r, h);
                     template_append1(thread, &mut h, &mut t, r);
@@ -454,9 +454,8 @@ impl PatternContext {
             });
 
             if !pp.is_null() {
-                
                 let r = self.compile_rule1(thread, pp, spat, patternp)?;
-              
+
                 template_append(thread, &mut h, &mut t, r);
             }
 
@@ -473,7 +472,6 @@ impl PatternContext {
             }
 
             if !scm_memq(form, self.literals).is_false() {
-               
                 if patternp {
                     let m = self.module;
                     let e = self.env;
@@ -605,7 +603,6 @@ fn compile_rules(
     module: Handle<Module>,
     env: Value,
 ) -> Result<Value, Value> {
-    
     let t = Thread::current();
 
     let num_rules = scm_length(rules)
@@ -662,7 +659,7 @@ fn compile_rules(
             ctx.pvcnt = 0;
             ctx.maxlev = 0;
 
-           // println!("rule {:?}", rule);
+            // println!("rule {:?}", rule);
 
             ctx.form = rule.car();
 
@@ -708,7 +705,10 @@ pub fn scm_compile_syntax_rules(
 
     let sr = compile_rules(name, ellipsis, literals, rules, module, env)?;
 
-    Ok(sr)
+    let t = Thread::current();
+    let subr = scm_make_closed_native_procedure(t, name, synrule_transform, 2, 2, &[sr]);
+
+    Ok(scm_make_macro(t, subr.into()).into())
 }
 
 #[derive(Debug)]
@@ -889,7 +889,6 @@ fn match_synrule(
     env: Value,
     mvec: &mut [MatchVar],
 ) -> bool {
-   
     if pattern.is_pvref() {
         match_insert(t, pattern, form, mvec);
         return true;
@@ -914,13 +913,12 @@ fn match_synrule(
             mvec,
         );
     }
-    
+
     if pattern.is_pair() {
         while pattern.is_pair() {
             let elt = pattern.car();
 
             if elt.is_syntax_pattern() {
-              
                 return match_subpattern(
                     t,
                     form,
@@ -931,14 +929,12 @@ fn match_synrule(
                     mvec,
                 );
             } else if !form.is_pair() {
-            
                 return false;
             } else {
                 if !match_synrule(t, form.car(), elt, module, env, mvec) {
                     return false;
                 }
 
-               
                 pattern = pattern.cdr();
                 form = form.cdr();
             }
@@ -946,7 +942,7 @@ fn match_synrule(
 
         if !pattern.is_null() {
             let x = match_synrule(t, form, pattern, module, env, mvec);
-           
+
             return x;
         } else {
             return form.is_null();
@@ -956,7 +952,7 @@ fn match_synrule(
     if pattern.is_vector() {
         todo!()
     }
-  
+
     scm_equal(pattern, form)
 }
 
@@ -986,8 +982,6 @@ fn realize_template_rec(
     id_alist: &mut Value,
     exlev: &mut i32,
 ) -> Value {
-
-    
     if template.is_pair() {
         let mut h = Value::encode_null_value();
         let mut t = Value::encode_null_value();
@@ -1000,7 +994,7 @@ fn realize_template_rec(
                 if r.is_undefined() {
                     return r;
                 }
-               
+
                 template_append(thread, &mut h, &mut t, r);
             } else {
                 let r = realize_template_rec(thread, sr, e, mvec, level, indices, id_alist, exlev);
@@ -1009,14 +1003,12 @@ fn realize_template_rec(
                     return r;
                 }
                 template_append1(thread, &mut h, &mut t, r);
-                
             }
 
             template = template.cdr();
         }
 
         if !template.is_null() {
-           
             let r =
                 realize_template_rec(thread, sr, template, mvec, level, indices, id_alist, exlev);
             if r.is_undefined() {
@@ -1030,12 +1022,10 @@ fn realize_template_rec(
             template_append(thread, &mut h, &mut t, template);
         }
 
-        
         return h;
     }
 
     if template.is_pvref() {
-        
         let v = get_pvref_value(template, mvec, indices, exlev);
 
         return v;
@@ -1148,6 +1138,28 @@ pub fn synrule_expand(
     Err(make_string(t, &format!("{:?}: no matching syntax rule", form.car())).into())
 }
 
+extern "C" fn synrule_transform(cfr: &mut CallFrame) -> ScmResult {
+    let form = cfr.argument(0);
+    let cenv = cfr.argument(1);
+  
+    assert!(cenv.is_vector());
+
+    let module = cenv_module(cenv);
+    let frames = cenv_frames(cenv);
+
+    
+
+    let sr = cfr.callee.closed_native_procedure()[0];
+
+    match synrule_expand(Thread::current(), form, module, frames, sr.syntax_rules()) {
+        Ok(x) => {
+            println!("expanded {:?}", x);   
+            ScmResult::ok(x)
+        }
+        Err(x) => ScmResult::err(x),
+    }
+}
+
 pub(crate) fn pattern_print(f: &mut std::fmt::Formatter, val: Value) -> std::fmt::Result {
     let pat = val.syntax_pattern();
 
@@ -1169,4 +1181,11 @@ pub(crate) fn pvref_print(f: &mut std::fmt::Formatter, val: Value) -> std::fmt::
     let pv = val.pvref();
 
     write!(f, "#<pvref {}.{}>", pv.level, pv.count)
+}
+
+pub fn scm_make_macro(t: &mut Thread, transformer: Value) -> Handle<Macro> {
+    t.allocate(Macro {
+        header: ObjectHeader::new(Type::Macro),
+        transformer,
+    })
 }

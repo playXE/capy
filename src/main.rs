@@ -2,10 +2,7 @@ use std::path::PathBuf;
 
 use capy::{load::scm_vm_load, repl::repl, value::Value};
 
-use rsgc::{
-    prelude::HeapArguments,
-    thread::{main_thread, Thread},
-};
+use rsgc::{prelude::HeapArguments, thread::main_thread};
 
 use structopt::StructOpt;
 
@@ -24,7 +21,7 @@ fn main() {
         capy::vm::scm_init_vm();
 
         let args = Args::from_args();
-        let t = Thread::current();
+
         if let Some(file) = args.file.as_ref() {
             match scm_vm_load(
                 &file.display().to_string(),

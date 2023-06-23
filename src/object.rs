@@ -2,7 +2,7 @@ use std::{
     fmt::{Debug, Display, Formatter},
     hash::Hash,
     mem::{offset_of, size_of},
-    ops::{Deref, DerefMut, Index},
+    ops::{Deref, DerefMut, Index, IndexMut},
 };
 
 use rsgc::utils::bitfield::BitField;
@@ -612,6 +612,7 @@ impl Object for Procedure {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.name.trace(visitor);
         self.code.trace(visitor);
+
     }
 
     fn trace_range(&self, from: usize, to: usize, visitor: &mut dyn rsgc::prelude::Visitor) {
@@ -638,7 +639,7 @@ pub struct NativeProcedure {
     pub(crate) name: Value,
     pub(crate) mina: u32,
     pub(crate) maxa: u32,
-    pub(crate) callback: fn(&mut CallFrame) -> ScmResult,
+    pub(crate) callback: extern "C" fn(&mut CallFrame) -> ScmResult,
 }
 
 impl Object for NativeProcedure {
@@ -655,9 +656,24 @@ pub struct ClosedNativeProcedure {
     pub(crate) name: Value,
     pub(crate) mina: u32,
     pub(crate) maxa: u32,
-    pub(crate) callback: fn(&mut CallFrame, &mut [Value]) -> ScmResult,
+    pub(crate) callback: extern "C" fn(&mut CallFrame) -> ScmResult,
     pub(crate) env_size: u32,
     pub(crate) captures: [Value; 0],
+}
+
+impl Index<usize> for ClosedNativeProcedure {
+    type Output = Value;
+    fn index(&self, index: usize) -> &Self::Output {
+        assert!(index < self.env_size as usize);
+        unsafe { self.captures.get_unchecked(index) }
+    }
+}
+
+impl IndexMut<usize> for ClosedNativeProcedure {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        assert!(index < self.env_size as usize);
+        unsafe { self.captures.get_unchecked_mut(index) }
+    }
 }
 
 impl Object for ClosedNativeProcedure {
@@ -794,3 +810,17 @@ pub fn make_box(t: &mut Thread, value: Value) -> Value {
     });
     box_.into()
 }
+
+#[repr(C)]
+pub struct Macro {
+    pub(crate) header: ObjectHeader,
+    pub(crate) transformer: Value,
+}
+
+impl Object for Macro {
+    fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
+        self.transformer.trace(visitor);
+    }
+}
+
+impl Allocation for Macro {}

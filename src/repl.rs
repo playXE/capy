@@ -23,9 +23,8 @@ use crate::{
     compile::{
         bytecompiler::ByteCompiler, make_cenv, pass1::pass1, r7rs_to_value, ref_count_lvars,
     },
-    module::{scm_define, scm_search_for_symbols, scm_user_module},
+    module::{scm_search_for_symbols, scm_user_module},
     string::make_string,
-    symbol::make_symbol,
     value::Value,
     vm::{interpreter::apply, scm_current_module, scm_set_current_module},
 };

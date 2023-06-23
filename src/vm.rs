@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 use std::mem::MaybeUninit;
 use std::ptr::null_mut;
-use std::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
+use std::sync::atomic::{ AtomicU64, Ordering};
 
 use rsgc::heap::heap::heap;
 use rsgc::heap::root_processor::SimpleRoot;

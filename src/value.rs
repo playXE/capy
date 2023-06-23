@@ -5,7 +5,7 @@ use crate::{
     macros::SyntaxRules,
     object::{
         Bytevector, Identifier, Module, ObjectHeader, Pair, ReaderReference, Str, Symbol, Syntax,
-        Type, Vector, GLOC, ExtendedPair, Procedure, Box,
+        Type, Vector, GLOC, ExtendedPair, Procedure, Box, Macro, ClosedNativeProcedure,
     },
 };
 
@@ -13,9 +13,11 @@ use super::pure_nan::*;
 use rsgc::prelude::{Allocation, Handle, Object};
 
 #[derive(Clone, Copy)]
+#[repr(transparent)]
 pub struct Value(EncodedValueDescriptor);
 
 #[derive(Clone, Copy)]
+#[repr(C)]
 pub(crate) union EncodedValueDescriptor {
     as_int64: i64,
     ptr: usize,
@@ -599,6 +601,10 @@ impl Value {
         self.is_xtype(Type::Module)
     }
 
+    pub fn is_macro(self) -> bool {
+        self.is_xtype(Type::Macro)
+    }
+
     pub fn is_string(self) -> bool {
         self.is_xtype(Type::Str)
     }
@@ -732,6 +738,11 @@ impl Value {
         unsafe { std::mem::transmute(self) }
     }
 
+    pub fn closed_native_procedure(self) -> Handle<ClosedNativeProcedure> {
+        debug_assert!(self.is_closed_native_procedure());
+        unsafe { std::mem::transmute(self) }
+    }
+
     pub fn is_box(self) -> bool {
         self.is_xtype(Type::Box)
     }
@@ -750,6 +761,11 @@ impl Value {
             let mut b: Handle<Box> = std::mem::transmute(self);
             b.value = value;
         }
+    }
+
+    pub fn r#macro(self) -> Handle<Macro> {
+        debug_assert!(self.is_macro());
+        unsafe { std::mem::transmute(self) }
     }
 }
 
