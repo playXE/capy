@@ -1,11 +1,12 @@
 #![allow(dead_code)]
 use std::mem::MaybeUninit;
 use std::ptr::null_mut;
-use std::sync::atomic::{ AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use rsgc::heap::heap::heap;
 use rsgc::heap::root_processor::SimpleRoot;
 use rsgc::prelude::{Handle, Object};
+use rsgc::system::arraylist::ArrayList;
 use rsgc::thread::Thread;
 
 pub fn scm_error(err: &str) -> ! {
@@ -24,8 +25,8 @@ macro_rules! scm_error {
 }
 use rsgc::sync::mutex::{Condvar, RawMutex};
 
-use crate::object::Module;
-use crate::value::Value;
+use crate::runtime::object::{Module, ScmResult};
+use crate::runtime::value::Value;
 pub struct VM {
     thread: &'static mut Thread,
     state: i32,
@@ -39,6 +40,9 @@ pub struct VM {
     stack: Box<[Value]>,
     pub(crate) module: Option<Handle<Module>>,
     pub(crate) entry: u64,
+    /// Trampoline from native to Scheme support
+    tail_rator: Value,
+    tail_rands: ArrayList<Value>,
 }
 
 impl VM {
@@ -46,6 +50,20 @@ impl VM {
         let entry = self.entry;
         self.entry = ENTRY.fetch_add(1, Ordering::AcqRel);
         entry
+    }
+
+    pub(crate) fn tail_call(&mut self, rator: Value, rands: &[Value]) -> ScmResult {
+        self.tail_rator = rator;
+        self.tail_rands.clear();
+        let t = Thread::current();
+        for rand in rands {
+            self.tail_rands.push(t, *rand);
+        }
+        self.entry = 0;
+        ScmResult {
+            tag: ScmResult::TAIL,
+            value: Value::encode_undefined_value(),
+        }
     }
 }
 
@@ -56,6 +74,8 @@ impl Object for VM {
         self.result.trace(visitor);
         self.result_exception.trace(visitor);
         self.module.trace(visitor);
+        self.tail_rands.trace(visitor);
+        self.tail_rator.trace(visitor);
     }
 }
 
@@ -107,6 +127,8 @@ pub fn scm_init_vm() {
             sp: null_mut(),
             stack: vec![Value::encode_undefined_value(); 4096].into_boxed_slice(),
             entry: 0,
+            tail_rands: ArrayList::new(Thread::current()),
+            tail_rator: Value::encode_undefined_value(),
         });
     }
 
@@ -135,12 +157,11 @@ pub fn scm_set_current_module(module: Option<Handle<Module>>) {
 }
 
 pub mod callframe;
-pub mod setjmp;
 pub mod interpreter;
-
+pub mod setjmp;
 
 /// A simple counter used to identify different VM entrypoints.
-/// 
+///
 /// Used to protect call/cc from being called from a different VM
 /// or call/cc going through a Rust frame.
 static ENTRY: AtomicU64 = AtomicU64::new(0);

@@ -1,3 +1,16 @@
+use crate::{
+    compaux::{scm_identifier_env, scm_identifier_global_binding, scm_make_identifier},
+    op::Opcode,
+    runtime::fun::make_procedure,
+    runtime::list::{scm_acons, scm_cons, scm_econs},
+    runtime::object::{Module, ObjectHeader, Syntax, Type},
+    runtime::string::make_string,
+    runtime::symbol::make_symbol,
+    runtime::value::Value,
+    runtime::vector::{make_bytevector_from_slice, make_vector},
+    scm_dolist, scm_for_each,
+    vm::scm_current_module,
+};
 use pretty::{BoxAllocator, DocAllocator, DocBuilder};
 use r7rs_parser::expr::{Expr, NoIntern};
 use rsgc::{
@@ -6,16 +19,6 @@ use rsgc::{
     thread::Thread,
 };
 use termcolor::{Color, ColorSpec, WriteColor};
-
-use crate::{
-    compaux::{scm_identifier_env, scm_identifier_global_binding, scm_make_identifier},
-    list::{scm_acons, scm_cons, scm_econs},
-    object::{Module, ObjectHeader, Syntax, Type},
-    scm_dolist, scm_for_each,
-    symbol::make_symbol,
-    value::Value,
-    vm::scm_current_module, vector::{make_bytevector_from_slice, make_vector}, string::make_string, op::Opcode, fun::make_procedure,
-};
 
 pub enum IForm {
     Const(Value),
@@ -40,7 +43,7 @@ pub enum IForm {
 
 pub struct Asm {
     pub op: Opcode,
-    pub args: ArrayList<Handle<IForm>>
+    pub args: ArrayList<Handle<IForm>>,
 }
 
 impl Object for IForm {
@@ -503,7 +506,11 @@ pub fn env_lookup_int(name: Value, module: Handle<Module>, mut frames: Value) ->
     if name.is_xtype(Type::Symbol) {
         scm_make_identifier(name, Some(module), frames).into()
     } else {
-        assert!(name.is_xtype(Type::Identifier), "name must be an identifier but got {:?}", name);
+        assert!(
+            name.is_xtype(Type::Identifier),
+            "name must be an identifier but got {:?}",
+            name
+        );
         name
     }
 }
@@ -524,7 +531,6 @@ pub fn make_iform(iform: IForm) -> Handle<IForm> {
     Thread::current().allocate(iform)
 }
 
-
 pub fn make_seq(src: Value, seq: &[Handle<IForm>]) -> Handle<IForm> {
     make_iform(IForm::Seq(Seq {
         origin: src,
@@ -542,6 +548,7 @@ pub fn make_seq(src: Value, seq: &[Handle<IForm>]) -> Handle<IForm> {
 pub enum GlobalCall {
     Macro(Value),
     Syntax(Handle<Syntax>),
+    Inliner(Value),
     Normal,
 }
 
@@ -555,6 +562,8 @@ pub fn global_call_type(id: Value, _cenv: Value) -> GlobalCall {
             GlobalCall::Syntax(gval.syntax())
         } else if gval.is_macro() {
             GlobalCall::Macro(gval)
+        } else if gval.is_native_procedure() && gval.native_procedure().inliner.is_some() {
+            GlobalCall::Inliner(gval)
         } else {
             // TODO: Macros
             GlobalCall::Normal
@@ -569,9 +578,9 @@ pub(crate) fn init_compiler() {
 }
 
 //pub mod anf;
+pub mod bytecompiler;
 pub mod pass1;
 pub mod pass2;
-pub mod bytecompiler;
 
 impl IForm {
     pub fn pretty<'a, D>(&self, allocator: &'a D) -> DocBuilder<'a, D, ColorSpec>
@@ -745,7 +754,9 @@ impl IForm {
                 .group()
                 .parens(),
 
-            IForm::It => allocator.text("it").annotate(ColorSpec::new().set_fg(Some(Color::Blue)).clone()),
+            IForm::It => allocator
+                .text("it")
+                .annotate(ColorSpec::new().set_fg(Some(Color::Blue)).clone()),
             _ => todo!(),
         }
     }
@@ -785,7 +796,6 @@ fn r7rs_to_value_k(thread: &mut Thread, expr: &Expr<NoIntern>, cont: &mut dyn Fn
 
         Expr::Null => cont(Value::encode_null_value()),
         Expr::Syntax(loc, e) => {
-            
             if let Expr::Pair(car, cdr) = &**e {
                 let mut pos = make_vector(thread, 2);
                 pos[0] = Value::encode_int32(loc.line as i32);
@@ -798,7 +808,7 @@ fn r7rs_to_value_k(thread: &mut Thread, expr: &Expr<NoIntern>, cont: &mut dyn Fn
             } else {
                 r7rs_to_value_k(thread, e, cont)
             }
-        },
+        }
         _ => unsafe { std::hint::unreachable_unchecked() },
     }
 }
@@ -853,7 +863,7 @@ pub fn ref_count_lvars(mut iform: Handle<IForm>) {
 
         IForm::Dynenv(e) => {
             ref_count_lvars(e.body);
-            for (k,v) in e.kvs.iter().copied() {
+            for (k, v) in e.kvs.iter().copied() {
                 ref_count_lvars(k);
                 ref_count_lvars(v);
             }
@@ -873,7 +883,7 @@ pub fn ref_count_lvars(mut iform: Handle<IForm>) {
             ref_count_lvars(x.body);
         }
 
-        _ => ()
+        _ => (),
     }
 }
 
@@ -898,4 +908,3 @@ pub fn compile_r7rs_expr(expr: &Expr<NoIntern>, cenv: Value) -> Result<Value, Va
 
     compile(expr, cenv)
 }
-

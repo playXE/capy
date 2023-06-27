@@ -2,14 +2,15 @@ use std::{fmt::Debug, hash::Hash};
 
 use crate::{
     compile::LVar,
-    macros::SyntaxRules,
-    object::{
-        Bytevector, Identifier, Module, ObjectHeader, Pair, ReaderReference, Str, Symbol, Syntax,
-        Type, Vector, GLOC, ExtendedPair, Procedure, Box, Macro, ClosedNativeProcedure,
+    runtime::macros::SyntaxRules,
+    runtime::object::{
+        Box, Bytevector, ClosedNativeProcedure, ExtendedPair, Identifier, Macro, Module,
+        NativeProcedure, ObjectHeader, Pair, Procedure, ReaderReference, Str, Symbol, Syntax, Type,
+        Vector, GLOC,
     },
 };
 
-use super::pure_nan::*;
+use super::{pure_nan::*, bigint::BigInt};
 use rsgc::prelude::{Allocation, Handle, Object};
 
 #[derive(Clone, Copy)]
@@ -195,7 +196,7 @@ impl Value {
     }
 
     #[inline]
-    pub fn is_number(self) -> bool {
+    pub fn is_inline_number(self) -> bool {
         unsafe { (self.0.as_int64 & Self::NUMBER_TAG) != 0 }
     }
 
@@ -229,7 +230,7 @@ impl Value {
     }
     #[inline]
     pub fn is_double(self) -> bool {
-        self.is_number() && !self.is_int32()
+        self.is_inline_number() && !self.is_int32()
     }
 
     #[inline]
@@ -449,7 +450,7 @@ impl Value {
         debug_assert!(self.is_extended_pair());
         unsafe {
             let pair: Handle<ExtendedPair> = std::mem::transmute(self.0.ptr);
-            pair.attr 
+            pair.attr
         }
     }
 
@@ -634,7 +635,7 @@ impl Value {
         debug_assert!(self.is_xtype(Type::Syntax));
         unsafe { std::mem::transmute(self.0.ptr) }
     }
-    
+
     pub fn strsym<'a>(&self) -> &'a str {
         debug_assert!(self.is_xtype(Type::Str) || self.is_xtype(Type::Symbol));
         if self.is_string() {
@@ -743,13 +744,18 @@ impl Value {
         unsafe { std::mem::transmute(self) }
     }
 
+    pub fn native_procedure(self) -> Handle<NativeProcedure> {
+        debug_assert!(self.is_native_procedure());
+        unsafe { std::mem::transmute(self) }
+    }
+
     pub fn is_box(self) -> bool {
         self.is_xtype(Type::Box)
     }
 
     pub fn box_ref(self) -> Value {
         debug_assert!(self.is_box());
-        unsafe {  
+        unsafe {
             let b: Handle<Box> = std::mem::transmute(self);
             b.value
         }
@@ -757,7 +763,7 @@ impl Value {
 
     pub fn box_set(self, value: Value) {
         debug_assert!(self.is_box());
-        unsafe {  
+        unsafe {
             let mut b: Handle<Box> = std::mem::transmute(self);
             b.value = value;
         }
@@ -765,6 +771,39 @@ impl Value {
 
     pub fn r#macro(self) -> Handle<Macro> {
         debug_assert!(self.is_macro());
+        unsafe { std::mem::transmute(self) }
+    }
+
+    pub fn is_number(self) -> bool {
+        self.is_int32() || self.is_double() || (self.get_type() >= Type::BigNum && self.get_type() <= Type::Complex)
+    }
+
+    pub fn is_bignum(self) -> bool {
+        self.is_xtype(Type::BigNum)
+    }
+
+    pub fn is_rational(self) -> bool {
+        self.is_xtype(Type::Rational)
+    }
+
+    pub fn is_complex(self) -> bool {
+        self.is_xtype(Type::Complex)
+    }
+
+    pub fn is_exact_integer(self) -> bool {
+        self.is_int32() || self.is_bignum()
+    }
+
+    pub fn is_exact_real(self) -> bool {
+        self.is_exact_integer() || self.is_rational()
+    }
+
+    pub fn is_real(self) -> bool {
+        self.is_exact_real() || self.is_double()
+    }
+
+    pub fn bignum(self) -> Handle<BigInt> {
+        debug_assert!(self.is_bignum());
         unsafe { std::mem::transmute(self) }
     }
 }
@@ -808,9 +847,9 @@ impl Debug for Value {
             }
 
             if self.is_xtype(Type::Synpattern) {
-                return crate::macros::pattern_print(f, *self);
+                return crate::runtime::macros::pattern_print(f, *self);
             } else if self.is_xtype(Type::Pvref) {
-                return crate::macros::pvref_print(f, *self);
+                return crate::runtime::macros::pvref_print(f, *self);
             }
 
             let obj = *self;

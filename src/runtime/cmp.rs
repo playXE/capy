@@ -1,4 +1,4 @@
-use crate::{compaux::scm_unwrap_identifier, value::Value};
+use crate::{compaux::scm_unwrap_identifier, runtime::value::Value};
 
 pub fn scm_eq(x: Value, y: Value) -> bool {
     x == y

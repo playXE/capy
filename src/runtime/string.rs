@@ -1,6 +1,6 @@
 use rsgc::{prelude::Handle, thread::Thread};
 
-use crate::object::{ObjectHeader, Str, Type};
+use crate::runtime::object::{ObjectHeader, Str, Type};
 
 pub fn make_string(thread: &mut Thread, s: impl AsRef<str>) -> Handle<Str> {
     let mut str = thread.allocate_varsize::<Str>(s.as_ref().len());

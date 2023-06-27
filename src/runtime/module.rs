@@ -34,13 +34,13 @@ use std::collections::{hash_map::RandomState, HashMap};
 use crate::{
     compaux::{scm_identifier_global_binding, scm_unwrap_identifier},
     compile::IForm,
-    list::{scm_cons, scm_list, scm_memq},
-    macros::SyntaxRules,
-    object::{Identifier, Module, ObjectHeader, Symbol, Syntax, Type, GLOC},
+    runtime::list::{scm_cons, scm_list, scm_memq},
+    runtime::macros::SyntaxRules,
+    runtime::object::{Identifier, Module, ObjectHeader, Symbol, Syntax, Type, GLOC},
+    runtime::string::make_string,
+    runtime::symbol::{make_symbol, scm_symbol_sans_prefix},
+    runtime::value::Value,
     scm_for_each,
-    string::make_string,
-    symbol::{make_symbol, scm_symbol_sans_prefix},
-    value::Value,
 };
 type Modules = Mutex<HashMap<Handle<Symbol>, Value>>;
 
@@ -95,7 +95,7 @@ pub(crate) fn init_modules() {
     macro_rules! init_mod {
         ($mod: ident, $mname: expr, $inttab: expr) => {
             unsafe {
-                let mname = $crate::symbol::make_symbol($mname, true);
+                let mname = $crate::runtime::symbol::make_symbol($mname, true);
                 $mod = _make_module(mname, $inttab).into();
 
                 mods.insert(mname.symbol(), $mod);
@@ -103,7 +103,7 @@ pub(crate) fn init_modules() {
                 $mod.module().parents = if mpl.is_null() {
                     Value::encode_null_value()
                 } else {
-                    $crate::list::scm_list(t, &[mpl.car()])
+                    $crate::runtime::list::scm_list(t, &[mpl.car()])
                 };
 
                 mpl = scm_cons(t, $mod, mpl);
@@ -589,7 +589,6 @@ pub fn scm_make_binding(
             .unwrap_or(Value::encode_bool_value(false));
 
         let mut g = if v.is_xtype(Type::GLOC) {
-            
             existing = true;
             v.gloc()
         } else {
@@ -822,7 +821,10 @@ pub fn scm_insert_binding(
 ) -> Result<Value, Value> {
     // when 'fresh' is #t insert only if there's no binding yet
     if fresh && !scm_global_variable_ref(module, name, SCM_BINDING_STAY_IN_MODULE).is_undefined() {
-        println!("insert {:?}", scm_global_variable_ref(module, name, SCM_BINDING_STAY_IN_MODULE));
+        println!(
+            "insert {:?}",
+            scm_global_variable_ref(module, name, SCM_BINDING_STAY_IN_MODULE)
+        );
         Ok(Value::encode_bool_value(false))
     } else {
         scm_make_binding(module, name, value, flags).map(|x| x.into())
@@ -954,17 +956,10 @@ pub fn scm_search_for_symbols(module: Handle<Module>, name: &str) -> Vec<String>
     let mut completions = Vec::new();
 
     for (k, _) in module.internal.iter() {
-       
         if k.starts_with(name) {
-    
             completions.push(k.to_string());
         }
-
-        
-
     }
-
-    
 
     let mut searched = ModuleCache::new();
 
@@ -976,7 +971,6 @@ pub fn scm_search_for_symbols(module: Handle<Module>, name: &str) -> Vec<String>
         scm_for_each!(mp, elt.module().mpl, {
             let m = mp.car();
 
-            
             if searched.is_visited(m.module()) {
                 continue;
             }
@@ -987,24 +981,19 @@ pub fn scm_search_for_symbols(module: Handle<Module>, name: &str) -> Vec<String>
                 }
             }
 
-            
-
-
             searched.add_visited(m.module());
         });
     });
 
     scm_for_each!(mp, module.mpl, {
         let m = mp.car();
-        
 
         for (k, _) in m.module().internal.iter() {
             if k.starts_with(name) {
                 completions.push(k.to_string());
             }
-        }   
+        }
 
-        
         searched.add_visited(m.module());
     });
     completions.dedup();

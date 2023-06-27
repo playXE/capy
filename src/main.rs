@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use capy::{load::scm_vm_load, repl::repl, value::Value};
+use capy::{repl::repl, runtime::load::scm_vm_load, runtime::value::Value};
 
 use rsgc::{prelude::HeapArguments, thread::main_thread};
 

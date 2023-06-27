@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 use rsgc::{prelude::Handle, thread::Thread};
 
-use crate::{string::make_string, value::Value};
+use crate::{runtime::string::make_string, runtime::value::Value};
 
 use super::{make_seq, IForm};
 

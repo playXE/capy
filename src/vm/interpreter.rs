@@ -8,16 +8,16 @@ use std::ptr::{null, null_mut};
 use super::callframe::CallFrame;
 use super::{scm_current_module, scm_vm, VM};
 use crate::compaux::{scm_identifier_global_ref, scm_outermost_identifier};
-use crate::fun::make_closed_procedure;
-use crate::module::{scm_make_binding, SCM_BINDING_CONST};
-use crate::object::{
+use crate::op::Opcode;
+use crate::runtime::fun::make_closed_procedure;
+use crate::runtime::module::{scm_make_binding, SCM_BINDING_CONST};
+use crate::runtime::object::{
     check_arity, make_box, wrong_arity, ClosedNativeProcedure, CodeBlock, Module, NativeProcedure,
     Procedure, Type,
 };
-use crate::op::Opcode;
-use crate::string::make_string;
-use crate::value::Value;
-use crate::vector::make_vector;
+use crate::runtime::string::make_string;
+use crate::runtime::value::Value;
+use crate::runtime::vector::make_vector;
 
 /// Virtual machine interpreter loop.
 ///
@@ -32,12 +32,12 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
     let mut sp = cfr.cast::<Value>();
     let mut cfr = cfr.cast::<CallFrame>();
     let mut pc;
-    
+
     macro_rules! pop {
         () => {{
             debug_assert!(sp < cfr.cast::<Value>());
             let val = sp.read();
-            
+
             sp = sp.add(1);
 
             val
@@ -52,7 +52,6 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
 
     macro_rules! push {
         ($val: expr) => {{
-            
             sp = sp.sub(1);
             debug_assert!(sp < cfr.cast::<Value>());
             sp.write($val);
@@ -66,7 +65,6 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
 
     macro_rules! leave_frame {
         ($val: expr) => {
-            
             if (*cfr).caller.is_null() {
                 return Ok($val);
             } else {
@@ -139,7 +137,39 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                 // 2) build a new call-frame
                 // 3) again enter the loop
                 //
-                todo!()
+                let caller = (*cfr).caller;
+                let return_pc = (*cfr).return_pc;
+
+                // start of arguments pushed by caller for current frame
+                let arg_start = (*cfr)
+                    .args
+                    .as_mut_ptr()
+                    .add((*cfr).argc.get_int32() as usize);
+
+                let mut cursor = arg_start;
+
+                // copy arguments to the new frame
+                for i in 0..vm.tail_rands.len() {
+                    cursor = cursor.sub(1);
+                    cursor.write(vm.tail_rands[i]);
+                }
+
+                sp = cursor;
+                
+                push!(cfr CallFrame {
+                    caller,
+                    return_pc,
+                    callee: vm.tail_rator,
+                    argc: Value::encode_int32(vm.tail_rands.len() as _),
+                    code_block: Value::encode_undefined_value(),
+                    args: []
+                });
+                vm.tail_rands.clear();
+                vm.tail_rator = Value::encode_undefined_value();
+
+                cfr = sp.cast::<CallFrame>();
+                
+                continue 'eval;
             }
         } else {
             fn not_a_function(vm: &mut VM, callee: Value) -> Result<Value, Value> {
@@ -198,7 +228,6 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
 
             let op = readt!(Opcode);
 
-         
             match op {
                 Opcode::NoOp => {}
                 Opcode::Pop => {
@@ -230,7 +259,6 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
 
                     for x in 0..n {
                         push!(Value::encode_undefined_value());
-                     
                     }
                 }
 
@@ -309,9 +337,9 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
 
                 Opcode::TailCall => {
                     let argc = read2!();
-                    
+
                     let callee = pop!();
-                   
+
                     let caller = (*cfr).caller;
                     let return_pc = (*cfr).return_pc;
 
@@ -329,7 +357,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     for _ in 0..argc {
                         tail_arg = tail_arg.sub(1);
                         cursor = cursor.sub(1);
-
+                        
                         cursor.write(tail_arg.read());
                     }
 
@@ -367,7 +395,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     let off = read2!();
                     let val = pop!();
                     let slot = cfr.cast::<Value>().sub(off as usize + 1);
-                    
+
                     debug_assert!(slot < cfr.cast::<Value>());
                     slot.write(val);
                 }
@@ -416,10 +444,8 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                         .captures
                         .as_mut_ptr()
                         .copy_from_nonoverlapping(captures.as_ptr(), ncaptures as _);
-                    
-                    push!(Value::encode_object_value(closure));
 
-               
+                    push!(Value::encode_object_value(closure));
                 }
 
                 Opcode::Define => {

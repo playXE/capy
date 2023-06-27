@@ -1,12 +1,14 @@
 use rsgc::{prelude::Handle, thread::Thread};
 
 use crate::{
-    object::{
+    runtime::object::{
         ClosedNativeProcedure, CodeBlock, NativeProcedure, ObjectHeader, Procedure, ScmResult, Type,
     },
-    value::Value,
+    runtime::value::Value,
     vm::callframe::CallFrame,
 };
+
+use super::symbol::make_symbol;
 
 pub fn make_procedure(t: &mut Thread, code_block: Handle<CodeBlock>) -> Handle<Procedure> {
     t.allocate(Procedure {
@@ -54,6 +56,7 @@ pub fn scm_make_native_procedure(
     t.allocate(NativeProcedure {
         header: ObjectHeader::new(Type::NativeProcedure),
         name,
+        inliner: None,
         callback,
         mina,
         maxa,
@@ -78,7 +81,7 @@ pub fn scm_make_closed_native_procedure(
         proc.callback = callback;
         proc.mina = mina;
         proc.maxa = maxa;
-
+        proc.inliner = None;
         proc.env_size = captures.len() as _;
         proc.captures
             .as_mut_ptr()
@@ -86,4 +89,10 @@ pub fn scm_make_closed_native_procedure(
     }
 
     unsafe { proc.assume_init() }
+}
+
+pub fn scm_make_subr(name: &str, proc: extern "C" fn(&mut CallFrame) -> ScmResult, mina: u32, maxa: u32) -> Value {
+    let name = make_symbol(name, true);
+    let proc = scm_make_native_procedure(&mut Thread::current(), name, proc, mina, maxa);
+    proc.into()
 }

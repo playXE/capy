@@ -2,7 +2,7 @@ use std::{
     fmt::{Debug, Display, Formatter},
     hash::Hash,
     mem::{offset_of, size_of},
-    ops::{Deref, DerefMut, Index, IndexMut},
+    ops::{Deref, DerefMut, Index, IndexMut, Try, FromResidual},
 };
 
 use rsgc::utils::bitfield::BitField;
@@ -12,7 +12,9 @@ use rsgc::{
     thread::Thread,
 };
 
-use crate::{compile::IForm, string::make_string, value::Value, vm::callframe::CallFrame};
+use crate::{
+    compile::IForm, runtime::string::make_string, runtime::value::Value, vm::{callframe::CallFrame, scm_vm},
+};
 
 pub const EXTENDED_PAIR_BIT: usize = 0;
 pub const EXTENDED_PAIR_BIT_SIZE: usize = 1;
@@ -21,7 +23,7 @@ pub type ExtendedPairBitfield = BitField<EXTENDED_PAIR_BIT_SIZE, EXTENDED_PAIR_B
 #[repr(C)]
 pub struct ObjectHeader {
     pub(crate) typ: Type,
-    pub(crate) flags: u32
+    pub(crate) flags: u32,
 }
 
 impl ObjectHeader {
@@ -32,7 +34,7 @@ impl ObjectHeader {
 
     #[inline(always)]
     pub const fn is_extended_pair(&self) -> bool {
-        ExtendedPairBitfield::decode(self.flags as u64) != 0 
+        ExtendedPairBitfield::decode(self.flags as u64) != 0
     }
 
     pub fn set_extended_pair(&mut self, value: bool) {
@@ -40,19 +42,18 @@ impl ObjectHeader {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(u8)]
 pub enum Type {
-    Null,
+    Null = 0,
     Undefined,
     True,
     False,
     Int32,
     Double,
-
     BigNum,
-    Complex,
     Rational,
+    Complex,
     Str,
     Vector,
     Values,
@@ -75,6 +76,9 @@ pub enum Type {
     Procedure,
     NativeProcedure,
     ClosedNativeProcedure,
+    Struct,
+    StructType,
+    StructProperty,
 }
 
 #[repr(C)]
@@ -101,7 +105,6 @@ pub struct Pair {
     pub(crate) car: Value,
     pub(crate) cdr: Value,
 }
-
 
 impl Object for Pair {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
@@ -612,7 +615,6 @@ impl Object for Procedure {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.name.trace(visitor);
         self.code.trace(visitor);
-
     }
 
     fn trace_range(&self, from: usize, to: usize, visitor: &mut dyn rsgc::prelude::Visitor) {
@@ -633,12 +635,15 @@ impl Allocation for Procedure {
     const VARSIZE_OFFSETOF_VARPART: usize = offset_of!(Procedure, captures);
 }
 
+pub type ProcedureInliner = fn(&[Handle<IForm>]) -> Option<Handle<IForm>>;
+
 #[repr(C)]
 pub struct NativeProcedure {
     pub(crate) header: ObjectHeader,
     pub(crate) name: Value,
     pub(crate) mina: u32,
     pub(crate) maxa: u32,
+    pub(crate) inliner: Option<ProcedureInliner>,
     pub(crate) callback: extern "C" fn(&mut CallFrame) -> ScmResult,
 }
 
@@ -656,6 +661,7 @@ pub struct ClosedNativeProcedure {
     pub(crate) name: Value,
     pub(crate) mina: u32,
     pub(crate) maxa: u32,
+    pub(crate) inliner: Option<ProcedureInliner>,
     pub(crate) callback: extern "C" fn(&mut CallFrame) -> ScmResult,
     pub(crate) env_size: u32,
     pub(crate) captures: [Value; 0],
@@ -711,24 +717,22 @@ impl ScmResult {
     pub const TAIL: u8 = 1;
     pub const ERR: u8 = 2;
 
-    pub fn ok(value: Value) -> Self {
+    pub fn ok(value: impl Into<Value>) -> Self {
         Self {
             tag: Self::OK,
-            value,
+            value: value.into(),
         }
     }
 
-    pub fn tail(value: Value) -> Self {
-        Self {
-            tag: Self::TAIL,
-            value,
-        }
+    pub fn tail(rator: impl Into<Value>, rands: &[Value]) -> Self {
+        let vm = scm_vm();
+        vm.tail_call(rator.into(), rands)
     }
 
-    pub fn err(value: Value) -> Self {
+    pub fn err(value: impl Into<Value>) -> Self {
         Self {
             tag: Self::ERR,
-            value,
+            value: value.into(),
         }
     }
 
@@ -824,3 +828,35 @@ impl Object for Macro {
 }
 
 impl Allocation for Macro {}
+
+// implement Try trait for ScmResult
+
+impl Try for ScmResult {
+    type Output = Value;
+    type Residual = Value;
+    
+    fn branch(self) -> std::ops::ControlFlow<Self::Residual, Self::Output> {
+        match self.tag {
+            ScmResult::OK => std::ops::ControlFlow::Continue(self.value),
+            ScmResult::TAIL => std::ops::ControlFlow::Break(self.value),
+            ScmResult::ERR => std::ops::ControlFlow::Break(self.value),
+            _ => unreachable!(),
+        }
+    }
+
+    fn from_output(output: Self::Output) -> Self {
+        Self {
+            tag: ScmResult::OK,
+            value: output,
+        }
+    }
+}
+
+impl FromResidual<Value> for ScmResult {
+    fn from_residual(residual: Value) -> Self {
+        Self {
+            tag: ScmResult::ERR,
+            value: residual,
+        }
+    }
+}

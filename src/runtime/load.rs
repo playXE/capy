@@ -1,14 +1,14 @@
 use std::intrinsics::unlikely;
 
 use crate::compile::bytecompiler::ByteCompiler;
-use crate::compile::{ref_count_lvars, r7rs_to_value};
-use crate::list::scm_is_list;
-use crate::object::Module;
+use crate::compile::{r7rs_to_value, ref_count_lvars};
+use crate::runtime::list::scm_is_list;
+use crate::runtime::object::Module;
+use crate::runtime::string::make_string;
 use crate::scm_for_each;
-use crate::string::make_string;
 use crate::vm::interpreter::apply;
 use crate::vm::scm_vm;
-use crate::{module::scm_user_module, value::Value, vm::scm_current_module};
+use crate::{runtime::module::scm_user_module, runtime::value::Value, vm::scm_current_module};
 use once_cell::sync::Lazy;
 use rsgc::heap::heap::heap;
 use rsgc::heap::root_processor::SimpleRoot;
@@ -74,7 +74,6 @@ pub fn scm_vm_load(
             full_path.push_str(filename);
 
             if std::path::Path::new(&full_path).exists() {
-
                 full_path.clear();
                 full_path.push_str(path);
                 full_path.push_str("/");
@@ -91,11 +90,7 @@ pub fn scm_vm_load(
         });
 
         if path_to_use.is_none() {
-            return Err(make_string(
-                t,
-                &format!("load: file not found: {}", filename),
-            )
-            .into());
+            return Err(make_string(t, &format!("load: file not found: {}", filename)).into());
         }
     }
 
@@ -105,19 +100,18 @@ pub fn scm_vm_load(
         make_string(
             t,
             &format!("load: error reading file {}: {}", path_to_use, err),
-        ).into()
+        )
+        .into()
     })?;
 
     let mut i = r7rs_parser::expr::NoIntern;
     let mut p = r7rs_parser::parser::Parser::new(&mut i, &source, false);
 
-   
-
     let cenv = crate::compile::make_cenv(module, Value::encode_null_value());
 
     let proc = ByteCompiler::compile_while(t, |t| {
         if p.finished() {
-            return Ok(None)
+            return Ok(None);
         }
 
         match p.parse(true) {
@@ -134,7 +128,7 @@ pub fn scm_vm_load(
                 Err(make_string(t, &err).into())
             }
         }
-    })?; 
+    })?;
     let saved = scm_current_module();
     scm_vm().module = Some(module);
     let result = apply(proc, &[]);

@@ -1,10 +1,9 @@
-use rsgc::{prelude::Handle, thread::Thread};
-
 use crate::{
-    object::{ExtendedPair, ObjectHeader, Pair, Type, Vector},
-    value::Value,
-    vector::make_vector,
+    runtime::object::{ExtendedPair, ObjectHeader, Pair, Type, Vector},
+    runtime::value::Value,
+    runtime::vector::make_vector,
 };
+use rsgc::{prelude::Handle, thread::Thread};
 
 pub fn scm_cons(t: &mut Thread, car: Value, cdr: Value) -> Value {
     Value::encode_object_value(t.allocate(Pair {
@@ -39,7 +38,7 @@ pub fn scm_memq(obj: Value, list: Value) -> Value {
 macro_rules! scm_for_each {
     ($p: ident, $list: expr, $b: block) => {{
         let mut $p = $list;
-        while $p.is_xtype($crate::object::Type::Pair) {
+        while $p.is_xtype($crate::runtime::object::Type::Pair) {
             $b
             #[allow(unreachable_code)]
             {
@@ -50,7 +49,7 @@ macro_rules! scm_for_each {
 
     (declared $p: ident, $list: expr, $b: block) => {{
         $p = $list;
-        while $p.is_xtype($crate::object::Type::Pair) {
+        while $p.is_xtype($crate::runtime::object::Type::Pair) {
             $b
             #[allow(unreachable_code)]
             {
@@ -66,7 +65,7 @@ macro_rules! scm_dolist {
     ($p: ident, $list: expr, $b: block) => {
         let mut ls = $list;
 
-        while ls.is_xtype($crate::object::Type::Pair) {
+        while ls.is_xtype($crate::runtime::object::Type::Pair) {
             let $p = ls.car();
             $b
             #[allow(unreachable_code)]
@@ -373,12 +372,12 @@ pub fn scm_last_pair(mut l: Value) -> Value {
 macro_rules! scm_append1 {
     ($t: expr, $start: expr, $last: expr, $obj: expr) => {
         if $start.is_null() {
-            *$start = $crate::list::scm_cons($t, $obj, $crate::value::Value::encode_null_value());
+            *$start = $crate::runtime::list::scm_cons($t, $obj, $crate::runtime::value::Value::encode_null_value());
             *$last = *$start;
         } else {
             $t.write_barrier($last.pair());
             $last.pair().cdr =
-                $crate::list::scm_cons($t, $obj, $crate::value::Value::encode_null_value());
+                $crate::runtime::list::scm_cons($t, $obj, $crate::runtime::value::Value::encode_null_value());
             *$last = $last.pair().cdr;
         }
     };
@@ -458,12 +457,12 @@ macro_rules! scm_append {
         if $start.is_null() {
             *$start = list;
             if !list.is_null() {
-                *$last = $crate::list::scm_last_pair(list);
+                *$last = $crate::runtime::list::scm_last_pair(list);
             }
         } else {
             $t.write_barrier($last.pair());
             $last.pair().cdr = list;
-            *$last = $crate::list::scm_last_pair(*$last);
+            *$last = $crate::runtime::list::scm_last_pair(*$last);
         }
     }};
 }

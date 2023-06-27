@@ -1,6 +1,6 @@
 use std::mem::size_of;
 
-use crate::value::Value;
+use crate::runtime::value::Value;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(C)]
@@ -53,12 +53,12 @@ pub enum CallFrameSlot {
 
 #[repr(C)]
 pub struct CallFrame {
-    pub caller: *mut CallFrame,
-    pub return_pc: *const u8,
-    pub code_block: Value,
-    pub argc: Value,
-    pub callee: Value,
-    pub args: [Value; 0],
+    pub(crate) caller: *mut CallFrame,
+    pub(crate) return_pc: *const u8,
+    pub(crate) code_block: Value,
+    pub(crate) argc: Value,
+    pub(crate) callee: Value,
+    pub(crate) args: [Value; 0],
 }
 
 impl CallFrame {
@@ -67,5 +67,25 @@ impl CallFrame {
         unsafe {
             *self.args.as_ptr().add(index)
         }
+    }
+
+    pub fn argument_count(&self) -> usize {
+        self.argc.get_int32() as usize
+    }
+
+    pub fn callee(&self) -> Value {
+        self.callee
+    }
+
+    pub fn return_pc(&self) -> *const u8 {
+        self.return_pc
+    }
+
+    pub fn code_block(&self) -> Value {
+        self.code_block
+    }
+    
+    pub fn caller(&self) -> *mut CallFrame {
+        self.caller
     }
 }

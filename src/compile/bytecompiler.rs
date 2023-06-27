@@ -12,12 +12,12 @@ use rsgc::{
 
 use crate::{
     compile::{make_cenv, pass1::pass1, ref_count_lvars, LetScope},
-    fun::make_procedure,
-    object::{CodeBlock, Module, ObjectHeader, Type},
+    runtime::fun::make_procedure,
+    runtime::object::{CodeBlock, Module, ObjectHeader, Type},
     op::{Opcode, disassembly},
-    string::make_string,
-    value::Value,
-    vector::make_vector_from_slice,
+    runtime::string::make_string,
+    runtime::value::Value,
+    runtime::vector::make_vector_from_slice,
 };
 
 use super::{r7rs_to_value, IForm, LVar, Lambda};

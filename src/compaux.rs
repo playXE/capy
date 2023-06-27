@@ -1,20 +1,18 @@
+use crate::runtime::{
+    list::scm_cons,
+    module::scm_find_binding,
+    object::{Identifier, Module, ObjectHeader, ReaderReference, Symbol, Type, GLOC},
+    string::make_string,
+    value::Value,
+    vector::make_vector,
+};
+use crate::scm_for_each;
 use rsgc::{
     prelude::Handle,
     system::collections::hashmap::{Entry, HashMap},
     thread::Thread,
 };
 use std::collections::hash_map::RandomState;
-
-use crate::{
-    list::scm_cons,
-    module::scm_find_binding,
-    object::{Identifier, Module, ObjectHeader, ReaderReference, Symbol, Type, GLOC},
-    scm_for_each,
-    string::make_string,
-    value::Value,
-    vector::make_vector,
-};
-
 pub fn scm_outermost_identifier(mut id: Handle<Identifier>) -> Handle<Identifier> {
     while id.name.is_xtype(Type::Identifier) {
         id = id.name.identifier();
@@ -240,7 +238,11 @@ pub fn scm_identifier_global_ref(id: Handle<Identifier>) -> Result<(Value, Handl
         return Ok((gloc.value, gloc));
     }
 
-    Err(make_string(Thread::current(), &format!("unbound variable: {}", scm_unwrap_identifier(id))).into())
+    Err(make_string(
+        Thread::current(),
+        &format!("unbound variable: {}", scm_unwrap_identifier(id)),
+    )
+    .into())
 }
 
 pub fn scm_identifier_to_symbol(id: Value) -> Handle<Symbol> {

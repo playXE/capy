@@ -3,7 +3,7 @@ use parse_display::Display;
 use rsgc::prelude::Handle;
 use termcolor::{ColorSpec, WriteColor};
 
-use crate::object::CodeBlock;
+use crate::runtime::object::CodeBlock;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display)]
 #[display(style = "snake_case")]

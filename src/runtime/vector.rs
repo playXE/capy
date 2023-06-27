@@ -1,6 +1,6 @@
 use rsgc::{prelude::Handle, thread::Thread};
 
-use crate::{
+use crate::runtime::{
     object::{Bytevector, ObjectHeader, Type, Vector},
     value::Value,
 };
@@ -9,12 +9,12 @@ use crate::{
 macro_rules! make_vector {
     ($thread: expr; $($val: expr),*) => {
         {
-            $crate::vector::make_vector_from_slice($thread, &[$($val),*])
+            $crate::runtime::vector::make_vector_from_slice($thread, &[$($val),*])
         }
     };
     ($($val: expr),*) => {
         {
-            $crate::vector::make_vector_from_slice(&mut crate::Thread::current(), &[$($val),*])
+            $crate::runtime::vector::make_vector_from_slice(&mut crate::Thread::current(), &[$($val),*])
         }
     }
 }

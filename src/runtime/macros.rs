@@ -29,20 +29,20 @@ use std::{
 };
 
 use crate::{
-    cmp::scm_equal,
+    runtime::cmp::scm_equal,
     compaux::{scm_identifier_env, scm_make_identifier, scm_unwrap_syntax, scm_wrap_identifier},
     compile::{cenv_frames, cenv_module, env_lookup_int},
-    fun::scm_make_closed_native_procedure,
-    list::{
+    runtime::fun::scm_make_closed_native_procedure,
+    runtime::list::{
         list_to_vector, scm_acons, scm_append2, scm_assq, scm_cons, scm_is_list, scm_last_pair,
         scm_length, scm_memq, scm_reversex, vector_to_list,
     },
-    module::scm_identifier_to_bound_gloc,
-    object::{Identifier, Macro, Module, ObjectHeader, ScmResult, Type},
+    runtime::module::scm_identifier_to_bound_gloc,
+    runtime::object::{Identifier, Macro, Module, ObjectHeader, ScmResult, Type},
     scm_append, scm_append1, scm_for_each,
-    string::make_string,
-    symbol::make_symbol,
-    value::Value,
+    runtime::string::make_string,
+    runtime::symbol::make_symbol,
+    runtime::value::Value,
     vm::callframe::CallFrame,
 };
 use once_cell::sync::Lazy;

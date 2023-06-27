@@ -52,9 +52,10 @@ checksum = "d468802bab17cbc0cc575e9b053f41e72aa36bfa6b7f55e3529ffa43161b97fa"
 [[package]]
 name = "b3"
 version = "0.1.0"
-source = "git+https://github.com/playxe/b3-rs#01a2a17e8752a126034c443d4479bc466097ce1d"
+source = "git+https://github.com/playxe/b3-rs#b58e55c3fb272a444f2390de2d8a87fccc4627ab"
 dependencies = [
  "cfg-if",
+ "cool-bitvector",
  "indexmap",
  "libc",
  "macroassembler",
@@ -73,9 +74,9 @@ checksum = "bef38d45163c2f1dde094a7dfd33ccf595c92905c8f8f4fdc18d06fb1037718a"
 
 [[package]]
 name = "bitflags"
-version = "2.3.2"
+version = "2.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6dbe3c979c178231552ecba20214a8272df4e09f232a87aef4320cf06539aded"
+checksum = "630be753d4e58660abd17930c71b647fe46c27ea6b63cc59e1e3851406972e42"
 
 [[package]]
 name = "capy"
@@ -108,6 +109,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 
 [[package]]
+name = "cfgenius"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e4e14dc222697b7baf25030985dc061fd360b805ec69a8cec135bb01e77cc09"
+
+[[package]]
 name = "clap"
 version = "2.34.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -132,6 +139,12 @@ dependencies = [
  "str-buf",
  "winapi",
 ]
+
+[[package]]
+name = "cool-bitvector"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c983c7bfd1fe9e4fd9aa69757725fcb61b0af26cbbb6684885adf6f74a117448"
 
 [[package]]
 name = "crossbeam"
@@ -220,6 +233,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "equivalent"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "88bffebc5d80432c9b140ee17875ff173a8ab62faad5b257da912bd2f6c1c0a1"
+
+[[package]]
 name = "errno"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -274,9 +293,9 @@ dependencies = [
 
 [[package]]
 name = "hashbrown"
-version = "0.12.3"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a9ee70c43aaf417c914396645a0fa852624801b24ebb7ae78fe8272889ac888"
+checksum = "2c6201b9ff9fd90a5a3bac2e56a830d0caa509576f0e503818ee82c181b3437a"
 
 [[package]]
 name = "heck"
@@ -337,12 +356,21 @@ dependencies = [
 
 [[package]]
 name = "indexmap"
-version = "1.9.3"
+version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd070e393353796e801d209ad339e89596eb4c8d430d18ede6a1cced8fafbd99"
+checksum = "d5477fe2230a79769d8dc68e0eabf5437907c0457a5614a9e8dddb67f65eb65d"
 dependencies = [
- "autocfg",
+ "equivalent",
  "hashbrown",
+]
+
+[[package]]
+name = "intrusive-collections"
+version = "0.9.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f4f90afb01281fdeffb0f8e082d230cbe4f888f837cc90759696b858db1a700"
+dependencies = [
+ "memoffset 0.8.0",
 ]
 
 [[package]]
@@ -369,6 +397,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "jit-allocator"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b888c5265b9f5fc7458e4c53ce055a78ec17ce6c02aae41e8d7e1596ab9a4f04"
+dependencies = [
+ "cfgenius",
+ "errno",
+ "intrusive-collections",
+ "libc",
+ "once_cell",
+ "parking_lot",
+ "wasmtime-jit-icache-coherence",
+ "winapi",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -379,9 +423,9 @@ dependencies = [
 
 [[package]]
 name = "libc"
-version = "0.2.146"
+version = "0.2.147"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f92be4933c13fd498862a9e02a3055f8a8d9c039ce33db97306fd5a6caa7f29b"
+checksum = "b4668fb0ea861c1df094127ac5f1da3409a82116a4ba74fca2e58ef927159bb3"
 
 [[package]]
 name = "linux-raw-sys"
@@ -408,11 +452,12 @@ checksum = "b06a4cde4c0f271a446782e3eff8de789548ce57dbc8eca9292c27f4a42004b4"
 [[package]]
 name = "macroassembler"
 version = "0.1.0"
-source = "git+https://github.com/playxe/masm-rs#2dace452729006abc4bbd5d45e2a24a2c93c21e4"
+source = "git+https://github.com/playxe/masm-rs#ef0878a978dc2baa9eaebc011232ffbc21fb2389"
 dependencies = [
  "cfg-if",
  "errno",
  "iced-x86",
+ "jit-allocator",
  "libc",
  "num",
  "num-traits",
@@ -420,7 +465,6 @@ dependencies = [
  "parking_lot",
  "paste",
  "tinyvec",
- "vm-allocator",
  "winapi",
 ]
 
@@ -466,7 +510,7 @@ checksum = "5b4123e70df5fe0bb370cff166ae453b9c5324a2cfc932c0f7e55498147a0475"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.18",
+ "syn 2.0.22",
 ]
 
 [[package]]
@@ -628,7 +672,7 @@ dependencies = [
  "regex",
  "regex-syntax 0.6.29",
  "structmeta",
- "syn 2.0.18",
+ "syn 2.0.22",
 ]
 
 [[package]]
@@ -681,9 +725,9 @@ dependencies = [
 
 [[package]]
 name = "proc-macro2"
-version = "1.0.60"
+version = "1.0.63"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dec2b086b7a862cf4de201096214fa870344cf922b2b30c167badb3af3195406"
+checksum = "7b368fba921b0dce7e60f5e04ec15e565b3303972b42bcfde1d0713b881959eb"
 dependencies = [
  "unicode-ident",
 ]
@@ -780,7 +824,7 @@ checksum = "436b050e76ed2903236f032a59761c1eb99e1b0aead2c257922771dab1fc8c78"
 [[package]]
 name = "rsgc"
 version = "0.1.0"
-source = "git+https://github.com/playxe/rsgc#4a961e2dbc00a48124f1c186e6a662cafe33a292"
+source = "git+https://github.com/playxe/rsgc#996af1e57bab0e129062cb82efe9f3366ac8b80a"
 dependencies = [
  "atomic",
  "cfg-if",
@@ -791,7 +835,7 @@ dependencies = [
  "error-code",
  "libc",
  "log",
- "memoffset 0.8.0",
+ "memoffset 0.9.0",
  "num-traits",
  "num_cpus",
  "once_cell",
@@ -820,10 +864,10 @@ dependencies = [
 
 [[package]]
 name = "rustyline"
-version = "11.0.0"
-source = "git+https://github.com/kkawakam/rustyline#97df24087bf7b32fd7647f7f9ba6643c0d092fe5"
+version = "12.0.0"
+source = "git+https://github.com/kkawakam/rustyline#aecbf41252b22c4e19785342073c5695a56c4d2b"
 dependencies = [
- "bitflags 2.3.2",
+ "bitflags 2.3.3",
  "cfg-if",
  "clipboard-win",
  "fd-lock",
@@ -896,7 +940,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "structmeta-derive",
- "syn 2.0.18",
+ "syn 2.0.22",
 ]
 
 [[package]]
@@ -907,7 +951,7 @@ checksum = "a60bcaff7397072dca0017d1db428e30d5002e00b6847703e2e42005c95fbe00"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.18",
+ "syn 2.0.22",
 ]
 
 [[package]]
@@ -947,9 +991,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "2.0.18"
+version = "2.0.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32d41677bcbe24c20c52e7c70b0d8db04134c5d1066bf98662e2871ad200ea3e"
+checksum = "2efbeae7acf4eabd6bcdcbd11c92f45231ddda7539edc7806bd1a04a03b24616"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -972,26 +1016,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d326610f408c7a4eb6f51c37c330e496b08506c9457c9d34287ecc38809fb060"
 dependencies = [
  "unicode-width",
-]
-
-[[package]]
-name = "thiserror"
-version = "1.0.40"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "978c9a314bd8dc99be594bc3c175faaa9794be04a5a5e153caba6915336cebac"
-dependencies = [
- "thiserror-impl",
-]
-
-[[package]]
-name = "thiserror-impl"
-version = "1.0.40"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9456a42c5b0d803c8cd86e73dd7cc9edd429499f37a3550d286d5e86720569f"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.18",
 ]
 
 [[package]]
@@ -1068,20 +1092,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "49874b5167b65d7193b8aba1567f5c7d93d001cafc34600cee003eda787e483f"
 
 [[package]]
-name = "vm-allocator"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "565b6886b7dd1b3bf34ec9243d90a97db4f2a83c2416caa52fcc95fd255d45e4"
-dependencies = [
- "libc",
- "thiserror",
-]
-
-[[package]]
 name = "wasi"
 version = "0.11.0+wasi-snapshot-preview1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9c8d87e72b64a3b4db28d11ce29237c246188f4f51057d65a7eab63b7987e423"
+
+[[package]]
+name = "wasmtime-jit-icache-coherence"
+version = "10.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b49ceb7e2105a8ebe5614d7bbab6f6ef137a284e371633af60b34925493081f"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "windows-sys",
+]
 
 [[package]]
 name = "winapi"

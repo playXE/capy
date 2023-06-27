@@ -9,8 +9,8 @@ use rsgc::{
 use std::collections::HashMap;
 
 use crate::{
-    object::{ObjectHeader, Symbol, Type},
-    value::Value,
+    runtime::object::{ObjectHeader, Symbol, Type},
+    runtime::value::Value,
 };
 
 fn trace_symbols(visitor: &mut dyn Visitor) {

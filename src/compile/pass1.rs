@@ -9,20 +9,20 @@ use crate::{
         cenv_extend, cenv_frames, cenv_make_bottom, cenv_module, global_call_type, Call, CallFlag,
         Define, GRef, GSet, GlobalCall, If, LFlag, LRef, LSet, Lambda,
     },
-    list::{
+    runtime::list::{
         scm_append, scm_assq, scm_cons, scm_is_list, scm_length, scm_list, scm_list_from_iter,
         scm_list_star, scm_map, scm_map2, scm_reverse,
     },
-    macros::scm_compile_syntax_rules,
-    module::{
+    runtime::macros::scm_compile_syntax_rules,
+    runtime::module::{
         is_global_identifier_eq, scm_export_symbols, scm_find_module, scm_import_module,
         scm_insert_binding, scm_insert_syntax_rule_binding, scm_make_module,
     },
-    object::{Identifier, Module, ObjectHeader, Type},
+    runtime::object::{Identifier, Module, ObjectHeader, Type},
     scm_dolist,
-    string::make_string,
-    symbol::{gensym, make_symbol},
-    value::Value,
+    runtime::string::make_string,
+    runtime::symbol::{gensym, make_symbol},
+    runtime::value::Value,
     vm::interpreter::apply,
 };
 
@@ -125,12 +125,15 @@ pub fn pass1(program: Value, cenv: Value) -> Result<Handle<IForm>, Value> {
                 let gref = make_iform(IForm::GRef(GRef { id }));
                 pass1_call(program, gref, program.cdr(), cenv)
             }
+
             GlobalCall::Macro(m) => {
                 let v = pass1(apply(m.r#macro().transformer, &[program, cenv])?, cenv)?;
 
-               
                 Ok(v)
+            }
 
+            GlobalCall::Inliner(proc) => {
+                expand_inliner(proc, program, id, cenv)
             }
         }
     }
@@ -298,22 +301,22 @@ pub fn define_syntax() {
     macro_rules! define_syntax {
         ($name: literal, $module: expr, $form: ident, $cenv: ident, $b: block) => {{
             let module = match $module {
-                Some(module) => $crate::symbol::make_symbol(module, true).symbol(),
-                None => $crate::symbol::make_symbol("null", true).symbol(),
+                Some(module) => $crate::runtime::symbol::make_symbol(module, true).symbol(),
+                None => $crate::runtime::symbol::make_symbol("null", true).symbol(),
             };
 
             fn stx(
-                $form: $crate::value::Value,
-                $cenv: $crate::value::Value,
+                $form: $crate::runtime::value::Value,
+                $cenv: $crate::runtime::value::Value,
             ) -> Result<Handle<$crate::compile::IForm>, Value> {
                 $b
             }
-            let m = $crate::module::scm_find_module(module, false, true)
+            let m = $crate::runtime::module::scm_find_module(module, false, true)
                 .expect("error")
                 .expect("not found");
-            $crate::module::scm_insert_syntax_binding(
+            $crate::runtime::module::scm_insert_syntax_binding(
                 m,
-                $crate::symbol::make_symbol($name, true).symbol(),
+                $crate::runtime::symbol::make_symbol($name, true).symbol(),
                 stx,
             )
             .unwrap();
@@ -1349,6 +1352,35 @@ pub fn pass1_letrec(
             lvars: vars,
             inits,
             body,
+        })))
+    }
+}
+
+fn expand_inliner(
+    inliner: Value,
+    program: Value,
+    id: Value,
+    cenv: Value,
+) -> Result<Handle<IForm>, Value> {
+    let Some(proc) = inliner.native_procedure().inliner else {
+        let gref = make_iform(IForm::GRef(GRef { id }));
+        return pass1_call(program, gref, program.cdr(), cenv)
+    };
+
+    let mut args = ArrayList::with_capacity(Thread::current(), scm_length(program.cdr()).unwrap());
+    scm_dolist!(arg, program.cdr(), {
+        args.push(Thread::current(), pass1(arg, cenv)?);
+    });
+
+    if let Some(iform) = proc(&args) {
+        Ok(iform)
+    } else {
+        let gref = make_iform(IForm::GRef(GRef { id }));
+        Ok(make_iform(IForm::Call(Call {
+            origin: program,
+            proc: gref,
+            args,
+            flag: CallFlag::None,
         })))
     }
 }
