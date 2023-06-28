@@ -40,10 +40,31 @@ pub enum IForm {
     Asm(Asm),
     It,
 }
+#[derive(Copy, Clone)]
+pub enum AsmOperand {
+    Constant(Value),
+    I32(i32),
+    I16(i16),
+    I8(i8),
+}
+
+impl Object for AsmOperand {
+    fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
+        match self {
+            AsmOperand::Constant(v) => v.trace(visitor),
+            _ => (),
+        }
+    }
+}
+
+impl Allocation for AsmOperand {}
 
 pub struct Asm {
     pub op: Opcode,
     pub args: ArrayList<Handle<IForm>>,
+    pub operands: Option<ArrayList<AsmOperand>>,
+    pub exits: bool,
+    pub pushes: bool,
 }
 
 impl Object for IForm {
@@ -757,6 +778,19 @@ impl IForm {
             IForm::It => allocator
                 .text("it")
                 .annotate(ColorSpec::new().set_fg(Some(Color::Blue)).clone()),
+
+            IForm::Asm(asm) => {
+                let operands = allocator.intersperse(
+                    asm.args.iter().map(|x| x.pretty(allocator)),
+                    allocator.space(),
+                );
+                allocator
+                    .text(asm.op.to_string())
+                    .append(allocator.space())
+                    .append(operands)
+                    .group()
+                    .parens()
+            }
             _ => todo!(),
         }
     }

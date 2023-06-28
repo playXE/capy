@@ -66,16 +66,24 @@ pub enum Opcode {
     BranchIfArgMismatch,
     BranchIfMinArgMismatch,
 
-    Or,
-    And,
 
-    Eq,
-    Eqv,
-    Equal,
-
+    IsNumber,
+    IsComplex,
+    IsReal,
+    IsRational,
+    IsInteger,
+    IsExactInteger,
+    IsExactNonnegativeInteger,
+    IsExactPositiveInteger,
+    IsFixnum,
+    IsInexactReal,
+    IsFlonum,
+    IsExact,
+    IsInexact,
     IsPair,
     IsNull,
     IsUndef,
+    IsProperty,
     List,
     Cons,
     Decons,
@@ -87,12 +95,6 @@ pub enum Opcode {
     VectorAppend,
     IsVector,
     Not,
-
-    Add,
-    Sub,
-    Div,
-    Mul,
-
     NoOp,
 
     Count,
@@ -170,6 +172,9 @@ pub fn disassembly(code: Handle<CodeBlock>, mut out: impl WriteColor) -> Result<
             | Opcode::StackGet
             | Opcode::ClosureRef
             | Opcode::ClosureSet
+            | Opcode::Vector
+            | Opcode::List
+            | Opcode::IsProperty
              => {
                 let n = read2!();
                 writeln!(out, " {}", n)?;

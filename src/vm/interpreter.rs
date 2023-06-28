@@ -1,5 +1,6 @@
 #![allow(unused_variables, unused_assignments)]
 use rsgc::prelude::Handle;
+use rsgc::system::arraylist::ArrayList;
 use std::intrinsics::{likely, unlikely};
 use std::mem::{size_of, transmute};
 use std::panic::AssertUnwindSafe;
@@ -7,17 +8,21 @@ use std::ptr::{null, null_mut};
 
 use super::callframe::CallFrame;
 use super::{scm_current_module, scm_vm, VM};
-use crate::compaux::{scm_identifier_global_ref, scm_outermost_identifier};
+use crate::compaux::{
+    scm_identifier_global_ref, scm_identifier_global_set, scm_outermost_identifier,
+};
 use crate::op::Opcode;
 use crate::runtime::fun::make_closed_procedure;
+use crate::runtime::list::{scm_cons, scm_is_list};
 use crate::runtime::module::{scm_make_binding, SCM_BINDING_CONST};
+use crate::runtime::number::{scm_is_integer, scm_is_exact};
 use crate::runtime::object::{
     check_arity, make_box, wrong_arity, ClosedNativeProcedure, CodeBlock, Module, NativeProcedure,
     Procedure, Type,
 };
 use crate::runtime::string::make_string;
 use crate::runtime::value::Value;
-use crate::runtime::vector::make_vector;
+use crate::runtime::vector::{make_vector, make_vector_from_slice};
 
 /// Virtual machine interpreter loop.
 ///
@@ -96,6 +101,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
     }
 
     'eval: loop {
+        vm.thread.safepoint();
         let callee = (*cfr).callee;
 
         if callee.is_xtype(Type::Procedure) {
@@ -118,13 +124,14 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     proc.maxa,
                 ));
             }
-
+            vm.sp = sp;
             let result = if !callee.is_closed_native_procedure() {
                 (proc.callback)(&mut *cfr)
             } else {
                 let closed_proc: Handle<ClosedNativeProcedure> = transmute(callee);
                 (closed_proc.callback)(&mut *cfr)
             };
+
 
             if result.is_ok() {
                 leave_frame!(=> Ok(result.value()))
@@ -149,7 +156,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                 let mut cursor = arg_start;
 
                 // copy arguments to the new frame
-                for i in 0..vm.tail_rands.len() {
+                for i in (0..vm.tail_rands.len()).rev() {
                     cursor = cursor.sub(1);
                     cursor.write(vm.tail_rands[i]);
                 }
@@ -168,7 +175,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                 vm.tail_rator = Value::encode_undefined_value();
 
                 cfr = sp.cast::<CallFrame>();
-                
+
                 continue 'eval;
             }
         } else {
@@ -185,7 +192,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
         // `pc` is initialized here
         debug_assert!(!pc.is_null(), "pc should be initialized at vm_eval entry");
 
-        loop {
+        'interp: loop {
             macro_rules! read1 {
                 () => {{
                     let val = pc.read();
@@ -299,25 +306,11 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     push!(Value::encode_untrusted_f64_value(val as f64));
                 }
 
-                Opcode::PushConstant => {
+                Opcode::PushConstant | Opcode::PushProcedure => {
                     let ix = read2!();
 
                     let val = code_block!().literals.vector_ref(ix as _);
                     push!(val);
-                }
-
-                Opcode::Pack => {
-                    let n = read2!();
-
-                    let mut list = make_vector(vm.thread, n as _);
-                    list.object.typ = Type::Values;
-
-                    for i in (0..n).rev() {
-                        vm.thread.write_barrier(list);
-                        list[i as usize] = pop!();
-                    }
-
-                    push!(Value::encode_object_value(list));
                 }
 
                 Opcode::Call => {
@@ -357,7 +350,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     for _ in 0..argc {
                         tail_arg = tail_arg.sub(1);
                         cursor = cursor.sub(1);
-                        
+
                         cursor.write(tail_arg.read());
                     }
 
@@ -379,7 +372,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
 
                 Opcode::Return => {
                     let val = pop!();
-
+                    
                     leave_frame!(val);
                 }
 
@@ -494,20 +487,279 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     push!(callee.captures.as_ptr().add(ix as _).read());
                 }
 
-                Opcode::Add => {
-                    let val2 = pop!();
-                    let val1 = pop!();
+                Opcode::SetArg => {
+                    let val = pop!();
+                    let ix = read2!();
 
-                    let result = if val1.is_int32() && val2.is_int32() {
-                        Value::encode_int32(val1.get_int32().wrapping_add(val2.get_int32()))
-                    } else {
-                        Value::encode_undefined_value()
-                    };
-
-                    push!(result);
+                    let arg = (*cfr).args.as_mut_ptr().add(ix as _);
+                    arg.write(val);
                 }
 
-                _ => todo!(),
+                Opcode::Reset => { /* no-op for now */ }
+
+                Opcode::GlobalSet => {
+                    let ix = read2!() as usize;
+
+                    let constant = code_block!().literals.vector_ref(ix as _);
+                    let value = pop!();
+                    if likely(constant.is_xtype(Type::GLOC)) {
+                        // set the value directly since GLOC is already resolved.
+                        constant.gloc().value = value;
+                    } else {
+                        // try to resolve the GLOC first and then set the value.
+                        // also caches the resolved GLOC in the literal vector.
+                        let gloc = scm_identifier_global_set(constant.identifier(), value)?;
+                        vm.thread.write_barrier(code_block!().literals.vector());
+                        code_block!()
+                            .literals
+                            .vector_set(ix as _, Value::encode_object_value(gloc));
+                    }
+                }
+
+                Opcode::Flatpack => {
+                    let n = read2!();
+                    let mut list = ArrayList::with_capacity(vm.thread, n as _);
+
+                    for i in 0..n {
+                        let e = pop!();
+
+                        if e.is_values() {
+                            for &e in e.values().iter() {
+                                list.push(vm.thread, e);
+                            }
+                        } else {
+                            list.push(vm.thread, e);
+                        }
+                    }
+
+                    let mut x = make_vector_from_slice(vm.thread, &list);
+                    x.object.typ = Type::Values;
+
+                    push!(Value::encode_object_value(x));
+                }
+
+                Opcode::Pack => {
+                    let n = read2!();
+
+                    let mut list = make_vector(vm.thread, n as _);
+
+                    for i in 0..n {
+                        let e = pop!();
+                        vm.thread.write_barrier(list);
+                        list[i as usize] = e;
+                    }
+
+                    push!(Value::encode_object_value(list));
+                }
+
+                Opcode::Unpack => {
+                    let _n = read2!();
+                    let _ovf = read1!() != 0;
+                    todo!()
+                }
+
+                Opcode::Apply => {
+                    let rator = pop!();
+                    let rands = pop!();
+                    if unlikely(!scm_is_list(rands)) {
+                        return Err(make_string(vm.thread, "apply: expected list").into());
+                    }
+
+                    let mut argc = 0;
+                    scm_dolist!(val, rands, {
+                        push!(val);
+                        argc += 1;
+                    });
+
+                    push!(rator);
+
+                    push!(cfr CallFrame {
+                        return_pc: pc,
+                        caller: cfr,
+                        code_block: Value::encode_undefined_value(),
+                        argc: Value::encode_int32(argc as _),
+                        callee,
+                        args: []
+                    });
+                    cfr = sp.cast();
+                    continue 'eval;
+                }
+
+                Opcode::AssertArgCount => {
+                    let argc = read2!();
+                    if unlikely(argc != (*cfr).argc.get_int32() as u16) {
+                        return Err(make_string(vm.thread, "wrong number of arguments").into());
+                    }
+                }
+
+                Opcode::AssertMinArgCount => {
+                    let argc = read2!();
+                    if unlikely(argc > (*cfr).argc.get_int32() as u16) {
+                        return Err(make_string(vm.thread, "wrong number of arguments").into());
+                    }
+                }
+
+                Opcode::NoMatchingArgCount => {
+                    return Err(make_string(vm.thread, "wrong number of arguments").into());
+                }
+
+                Opcode::CollectRest => {
+                    let n = read2!();
+                    let rest = (*cfr).args.as_mut_ptr().add(n as _);
+                    let mut list = Value::encode_null_value();
+
+                    for i in (0..(*cfr).argc.get_int32() - n as i32).rev() {
+                        let e = rest.add(i as _).read();
+                        list = scm_cons(vm.thread, e, list);
+                    }
+
+                    push!(list);
+                }
+
+                Opcode::ClosureSet => {
+                    let ix = read2!();
+                    let val = pop!();
+
+                    let mut callee = (*cfr).callee.procedure();
+                    vm.thread.write_barrier(callee);
+                    callee.captures.as_mut_ptr().add(ix as _).write(val);
+                }
+
+                Opcode::Branch => {
+                    let offset = read4!();
+
+                    pc = pc.offset(offset as _);
+                }
+
+                Opcode::BranchIf => {
+                    let offset = read4!();
+                    let val = pop!();
+
+                    if val.to_bool() {
+                        pc = pc.offset(offset as _);
+                    }
+                }
+
+                Opcode::BranchIfNot => {
+                    let offset = read4!();
+                    let val = pop!();
+
+                    if !val.to_bool() {
+                        pc = pc.offset(offset as _);
+                    }
+                }
+
+                Opcode::BranchIfArgMismatch | Opcode::BranchIfMinArgMismatch => {
+                    todo!()
+                }
+
+                Opcode::KeepBranchIfNot => {
+                    let val = sp.read();
+
+                    if !val.to_bool() {
+                        let offset = read4!();
+                        pc = pc.offset(offset as _);
+                    }
+                }
+
+                Opcode::IsNumber => {
+                    push!(Value::encode_bool_value(pop!().is_number()));
+                }
+
+                Opcode::IsComplex => {
+                    push!(Value::encode_bool_value(pop!().is_complex()));
+                }
+
+                Opcode::IsReal => {
+                    push!(Value::encode_bool_value(pop!().is_real()));
+                }
+
+                Opcode::IsRational => {
+                    push!(Value::encode_bool_value(pop!().is_rational()));
+                }
+
+                Opcode::IsInteger => {
+                    push!(Value::encode_bool_value(scm_is_integer(pop!())));
+                }
+
+                Opcode::IsExactInteger => {
+                    push!(Value::encode_bool_value(pop!().is_exact_integer()));
+                }
+
+                Opcode::IsExactNonnegativeInteger => {
+                    let n = pop!();
+
+                    if n.is_int32() {
+                        push!(Value::encode_bool_value(n.get_int32() >= 0));
+                    } else if n.is_bignum() {
+                        push!(Value::encode_bool_value(!n.bignum().is_negative()))
+                    } else {
+                        push!(Value::encode_bool_value(false))
+                    }
+                }
+
+                Opcode::IsExactPositiveInteger => {
+                    let n = pop!();
+
+                    if n.is_int32() {
+                        push!(Value::encode_bool_value(n.get_int32() > 0));
+                    } else if n.is_bignum() {
+                        push!(Value::encode_bool_value(
+                            !n.bignum().is_negative() && !n.bignum().is_zero()
+                        ))
+                    } else {
+                        push!(Value::encode_bool_value(false))
+                    }
+                }
+
+                Opcode::IsFixnum => {
+                    push!(Value::encode_bool_value(pop!().is_int32()));
+                }
+
+                Opcode::IsInexactReal => {
+                    push!(Value::encode_bool_value(pop!().is_double()));
+                }
+
+                Opcode::IsFlonum => {
+                    push!(Value::encode_bool_value(pop!().is_double()));
+                }
+
+                Opcode::IsExact => {
+                    let val = pop!();
+                    
+                    if let Some(x) = scm_is_exact(val) {
+                        push!(Value::encode_bool_value(x));
+                    } else {
+                        return Err(make_string(vm.thread, "exact?: expected number").into());
+                    }
+                }
+
+                Opcode::IsProperty => {
+                    let v = pop!();
+                    let c = read2!();
+
+                    let prop = code_block!().literals.vector_ref(c as _);
+
+                    let stype = if v.is_structure() {
+                        v.structure().type_
+                    } else if v.is_struct_type() {
+                        v.structure_type()
+                    } else {
+                        push!(Value::encode_bool_value(false));
+                        continue;
+                    };
+
+                    for i in 0..stype.props.len() {
+                        if prop == stype.props[i].0 {
+                            push!(Value::encode_bool_value(true));
+                            continue 'interp;
+                        }
+                    }
+
+                    push!(Value::encode_bool_value(false));
+                }
+
+                _ => todo!()
             }
         }
     }

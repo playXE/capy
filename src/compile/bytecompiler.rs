@@ -13,7 +13,7 @@ use rsgc::{
 use crate::{
     compile::{make_cenv, pass1::pass1, ref_count_lvars, LetScope},
     runtime::fun::make_procedure,
-    runtime::object::{CodeBlock, Module, ObjectHeader, Type},
+    runtime::object::{CodeBlock, Module, ObjectHeader, Type, MAX_ARITY},
     op::{Opcode, disassembly},
     runtime::string::make_string,
     runtime::value::Value,
@@ -170,6 +170,8 @@ impl ByteCompiler {
             literals: Value::encode_object_value(literals),
             fragments,
             code_len: self.code.len() as _,
+            mina: 0,
+            maxa: 0,
             code: [],
         };
 
@@ -255,8 +257,13 @@ impl ByteCompiler {
         }*/
 
         closure_compiler.compile_body(thread, lam.body, lam.lvars.len());
-        let code = closure_compiler.finalize(thread);
-        
+        let mut code = closure_compiler.finalize(thread);
+        code.mina = lam.lvars.len() as _;
+        if lam.optarg {
+            code.maxa = MAX_ARITY;
+        } else {
+            code.maxa = lam.lvars.len() as _;
+        }
         if closure_compiler.captures.captures.is_empty() {
             let proc = make_procedure(thread, code);
             self.emit_load(thread, proc.into());
@@ -503,6 +510,20 @@ impl ByteCompiler {
                 self.group = self.group.parent.take().unwrap();
                 self.num_locals = init_locals;
                 exit
+            }
+
+            IForm::Asm(op) => {
+                for arg in op.args.iter().rev() {
+                    self.compile_iform(thread, *arg, false);
+                }
+
+                self.emit_simple(op.op);
+
+                if !op.pushes && !op.exits {
+                    self.emit_simple(Opcode::PushUndef);
+                }
+
+                op.exits
             }
             _ => todo!(),
         }

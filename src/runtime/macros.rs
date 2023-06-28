@@ -29,9 +29,9 @@ use std::{
 };
 
 use crate::{
-    runtime::cmp::scm_equal,
     compaux::{scm_identifier_env, scm_make_identifier, scm_unwrap_syntax, scm_wrap_identifier},
     compile::{cenv_frames, cenv_module, env_lookup_int},
+    runtime::cmp::scm_equal,
     runtime::fun::scm_make_closed_native_procedure,
     runtime::list::{
         list_to_vector, scm_acons, scm_append2, scm_assq, scm_cons, scm_is_list, scm_last_pair,
@@ -39,10 +39,10 @@ use crate::{
     },
     runtime::module::scm_identifier_to_bound_gloc,
     runtime::object::{Identifier, Macro, Module, ObjectHeader, ScmResult, Type},
-    scm_append, scm_append1, scm_for_each,
     runtime::string::make_string,
     runtime::symbol::make_symbol,
     runtime::value::Value,
+    scm_append, scm_append1, scm_for_each,
     vm::callframe::CallFrame,
 };
 use once_cell::sync::Lazy;
@@ -507,6 +507,7 @@ impl PatternContext {
 fn rename_variable(var: Value, id_alist: &mut Value, module: Handle<Module>, env: Value) -> Value {
     let p = scm_assq(var, *id_alist);
     if p.is_pair() {
+        //println!("rename_variable assq {:?} {:?}", var, p.cdr());
         return p.cdr();
     }
 
@@ -517,7 +518,7 @@ fn rename_variable(var: Value, id_alist: &mut Value, module: Handle<Module>, env
     };
 
     *id_alist = scm_acons(Thread::current(), var, id.into(), *id_alist);
-
+    //println!("rename_variable {:?} {:?}", var, Value::encode_object_value(id));
     id.into()
 }
 
@@ -1015,7 +1016,7 @@ fn realize_template_rec(
                 return r;
             }
 
-            if r.is_null() {
+            if h.is_null() {
                 return r;
             }
 
@@ -1141,21 +1142,16 @@ pub fn synrule_expand(
 extern "C" fn synrule_transform(cfr: &mut CallFrame) -> ScmResult {
     let form = cfr.argument(0);
     let cenv = cfr.argument(1);
-  
+
     assert!(cenv.is_vector());
 
     let module = cenv_module(cenv);
     let frames = cenv_frames(cenv);
 
-    
-
     let sr = cfr.callee.closed_native_procedure()[0];
 
     match synrule_expand(Thread::current(), form, module, frames, sr.syntax_rules()) {
-        Ok(x) => {
-            println!("expanded {:?}", x);   
-            ScmResult::ok(x)
-        }
+        Ok(x) => ScmResult::ok(x),
         Err(x) => ScmResult::err(x),
     }
 }

@@ -19,10 +19,10 @@ use crate::{
         scm_insert_binding, scm_insert_syntax_rule_binding, scm_make_module,
     },
     runtime::object::{Identifier, Module, ObjectHeader, Type},
-    scm_dolist,
     runtime::string::make_string,
     runtime::symbol::{gensym, make_symbol},
     runtime::value::Value,
+    scm_dolist,
     vm::interpreter::apply,
 };
 
@@ -132,9 +132,7 @@ pub fn pass1(program: Value, cenv: Value) -> Result<Handle<IForm>, Value> {
                 Ok(v)
             }
 
-            GlobalCall::Inliner(proc) => {
-                expand_inliner(proc, program, id, cenv)
-            }
+            GlobalCall::Inliner(proc) => expand_inliner(proc, program, id, cenv),
         }
     }
 
@@ -673,12 +671,37 @@ pub fn define_syntax() {
         )
     });
 
-    define_syntax!("let-syntax", None, form, _cenv, {
+    define_syntax!("let-syntax", None, form, cenv, {
         if scm_length(form).filter(|&x| x >= 3).is_some() {
-            let _bindings = form.cadr();
-            let _body = form.cddr();
+            let bindings = form.cadr();
+            let body = form.cddr();
 
-            todo!()
+            let mut trans = Value::encode_null_value();
+
+            scm_dolist!(kv, bindings, {
+                if scm_length(kv) != Some(2) {
+                    return Err(make_string(Thread::current(), "Invalid syntax: let-syntax").into());
+                }
+
+                let name = kv.car();
+                let trans_spec = kv.cdr().car();
+
+                if !name.is_identifier() {
+                    return Err(make_string(Thread::current(), "Invalid syntax: let-syntax").into());
+                }
+
+                let transformer = eval_macro_rhs("let-syntax", trans_spec, cenv)?;
+
+                trans = scm_cons(
+                    Thread::current(),
+                    scm_cons(Thread::current(), name, transformer),
+                    trans,
+                );
+            });
+
+            let newenv = cenv_extend(cenv, trans, make_symbol("SYNTAX", true));
+
+            pass1_body(body, newenv)
         } else {
             Err(make_string(Thread::current(), "Invalid syntax: let-syntax").into())
         }
@@ -764,7 +787,7 @@ pub fn define_syntax() {
             let name = form.cadr();
             let expr = form.caddr();
 
-            let transformer = apply(super::compile(expr, cenv)?, &[])?;
+            let transformer = eval_macro_rhs("define-syntax", expr, cenv)?; // apply(super::compile(expr, cenv)?, &[])?;
 
             let id = if name.is_wrapped_identifier() {
                 rename_toplevel_identifier(name.identifier())
@@ -772,13 +795,13 @@ pub fn define_syntax() {
                 scm_make_identifier(name, Some(cenv_module(cenv)), Value::encode_null_value())
             };
 
-            if !transformer.is_macro() {
+            /* if !transformer.is_macro() {
                 return Err(make_string(
                     Thread::current(),
                     &format!("define-syntax expects syntax transformer"),
                 )
                 .into());
-            }
+            }*/
 
             scm_insert_binding(
                 id.module.module(),
@@ -798,7 +821,7 @@ pub fn define_syntax() {
         }
     });
 
-    define_syntax!("define-syntax-rules", None, form, cenv, {
+    /*define_syntax!("define-syntax-rules", None, form, cenv, {
         let name = form.cadr();
         let literals = form.caddr();
         let rules = form.cdddr();
@@ -823,7 +846,7 @@ pub fn define_syntax() {
         )?;
 
         Ok(make_iform(IForm::Const(Value::encode_undefined_value())))
-    });
+    });*/
 }
 
 pub fn ensure_module(thing: Value, name: Value, _create: bool) -> Result<Handle<Module>, Value> {
@@ -1372,7 +1395,7 @@ fn expand_inliner(
         args.push(Thread::current(), pass1(arg, cenv)?);
     });
 
-    if let Some(iform) = proc(&args) {
+    if let Some(iform) = proc(&args, inliner) {
         Ok(iform)
     } else {
         let gref = make_iform(IForm::GRef(GRef { id }));
@@ -1382,5 +1405,22 @@ fn expand_inliner(
             args,
             flag: CallFlag::None,
         })))
+    }
+}
+
+fn eval_macro_rhs(name: &str, expr: Value, cenv: Value) -> Result<Value, Value> {
+    let transformer = apply(super::compile(expr, cenv)?, &[])?;
+
+    if transformer.is_macro() {
+        Ok(transformer)
+    } else {
+        Err(make_string(
+            Thread::current(),
+            &format!(
+                "{} expects syntax transformer but got: {:?}",
+                name, transformer
+            ),
+        )
+        .into())
     }
 }

@@ -68,3 +68,16 @@ pub fn make_bytevector_from_slice(thread: &mut Thread, slice: &[u8]) -> Handle<B
         vec.assume_init()
     }
 }
+
+pub fn make_values(thread: &mut Thread, values: &[Value]) -> Handle<Vector> {
+    let mut vec = thread.allocate_varsize::<Vector>(values.len());
+
+    unsafe {
+        let v = vec.assume_init_mut();
+        v.object = ObjectHeader::new(Type::Values);
+        for i in 0..values.len() {
+            v.data.as_mut_ptr().add(i).write(values[i]);
+        }
+        vec.assume_init()
+    }
+}

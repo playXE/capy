@@ -79,6 +79,7 @@ pub enum Type {
     Struct,
     StructType,
     StructProperty,
+    Parameter,
 }
 
 #[repr(C)]
@@ -511,7 +512,7 @@ pub struct GLOC {
     pub(crate) value: Value,
     pub(crate) hidden: bool,
     pub(crate) getter: Option<fn(Handle<GLOC>) -> Value>,
-    pub(crate) setter: Option<fn(Handle<GLOC>, Value)>,
+    pub(crate) setter: Option<fn(Handle<GLOC>, Value) -> Result<(), Value>>,
 }
 
 impl Object for GLOC {
@@ -563,6 +564,8 @@ pub struct CodeBlock {
     pub literals: Value,
     /// vector of code blocks
     pub fragments: Handle<Array<Handle<CodeBlock>>>,
+    pub(crate) mina: u32,
+    pub(crate) maxa: u32,
     pub(crate) code_len: u32,
     pub(crate) code: [u8; 0],
 }
@@ -635,7 +638,7 @@ impl Allocation for Procedure {
     const VARSIZE_OFFSETOF_VARPART: usize = offset_of!(Procedure, captures);
 }
 
-pub type ProcedureInliner = fn(&[Handle<IForm>]) -> Option<Handle<IForm>>;
+pub type ProcedureInliner = fn(&[Handle<IForm>], Value) -> Option<Handle<IForm>>;
 
 #[repr(C)]
 pub struct NativeProcedure {
@@ -857,6 +860,18 @@ impl FromResidual<Value> for ScmResult {
         Self {
             tag: ScmResult::ERR,
             value: residual,
+        }
+    }
+}
+
+impl FromResidual<Result<Value, Value>> for ScmResult {
+    fn from_residual(residual: Result<Value, Value>) -> Self {
+        match residual {
+            Ok(val) => ScmResult::ok(val),
+            Err(value) => Self {
+                tag: ScmResult::ERR,
+                value,
+            },
         }
     }
 }

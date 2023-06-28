@@ -1,6 +1,6 @@
 use crate::runtime::{
     list::scm_cons,
-    module::scm_find_binding,
+    module::{scm_find_binding, SCM_BINDING_STAY_IN_MODULE},
     object::{Identifier, Module, ObjectHeader, ReaderReference, Symbol, Type, GLOC},
     string::make_string,
     value::Value,
@@ -243,6 +243,38 @@ pub fn scm_identifier_global_ref(id: Handle<Identifier>) -> Result<(Value, Handl
         &format!("unbound variable: {}", scm_unwrap_identifier(id)),
     )
     .into())
+}
+
+pub fn scm_identifier_global_set(id: Handle<Identifier>, val: Value) -> Result<Handle<GLOC>, Value> {
+    let z = scm_outermost_identifier(id);
+
+    let gloc = scm_find_binding(z.module.module(), z.name.symbol(), SCM_BINDING_STAY_IN_MODULE);
+
+    if gloc.is_none() {
+        if let Some(gloc) = scm_find_binding(z.module.module(), z.name.symbol(), 0) {
+            return Err(make_string(
+                Thread::current(),
+                &format!("Can't mutate binding of '{:?}' which is in another module", gloc.name),
+            ).into());
+        } else {
+            return Err(make_string(
+                Thread::current(),
+                &format!("unbound variable: {}", scm_unwrap_identifier(id)),
+            ).into());
+        }
+    }
+
+    let mut gloc = unsafe { gloc.unwrap_unchecked() };
+    if let Some(setter) = gloc.setter {
+        setter(gloc, val)?;
+
+        Ok(gloc)
+    } else {
+        Thread::current().write_barrier(gloc);
+        gloc.value = val;
+
+        Ok(gloc)
+    }
 }
 
 pub fn scm_identifier_to_symbol(id: Value) -> Handle<Symbol> {

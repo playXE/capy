@@ -88,4 +88,10 @@ impl CallFrame {
     pub fn caller(&self) -> *mut CallFrame {
         self.caller
     }
+
+    pub fn arguments(&self) -> &[Value] {
+        unsafe {
+            std::slice::from_raw_parts(self.args.as_ptr(), self.argc.get_int32() as usize)
+        }
+    }
 }

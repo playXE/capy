@@ -1,4 +1,4 @@
-use std::{fmt::Debug, hash::Hash};
+use std::{fmt::Debug, hash::Hash, convert::Infallible};
 
 use crate::{
     compile::LVar,
@@ -537,6 +537,18 @@ impl Value {
         }
     }
 
+    pub fn values(self) -> Handle<Vector> {
+        debug_assert!(self.is_xtype(Type::Values));
+        unsafe { std::mem::transmute(self.0.ptr) }
+    }
+
+    pub fn is_values(self) -> bool {
+        debug_assert!(self.is_xtype(Type::Values));
+        {
+            self.vector().len() > 0
+        }
+    }
+
     pub fn bytevector_ref(self, idx: usize) -> u8 {
         debug_assert!(self.is_xtype(Type::Bytevector));
         {
@@ -867,9 +879,10 @@ impl Debug for Value {
             } else if obj.is_xtype(Type::Identifier) {
                 write!(
                     f,
-                    "#<identifier {:?}@{:?}>",
+                    "#<identifier {:?}@{:?} {:p}>",
                     self.identifier().module.module().name,
-                    self.identifier().name
+                    self.identifier().name,
+                    self.identifier().as_ptr()
                 )
             } else {
                 let obj = unsafe {
@@ -907,3 +920,4 @@ impl Hash for Value {
         self.get_raw().hash(state);
     }
 }
+
