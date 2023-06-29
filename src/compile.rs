@@ -65,6 +65,7 @@ pub struct Asm {
     pub operands: Option<ArrayList<AsmOperand>>,
     pub exits: bool,
     pub pushes: bool,
+    pub ic: bool,
 }
 
 impl Object for IForm {

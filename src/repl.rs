@@ -291,7 +291,7 @@ pub fn repl() {
     rl.set_helper(Some(SchemeHelper {
         highlighter: MatchingBracketHighlighter::new(),
     }));
-    rl.set_completion_type(CompletionType::Circular);
+    rl.set_completion_type(CompletionType::List);
     rl.set_completion_prompt_limit(10);
     scm_set_current_module(Some(scm_user_module().module()));
 
@@ -303,6 +303,7 @@ pub fn repl() {
     loop {
         match rl.readline("capy> ") {
             Ok(input) => {
+                rl.add_history_entry(input.clone()).unwrap();
                 let mut parser = Parser::new(&mut interner, &input, false);
                 let proc = ByteCompiler::compile_while(t, |t| {
                     if parser.finished() {
@@ -319,10 +320,6 @@ pub fn repl() {
                                 make_cenv(scm_user_module().module(), Value::encode_null_value()),
                             )?;
                             ref_count_lvars(iform);
-                            let mut out =
-                                termcolor::StandardStream::stdout(termcolor::ColorChoice::Always);
-                            iform.pretty_print(&mut out).unwrap();
-                            println!();
                             Ok(Some(iform))
                         }
 
@@ -346,8 +343,7 @@ pub fn repl() {
             }
 
             Err(ReadlineError::Interrupted) => {
-                println!("CTRL-C");
-                break;
+                println!("Input interrupted");
             }
 
             Err(ReadlineError::Eof) => {

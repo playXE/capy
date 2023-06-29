@@ -1,4 +1,6 @@
-use crate::{compaux::scm_unwrap_identifier, runtime::value::Value};
+use crate::{compaux::scm_unwrap_identifier, runtime::value::Value, vm::callframe::CallFrame};
+
+use super::{object::ScmResult, module::{scm_scheme_module, scm_define}, fun::scm_make_subr, symbol::Intern};
 
 pub fn scm_eq(x: Value, y: Value) -> bool {
     x == y
@@ -42,6 +44,20 @@ pub fn scm_equal(x: Value, y: Value) -> bool {
         return true;
     }
 
+    if x.is_tuple() && y.is_tuple() {
+        if x.tuple().len() != y.tuple().len() {
+            return false;
+        }
+
+        for i in 0..x.tuple().len() {
+            if !scm_equal(x.tuple_ref(i), y.tuple_ref(i)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     if x.is_string() && y.is_string() {
         return x.string().as_str() == y.string().as_str();
     }
@@ -63,4 +79,30 @@ pub fn scm_equal(x: Value, y: Value) -> bool {
     }
 
     x == y
+}
+
+
+extern "C" fn eq(cfr: &mut CallFrame) -> ScmResult {
+    ScmResult::ok(cfr.argument(0) == cfr.argument(1))
+}
+
+extern "C" fn eqv(cfr: &mut CallFrame) -> ScmResult {
+    ScmResult::ok(scm_eqv(cfr.argument(0), cfr.argument(1)))
+}
+
+extern "C" fn equal(cfr: &mut CallFrame) -> ScmResult {
+    ScmResult::ok(scm_equal(cfr.argument(0), cfr.argument(1)))
+}
+
+pub(crate) fn init_cmp() {
+    let module = scm_scheme_module().module();
+
+    let subr = scm_make_subr("eq?", eq, 2, 2);
+    scm_define(module, "eq?".intern(), subr).unwrap();
+
+    let subr = scm_make_subr("eqv?", eqv, 2, 2);
+    scm_define(module, "eqv?".intern(), subr).unwrap();
+
+    let subr = scm_make_subr("equal?", equal, 2, 2);
+    scm_define(module, "equal?".intern(), subr).unwrap();
 }

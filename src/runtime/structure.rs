@@ -64,6 +64,7 @@ pub struct StructType {
     pub(crate) props: Handle<Array<(Value, Value)>>,
     pub(crate) proc_attr: Value,
     pub(crate) guard: Value,
+    pub(crate) parent_types: ArrayList<Handle<StructType>>
 }
 
 impl Object for StructType {
@@ -75,10 +76,16 @@ impl Object for StructType {
         self.props.trace(visitor);
         self.proc_attr.trace(visitor);
         self.guard.trace(visitor);
+        self.parent_types.trace(visitor);
     }
+
+
 }
 
-impl Allocation for StructType {}
+impl Allocation for StructType {
+   
+
+}
 
 #[repr(C)]
 pub struct Structure {
@@ -260,9 +267,14 @@ fn make_struct_type_property_from_rust(args: &[Value]) -> Result<(Value, Value, 
     let mut a = [Value::encode_null_value(); 1];
     let accessor_name;
     let contract_name;
-    let mut module;
-    let supers = if args.len() > 1 {
-        let mut supers = args[0];
+    let module;
+    let mut guard = Value::encode_null_value();
+    let mut supers = Value::encode_null_value();
+    if args.len() > 1 {
+        guard = args[1];
+    }
+    if args.len() > 2 {
+        supers = args[2];
 
         if scm_length(supers).is_none() {
             todo!("error");
@@ -295,13 +307,13 @@ fn make_struct_type_property_from_rust(args: &[Value]) -> Result<(Value, Value, 
         }
 
         if args.len() > 2 {
-            accessor_name = args[1];
+            accessor_name = args[2];
 
             if args.len() > 3 {
-                contract_name = args[2];
+                contract_name = args[3];
 
                 if args.len() > 4 {
-                    module = args[3];
+                    module = args[4];
                 } else {
                     module = Value::encode_null_value();
                 }
@@ -318,7 +330,7 @@ fn make_struct_type_property_from_rust(args: &[Value]) -> Result<(Value, Value, 
         supers
     } else {
         contract_name = Value::encode_null_value();
-        module = Value::encode_null_value();
+
         accessor_name = Value::encode_null_value();
         module = Value::encode_null_value();
         Value::encode_null_value()
@@ -328,7 +340,7 @@ fn make_struct_type_property_from_rust(args: &[Value]) -> Result<(Value, Value, 
         header: ObjectHeader::new(Type::StructProperty),
         can_impersonate: false,
         name: args[0],
-        guard: Value::encode_bool_value(false),
+        guard,
         contract_name,
         supers,
         module,
@@ -377,3 +389,66 @@ extern "C" fn make_struct_type_property(cfr: &mut CallFrame) -> ScmResult {
 
     ScmResult::ok(make_values(Thread::current(), &[prop, pred, access]))
 }
+
+pub fn scm_struct_type_property_ref(prop: Value, s: Value) -> Option<Value> {
+    do_prop_accessor(prop, s)
+}
+
+pub fn scm_force_struct_type_info(stype: Handle<StructType>) {
+    if stype.accessor.is_false() || stype.accessor.is_null() {
+        let _fun = genget_name(stype.name.strsym(), false);
+        
+    }
+}
+
+fn get_struct_type_info(args: &[Value], a: &mut [Value]) {
+    let stype = args[0].structure_type();
+
+}
+
+fn guard_property(prop: Value, v: Value, t: Handle<StructType>) -> Result<Value, Value> {
+    let p = prop.structure_property();
+
+    if p.guard.is_procedure() {
+
+    }
+
+    todo!()
+}
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+pub enum ProcType {
+    Constr = 1,
+    Pred,
+    Getter,
+    Setter,
+    GenGetter,
+    GenSetter,
+}
+
+fn is_simple_struct_type(stype: Handle<StructType>) -> bool {
+    for p in (0..=stype.name_pos).rev() {
+        if !stype.parent_types[p as usize].guard.is_false() || !stype.parent_types[p as usize].guard.is_null() {
+            return false;
+        }
+
+        if stype.parent_types[p as usize].num_slots != stype.parent_types[p as usize].num_islots {
+            return false;
+        }
+    }
+
+    true
+}
+
+fn make_struct_proc_for_module(struct_type: Handle<StructType>, func_name: &str, module: Handle<Module>, contract: Value,proc_type: ProcType, field_num: i32) -> Value {
+    /*match proc_type {
+        ProcType::Constr => {
+            
+        }
+    }*/
+    todo!()
+}
+
+pub(crate) fn init_structure() {}
+
+

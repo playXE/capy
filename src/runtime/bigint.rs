@@ -8,17 +8,17 @@
 
 use std::{
     cmp::Ordering,
-    mem::{size_of, offset_of},
-    ops::{Add, Div, Mul, Sub}, hash::Hash,
+    hash::Hash,
+    mem::{offset_of, size_of},
+    ops::{Add, Div, Mul, Sub},
 };
 
 use rsgc::{
     prelude::{Allocation, Handle, Object},
-    thread::Thread, sync::mutex::RawMutex, 
+    thread::Thread,
 };
 
 use super::object::*;
-
 
 #[repr(C)]
 pub struct BigInt {
@@ -149,7 +149,7 @@ impl BigInt {
             t.count = words.len() as _;
             t.negative = negative;
             t.header.typ = Type::BigNum;
-           
+
             for i in 0..words.len() {
                 t.uwords.as_mut_ptr().add(i).write(words[i]);
             }

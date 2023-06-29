@@ -29,19 +29,25 @@ use rsgc::{
     system::collections::hashmap::Entry,
 };
 use rsgc::{system::collections::hashmap::HashMap as HashTable, thread::Thread};
-use std::collections::{hash_map::RandomState, HashMap};
+use std::{
+    collections::{hash_map::RandomState, HashMap},
+    path::PathBuf,
+};
 
 use crate::{
-    compaux::{scm_identifier_global_binding, scm_unwrap_identifier},
+    compaux::{identifier_to_symbol, scm_identifier_global_binding, scm_unwrap_identifier},
     compile::IForm,
     runtime::list::{scm_cons, scm_list, scm_memq},
     runtime::macros::SyntaxRules,
     runtime::object::{Identifier, Module, ObjectHeader, Symbol, Syntax, Type, GLOC},
-    runtime::string::make_string,
     runtime::symbol::{make_symbol, scm_symbol_sans_prefix},
     runtime::value::Value,
+    runtime::{fun::scm_make_subr, string::make_string, symbol::Intern},
     scm_for_each,
+    vm::callframe::CallFrame,
 };
+
+use super::{object::ScmResult, violation::raise_argument_error};
 type Modules = Mutex<HashMap<Handle<Symbol>, Value>>;
 
 pub const SCM_BINDING_STAY_IN_MODULE: i32 = 1 << 0;
@@ -138,6 +144,17 @@ pub(crate) fn init_modules() {
         "capy.keyword",
         Some(KEYWORD_MODULE.module().internal)
     );
+
+    drop(mods);
+    {
+        let module = scm_scheme_module().module();
+
+        let subr = scm_make_subr("module-name->path", module_name_to_path, 1, 1);
+        scm_define(module, "module-name->path".intern(), subr).unwrap();
+
+        let subr = scm_make_subr("path->module-name", path_to_module_name, 1, 1);
+        scm_define(module, "path->module-name".intern(), subr).unwrap();
+    }
 }
 
 static mut DEFAULT_PARENTS: Value = Value::encode_null_value();
@@ -527,7 +544,7 @@ fn search_binding(
         };
 
         if v.is_xtype(Type::GLOC) {
-            if v.gloc().value.is_undefined() {
+            if v.gloc().value.is_empty() {
                 symbol = v.gloc().name.symbol();
                 if let Some(g) = search_binding(m, symbol, false, false, true) {
                     return Some(g);
@@ -930,7 +947,7 @@ pub fn scm_export_symbols(mut module: Handle<Module>, specs: Value) -> Result<()
                         object: ObjectHeader::new(Type::GLOC),
                         name: name.into(),
                         module: m.into(),
-                        value: Value::encode_undefined_value(),
+                        value: Value::encode_empty_value(),
                         hidden: false,
                         getter: None,
                         setter: None,
@@ -998,4 +1015,73 @@ pub fn scm_search_for_symbols(module: Handle<Module>, name: &str) -> Vec<String>
     });
     completions.dedup();
     completions
+}
+
+/// foo.bar.baz <=> "foo/bar/baz"
+///  - Two consecutive dots in module name becomes one dot in path
+///    foo..bar.baz <=> "foo.bar/baz".   This is to support R7RS library
+///    whose name is (foo.bar baz).
+///  - Todo: Escape unsafe characters in name.
+pub fn scm_module_name_to_path(name: Value) -> Result<PathBuf, Value> {
+    let name: Handle<Symbol> = if name.is_wrapped_identifier() {
+        identifier_to_symbol(name.identifier())
+    } else if name.is_symbol() {
+        name.symbol()
+    } else {
+        return Err(raise_argument_error(
+            "module-name->path",
+            "identifier?",
+            name,
+        ));
+    };
+
+    let name: &str = &name;
+
+    let mut chars = name.chars().peekable();
+    let mut paths = Vec::new();
+
+    let mut buf = String::new();
+    while let Some(c) = chars.next() {
+        if c == '.' {
+            if let Some('.') = chars.peek() {
+                chars.next();
+                buf.push('.');
+            } else {
+                paths.push(buf);
+                buf = String::new();
+            }
+        } else {
+            buf.push(c);
+        }
+    }
+
+    if !buf.is_empty() {
+        paths.push(buf);
+    }
+
+    let path = paths.join("/");
+    Ok(PathBuf::from(path))
+}
+
+pub fn scm_path_to_module_name(path: &str) -> String {
+    let name = path.replace(".", "..").replace("/", ".");
+
+    name
+}
+
+extern "C" fn module_name_to_path(cfr: &mut CallFrame) -> ScmResult {
+    let name = cfr.argument(0);
+    let path = match scm_module_name_to_path(name) {
+        Ok(path) => path,
+        Err(e) => return ScmResult::err(e),
+    };
+
+    ScmResult::ok(make_string(Thread::current(), path.display().to_string()))
+}
+
+extern "C" fn path_to_module_name(cfr: &mut CallFrame) -> ScmResult {
+    let path = cfr.argument(0).strsym();
+    let name = scm_path_to_module_name(&path);
+
+    ScmResult::ok(make_symbol(&name, true))
 }

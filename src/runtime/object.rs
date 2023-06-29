@@ -80,6 +80,7 @@ pub enum Type {
     StructType,
     StructProperty,
     Parameter,
+    Tuple,
 }
 
 #[repr(C)]
@@ -873,5 +874,66 @@ impl FromResidual<Result<Value, Value>> for ScmResult {
                 value,
             },
         }
+    }
+}
+
+#[repr(C)]
+pub struct Tuple {
+    pub(crate) object: ObjectHeader,
+    pub(crate) length: u32,
+    pub(crate) _pad: u32,
+    pub(crate) data: [Value; 0],
+}
+
+impl Object for Tuple {
+    fn trace_range(&self, from: usize, to: usize, visitor: &mut dyn rsgc::prelude::Visitor) {
+        for i in from..to {
+            unsafe {
+                self.data.get_unchecked(i).trace(visitor);
+            }
+        }
+    }
+}
+
+impl Allocation for Tuple {
+    const VARSIZE: bool = true;
+    const VARSIZE_ITEM_SIZE: usize = size_of::<Value>();
+    const VARSIZE_NO_HEAP_PTRS: bool = false;
+    const VARSIZE_OFFSETOF_CAPACITY: usize = offset_of!(Vector, length);
+    const VARSIZE_OFFSETOF_LENGTH: usize = offset_of!(Vector, length);
+    const VARSIZE_OFFSETOF_VARPART: usize = offset_of!(Vector, data);
+}
+
+impl Deref for Tuple {
+    type Target = [Value];
+
+    fn deref(&self) -> &Self::Target {
+        unsafe {
+            let ptr = self.data.as_ptr();
+            let len = self.length as usize;
+            std::slice::from_raw_parts(ptr, len)
+        }
+    }
+}
+
+impl AsRef<[Value]> for Tuple {
+    fn as_ref(&self) -> &[Value] {
+        self.deref()
+    }
+}
+
+impl DerefMut for Tuple {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe {
+            let ptr = self.data.as_mut_ptr();
+            let len = self.length as usize;
+            std::slice::from_raw_parts_mut(ptr, len)
+        }
+    }
+}
+
+impl AsMut<[Value]> for Tuple {
+    fn as_mut(&mut self) -> &mut [Value] {
+        self.deref_mut()
     }
 }

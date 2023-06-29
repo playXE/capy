@@ -1,4 +1,4 @@
-#![allow(unused_variables, unused_assignments)]
+#![allow(unused_variables, unused_assignments, unused_labels)]
 use rsgc::prelude::Handle;
 use rsgc::system::arraylist::ArrayList;
 use std::intrinsics::{likely, unlikely};
@@ -15,14 +15,16 @@ use crate::op::Opcode;
 use crate::runtime::fun::make_closed_procedure;
 use crate::runtime::list::{scm_cons, scm_is_list};
 use crate::runtime::module::{scm_make_binding, SCM_BINDING_CONST};
-use crate::runtime::number::{scm_is_integer, scm_is_exact};
+use crate::runtime::number::{scm_is_exact, scm_is_integer};
 use crate::runtime::object::{
     check_arity, make_box, wrong_arity, ClosedNativeProcedure, CodeBlock, Module, NativeProcedure,
     Procedure, Type,
 };
 use crate::runtime::string::make_string;
+use crate::runtime::tuple::scm_make_tuple;
 use crate::runtime::value::Value;
 use crate::runtime::vector::{make_vector, make_vector_from_slice};
+use crate::runtime::violation::{raise_argument_error, raise_error};
 
 /// Virtual machine interpreter loop.
 ///
@@ -57,9 +59,10 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
 
     macro_rules! push {
         ($val: expr) => {{
+            let val = $val;
             sp = sp.sub(1);
             debug_assert!(sp < cfr.cast::<Value>());
-            sp.write($val);
+            sp.write(val);
         }};
 
         (cfr $val: expr) => {
@@ -132,7 +135,6 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                 (closed_proc.callback)(&mut *cfr)
             };
 
-
             if result.is_ok() {
                 leave_frame!(=> Ok(result.value()))
             } else if result.is_err() {
@@ -162,7 +164,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                 }
 
                 sp = cursor;
-                
+
                 push!(cfr CallFrame {
                     caller,
                     return_pc,
@@ -240,7 +242,10 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                 Opcode::Pop => {
                     pop!();
                 }
-
+                Opcode::Popn => {
+                    let n = read2!();
+                    sp = sp.add(n as usize);
+                }
                 Opcode::Dup => {
                     let val = pop!();
                     push!(val);
@@ -325,6 +330,11 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                         args: []
                     });
                     cfr = sp.cast();
+                    if callee.is_vm_procedure() {
+                        (*cfr).code_block = callee.procedure().code.into();
+                        pc = callee.procedure().code.start_ip();
+                        continue 'interp;
+                    }
                     continue 'eval;
                 }
 
@@ -367,12 +377,18 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
 
                     cfr = sp.cast();
 
+                    if callee.is_vm_procedure() {
+                        (*cfr).code_block = callee.procedure().code.into();
+                        pc = callee.procedure().code.start_ip();
+                        continue 'interp;
+                    }
+
                     continue 'eval;
                 }
 
                 Opcode::Return => {
                     let val = pop!();
-                    
+
                     leave_frame!(val);
                 }
 
@@ -608,7 +624,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     let rest = (*cfr).args.as_mut_ptr().add(n as _);
                     let mut list = Value::encode_null_value();
 
-                    for i in (0..(*cfr).argc.get_int32() - n as i32).rev() {
+                    for i in (0..(*cfr).argc.get_int32() as usize - n as usize).rev() {
                         let e = rest.add(i as _).read();
                         list = scm_cons(vm.thread, e, list);
                     }
@@ -660,6 +676,10 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                         let offset = read4!();
                         pc = pc.offset(offset as _);
                     }
+                }
+
+                Opcode::IsNull => {
+                    push!(Value::encode_bool_value(pop!().is_null()));
                 }
 
                 Opcode::IsNumber => {
@@ -726,7 +746,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
 
                 Opcode::IsExact => {
                     let val = pop!();
-                    
+
                     if let Some(x) = scm_is_exact(val) {
                         push!(Value::encode_bool_value(x));
                     } else {
@@ -734,7 +754,176 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     }
                 }
 
-                Opcode::IsProperty => {
+                Opcode::Car => {
+                    let val = pop!();
+
+                    if unlikely(!val.is_pair()) {
+                        return Err(raise_argument_error("car", "pair?", val));
+                    }
+
+                    push!(val.pair().car);
+                }
+
+                Opcode::Cdr => {
+                    let val = pop!();
+
+                    if unlikely(!val.is_pair()) {
+                        return Err(raise_argument_error("cdr", "pair?", val));
+                    }
+
+                    push!(val.pair().cdr);
+                }
+
+                Opcode::SetCar => {
+                    let val = pop!();
+                    let cell = pop!();
+                    if unlikely(!cell.is_pair()) {
+                        return Err(raise_argument_error("set-car!", "pair?", cell));
+                    }
+
+                    vm.thread.write_barrier(cell.pair());
+                    cell.pair().car = val;
+                }
+
+                Opcode::SetCdr => {
+                    let val = pop!();
+                    let cell = pop!();
+                    if unlikely(!cell.is_pair()) {
+                        return Err(raise_argument_error("set-cdr!", "pair?", cell));
+                    }
+
+                    vm.thread.write_barrier(cell.pair());
+                    cell.pair().cdr = val;
+                }
+
+                Opcode::Cons => {
+                    let cdr = pop!();
+                    let car = pop!();
+
+                    push!(scm_cons(vm.thread, car, cdr));
+                }
+
+                Opcode::List => {
+                    let mut list = Value::encode_null_value();
+
+                    for _ in 0..read2!() {
+                        list = scm_cons(vm.thread, pop!(), list);
+                    }
+
+                    push!(list);
+                }
+
+                Opcode::IsPair => {
+                    let val = pop!();
+
+                    push!(Value::encode_bool_value(val.is_pair()));
+                }
+
+                Opcode::IsList => {
+                    let val = pop!();
+                    push!(Value::encode_bool_value(scm_is_list(val)));
+                }
+
+                Opcode::IsVector => {
+                    let val = pop!();
+                    push!(Value::encode_bool_value(val.is_vector()));
+                }
+
+                Opcode::IsUndef => {
+                    let val = pop!();
+                    push!(Value::encode_bool_value(val.is_undefined()));
+                }
+
+                Opcode::Tuple => {
+                    let n = read2!();
+
+                    let mut tuple = scm_make_tuple(vm.thread, n as _);
+
+                    for i in (0..n).rev() {
+                        vm.thread.write_barrier(tuple);
+                        tuple[i as usize] = pop!();
+                    }
+
+                    push!(tuple.into());
+                }
+
+                Opcode::TupleRefI => {
+                    let n = read2!();
+                    let tuple = pop!();
+
+                    if unlikely(!tuple.is_tuple()) {
+                        return Err(raise_argument_error("tuple-ref", "tuple?", tuple));
+                    }
+
+                    if unlikely((n as usize)>= tuple.tuple().len()) {
+                        return Err(raise_error("tuple-ref", &format!("index out of bounds: length is {}, index is {}", tuple.tuple().len(), n), 0));
+                    }
+
+                    push!(tuple.tuple()[n as usize]);
+                }
+
+                
+
+                Opcode::TupleSetI => {
+                    let n = read2!();
+                    let tuple = pop!();
+
+                    if unlikely(!tuple.is_tuple()) {
+                        return Err(raise_argument_error("tuple-set!", "tuple?", tuple));
+                    }
+
+                    if unlikely((n as usize)>= tuple.tuple().len()) {
+                        return Err(raise_error("tuple-set!", &format!("index out of bounds: length is {}, index is {}", tuple.tuple().len(), n), 0));
+                    }
+
+                    vm.thread.write_barrier(tuple.tuple());
+                    tuple.tuple()[n as usize] = pop!();
+                }
+
+                Opcode::TupleRef => {
+                    let tuple = pop!();
+                    let n = pop!();
+
+                    if unlikely(!tuple.is_tuple()) {
+                        return Err(raise_argument_error("tuple-ref", "tuple?", tuple));
+                    }
+
+                    if unlikely(!n.is_int32()) {
+                        return Err(raise_argument_error("tuple-ref", "exact integer?", n));
+                    }
+
+                    let n = n.get_int32();
+
+                    if unlikely((n as usize)>= tuple.tuple().len()) || n < 0 {
+                        return Err(raise_error("tuple-ref", &format!("index out of bounds: length is {}, index is {}", tuple.tuple().len(), n), 0));
+                    }
+
+                    push!(tuple.tuple()[n as usize]);
+                }
+
+                Opcode::TupleSet => {
+                    let tuple = pop!();
+                    let n = pop!();
+
+                    if unlikely(!tuple.is_tuple()) {
+                        return Err(raise_argument_error("tuple-set!", "tuple?", tuple));
+                    }
+
+                    if unlikely(!n.is_int32()) {
+                        return Err(raise_argument_error("tuple-set!", "exact integer?", n));
+                    }
+
+                    let n = n.get_int32();
+
+                    if unlikely((n as usize)>= tuple.tuple().len()) || n < 0 {
+                        return Err(raise_error("tuple-set!", &format!("index out of bounds: length is {}, index is {}", tuple.tuple().len(), n), 0));
+                    }
+
+                    vm.thread.write_barrier(tuple.tuple());
+                    tuple.tuple()[n as usize] = pop!();
+                }
+
+                /*Opcode::IsProperty => {
                     let v = pop!();
                     let c = read2!();
 
@@ -757,9 +946,8 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     }
 
                     push!(Value::encode_bool_value(false));
-                }
-
-                _ => todo!()
+                }*/
+                _ => todo!(),
             }
         }
     }

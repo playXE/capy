@@ -1,27 +1,30 @@
-
-
 #[macro_use]
 pub mod list;
 #[macro_use]
 pub mod vector;
+pub mod arith;
+pub mod bigint;
 pub mod cmp;
+pub mod complex;
 pub mod fun;
 pub mod load;
 pub mod macros;
 pub mod module;
 pub mod number;
 pub mod object;
-pub mod values;
 pub mod pure_nan;
-pub mod complex;
+pub mod violation;
 pub mod string;
+//pub mod structure;
 pub mod symbol;
-pub mod bigint;
+pub mod tuple;
 pub mod value;
-pub mod arith;
-pub mod structure;
+pub mod values;
 
 pub(crate) fn init() {
     number::init_number();
     fun::init();
+    tuple::init_tuple();
+    cmp::init_cmp();
+    list::init_list();
 }

@@ -16,9 +16,9 @@ use crate::{
     runtime::macros::scm_compile_syntax_rules,
     runtime::module::{
         is_global_identifier_eq, scm_export_symbols, scm_find_module, scm_import_module,
-        scm_insert_binding, scm_insert_syntax_rule_binding, scm_make_module,
+        scm_insert_binding, scm_make_module,
     },
-    runtime::object::{Identifier, Module, ObjectHeader, Type},
+    runtime::{object::{Identifier, Module, ObjectHeader, Type}, violation::raise_error},
     runtime::string::make_string,
     runtime::symbol::{gensym, make_symbol},
     runtime::value::Value,
@@ -409,14 +409,14 @@ pub fn define_syntax() {
             }
 
             let (reqs, rest) = parse_formals(formals, Value::encode_null_value())?;
-
+           
             pass1_vanilla_lambda(
                 form,
                 if !rest.is_false() {
                     scm_append(
                         Thread::current(),
-                        scm_list(Thread::current(), &[rest]),
                         reqs,
+                        scm_list(Thread::current(), &[rest]),
                     )
                 } else {
                     reqs
@@ -671,6 +671,12 @@ pub fn define_syntax() {
         )
     });
 
+    define_syntax!("quote", None, form, _cenv, {
+        let val = form.cadr();
+
+        Ok(make_iform(IForm::Const(val)))
+    });
+
     define_syntax!("let-syntax", None, form, cenv, {
         if scm_length(form).filter(|&x| x >= 3).is_some() {
             let bindings = form.cadr();
@@ -913,7 +919,9 @@ pub fn pass1_define(
     // (_ name)
     } else if form.cddr().is_null() {
         // allow R6RS style (define <name>)
-
+        if !name.is_identifier() {
+            return Err(raise_error("define", "<name> should be an identifier", 0));
+        }
         pass1_define(
             scm_list(
                 Thread::current(),
@@ -931,7 +939,9 @@ pub fn pass1_define(
         )
     } else if form.cddr().cdr().is_null() {
         let value = form.caddr();
-
+        if !name.is_identifier() {
+            return Err(raise_error("define", "<name> should be an identifier", 0));
+        }
         let id = if name.is_wrapped_identifier() {
             rename_toplevel_identifier(name.identifier())
         } else {

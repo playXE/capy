@@ -8,7 +8,11 @@ use crate::runtime::object::CodeBlock;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display)]
 #[display(style = "snake_case")]
 pub enum Opcode {
+    NoOp,
+    Enter,
+    EnterJit,
     Pop,
+    Popn,
     Dup,
     Swap,
 
@@ -83,19 +87,31 @@ pub enum Opcode {
     IsPair,
     IsNull,
     IsUndef,
-    IsProperty,
+    IsList,
+    IsVector,
+    IsTuple,
+    //IsProperty,
     List,
     Cons,
-    Decons,
-    DeconsKeyword,
     Car,
     Cdr,
+    SetCar,
+    SetCdr,
     Vector,
+    VectorRef,
+    VectorRefI,
+    VectorSet,
+    VectorSetI,
+    Tuple,
+    TupleRef,
+    TupleSet,
+    TupleRefI,
+    TupleSetI,
     ListToVector,
     VectorAppend,
-    IsVector,
+    
     Not,
-    NoOp,
+
 
     Count,
 }
@@ -174,7 +190,12 @@ pub fn disassembly(code: Handle<CodeBlock>, mut out: impl WriteColor) -> Result<
             | Opcode::ClosureSet
             | Opcode::Vector
             | Opcode::List
-            | Opcode::IsProperty
+            | Opcode::Popn
+            | Opcode::VectorRef
+            | Opcode::VectorSet
+            | Opcode::Tuple
+            | Opcode::TupleRef
+            | Opcode::TupleSet
              => {
                 let n = read2!();
                 writeln!(out, " {}", n)?;

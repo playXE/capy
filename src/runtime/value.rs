@@ -1,4 +1,4 @@
-use std::{fmt::Debug, hash::Hash, convert::Infallible};
+use std::{fmt::Debug, hash::Hash};
 
 use crate::{
     compile::LVar,
@@ -10,7 +10,7 @@ use crate::{
     },
 };
 
-use super::{pure_nan::*, bigint::BigInt};
+use super::{bigint::BigInt, pure_nan::*, object::Tuple};
 use rsgc::prelude::{Allocation, Handle, Object};
 
 #[derive(Clone, Copy)]
@@ -725,7 +725,7 @@ impl Value {
     }
 
     pub fn to_bool(self) -> bool {
-        !self.is_false() || !self.is_empty()
+        !self.is_false() && !self.is_empty()
     }
 
     pub fn is_procedure(self) -> bool {
@@ -787,7 +787,9 @@ impl Value {
     }
 
     pub fn is_number(self) -> bool {
-        self.is_int32() || self.is_double() || (self.get_type() >= Type::BigNum && self.get_type() <= Type::Complex)
+        self.is_int32()
+            || self.is_double()
+            || (self.get_type() >= Type::BigNum && self.get_type() <= Type::Complex)
     }
 
     pub fn is_bignum(self) -> bool {
@@ -817,6 +819,31 @@ impl Value {
     pub fn bignum(self) -> Handle<BigInt> {
         debug_assert!(self.is_bignum());
         unsafe { std::mem::transmute(self) }
+    }
+
+    pub fn is_tuple(self) -> bool {
+        self.is_xtype(Type::Tuple)
+    }
+
+    pub fn tuple(self) -> Handle<Tuple> {
+        debug_assert!(self.is_tuple());
+        unsafe { std::mem::transmute(self) }
+    }
+
+    pub fn tuple_ref(self, index: usize) -> Value {
+        debug_assert!(self.is_tuple());
+        unsafe {
+            let t: Handle<Tuple> = std::mem::transmute(self);
+            t[index]
+        }
+    }
+
+    pub fn tuple_set(self, index: usize, value: Value) {
+        debug_assert!(self.is_tuple());
+        unsafe {
+            let mut t: Handle<Tuple> = std::mem::transmute(self);
+            t[index] = value;
+        }
     }
 }
 
@@ -920,4 +947,3 @@ impl Hash for Value {
         self.get_raw().hash(state);
     }
 }
-

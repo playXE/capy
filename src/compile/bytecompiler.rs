@@ -12,15 +12,18 @@ use rsgc::{
 
 use crate::{
     compile::{make_cenv, pass1::pass1, ref_count_lvars, LetScope},
+    op::{disassembly, Opcode},
     runtime::fun::make_procedure,
-    runtime::object::{CodeBlock, Module, ObjectHeader, Type, MAX_ARITY},
-    op::{Opcode, disassembly},
-    runtime::string::make_string,
+    //cruntime::string::make_string,
     runtime::value::Value,
     runtime::vector::make_vector_from_slice,
+    runtime::{
+        object::{CodeBlock, Module, ObjectHeader, Type, MAX_ARITY},
+        violation::raise_error,
+    },
 };
 
-use super::{r7rs_to_value, IForm, LVar, Lambda};
+use super::{r7rs_to_value, IForm, LVar, Lambda, AsmOperand};
 
 struct BindingGroup {
     bindings: HashMap<usize, usize>,
@@ -42,7 +45,6 @@ impl BindingGroup {
 struct CaptureGroup {
     captures: Vec<usize>,
 }
-
 
 impl CaptureGroup {
     pub fn capture(&mut self, lvar: Handle<LVar>) -> usize {
@@ -190,9 +192,13 @@ impl ByteCompiler {
             ptr.assume_init()
         };
         if true {
-            disassembly(code, termcolor::StandardStream::stderr(termcolor::ColorChoice::Always)).unwrap();
+            disassembly(
+                code,
+                termcolor::StandardStream::stderr(termcolor::ColorChoice::Always),
+            )
+            .unwrap();
         }
-        code 
+        code
     }
 
     pub fn bind(&mut self, lvar: Handle<LVar>, ix: usize) {
@@ -215,7 +221,7 @@ impl ByteCompiler {
                 parent: None,
             }),
         };
-       
+
         for ix in 0..lam.lvars.len() - lam.optarg as usize {
             closure_compiler.emit_ldarg(ix as _);
             let lvar = lam.lvars[ix];
@@ -235,6 +241,7 @@ impl ByteCompiler {
                 .code
                 .extend_from_slice(&(lam.lvars.len() as u16 - 1).to_le_bytes());
             let ix = closure_compiler.next_local_index();
+            
             closure_compiler.bind(lvar, ix);
         }
 
@@ -429,7 +436,6 @@ impl ByteCompiler {
                 false
             }
             IForm::LRef(x) => {
-                println!("{}", x.lvar.set_count);
                 self.resolve_local(x.lvar, true);
                 false
             }
@@ -513,11 +519,33 @@ impl ByteCompiler {
             }
 
             IForm::Asm(op) => {
-                for arg in op.args.iter().rev() {
+                for arg in op.args.iter() {
                     self.compile_iform(thread, *arg, false);
                 }
 
                 self.emit_simple(op.op);
+
+                if let Some(operands) = op.operands.as_ref() {
+                    for operand in operands.iter() {
+                        match operand {
+                            AsmOperand::I16(x) => {
+                                self.code.extend_from_slice(&x.to_le_bytes());
+                            }
+                            AsmOperand::I32(x) => {
+                                self.code.extend_from_slice(&x.to_le_bytes());
+                            }
+                            AsmOperand::I8(x) => {
+                                self.code.push(*x as u8);
+                            }
+
+                            AsmOperand::Constant(x) => {
+                                let ix = self.add_constant(thread, *x);
+                                self.code.extend_from_slice(&(ix as u16).to_le_bytes());
+                            }
+                        }
+
+                    }
+                }
 
                 if !op.pushes && !op.exits {
                     self.emit_simple(Opcode::PushUndef);
@@ -525,11 +553,64 @@ impl ByteCompiler {
 
                 op.exits
             }
+
+            IForm::If(cond) => {
+                self.compile_iform(thread, cond.cond, false);
+
+                let cons = cond.cons;
+                let alt = cond.alt;
+
+                let else_jump_ip = self.code.len();
+
+                for _ in 0..5 {
+                    self.emit_simple(Opcode::NoOp);
+                }
+
+                if self.compile_iform(thread, alt, tail) {
+                    self.code[else_jump_ip] = Opcode::BranchIf as u8;
+                    let diff = (self.code.len() - else_jump_ip) as i32 - 5;
+                    let n = diff.to_le_bytes();
+                    self.code[else_jump_ip + 1] = n[0];
+                    self.code[else_jump_ip + 2] = n[1];
+                    self.code[else_jump_ip + 3] = n[2];
+                    self.code[else_jump_ip + 4] = n[3];
+                    return self.compile_iform(thread, cons, true);
+                }
+
+                let exit_jump_ip = self.code.len();
+
+                for _ in 0..5 {
+                    self.emit_simple(Opcode::NoOp);
+                }
+                self.code[else_jump_ip] = Opcode::BranchIf as u8;
+                let diff = (self.code.len() - else_jump_ip) as i32 - 5;
+                let n = diff.to_le_bytes();
+                self.code[else_jump_ip + 1] = n[0];
+                self.code[else_jump_ip + 2] = n[1];
+                self.code[else_jump_ip + 3] = n[2];
+                self.code[else_jump_ip + 4] = n[3];
+
+                if self.compile_iform(thread, cons, tail) {
+                    self.code[exit_jump_ip] = Opcode::Return as u8;
+                    return true;
+                }
+
+                self.code[exit_jump_ip] = Opcode::Branch as u8;
+                let diff = (self.code.len() - exit_jump_ip) as i32 - 5;
+                let n = diff.to_le_bytes();
+                self.code[exit_jump_ip + 1] = n[0];
+                self.code[exit_jump_ip + 2] = n[1];
+                self.code[exit_jump_ip + 3] = n[2];
+                self.code[exit_jump_ip + 4] = n[3];
+
+                false
+            }
             _ => todo!(),
         }
     }
 
     pub fn compile_body(&mut self, thread: &mut Thread, expr: Handle<IForm>, argc: usize) {
+        self.emit_simple(Opcode::Enter);
         let patch_alloc = self.code.len();
         for _ in 0..3 {
             self.emit_simple(Opcode::NoOp);
@@ -567,22 +648,22 @@ impl ByteCompiler {
                 Ok(x) => x,
                 Err(e) => match e {
                     ParseError::Lexical(loc, err) => {
-                        return Err(make_string(
-                            thread,
+                        return Err(raise_error(
+                            "compile",
                             &format!(
                                 "lexical error at {}:{}:{}: {}",
                                 file, loc.line, loc.col, err
                             ),
-                        )
-                        .into())
+                            0,
+                        ));
                     }
 
                     ParseError::Syntax(loc, err) => {
-                        return Err(make_string(
-                            thread,
+                        return Err(raise_error(
+                            "compile",
                             &format!("syntax error at {}:{}:{}: {}", file, loc.line, loc.col, err),
-                        )
-                        .into())
+                            0,
+                        ));
                     }
                 },
             };
@@ -637,20 +718,25 @@ impl ByteCompiler {
         mut k: impl FnMut(&mut Thread) -> Result<Option<Handle<IForm>>, Value>,
     ) -> Result<Value, Value> {
         let mut bc = Self::new(thread);
-
+        bc.emit_simple(Opcode::Enter);
         let patch_alloc = bc.code.len();
         for _ in 0..3 {
             bc.emit_simple(Opcode::NoOp);
         }
         let mut exit = true;
+        let mut count = 0;
         while let Some(form) = k(thread)? {
             if !exit {
                 bc.emit_simple(Opcode::Pop);
             }
             exit = bc.compile_iform(thread, form, false);
+            count += 1;
         }
 
-        if !exit {
+        if !exit || count == 0 {
+            if count == 0 {
+                bc.emit_simple(Opcode::PushUndef);
+            }
             bc.emit_simple(Opcode::Return);
         }
 

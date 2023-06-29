@@ -1,9 +1,22 @@
+use std::intrinsics::unlikely;
+
 use crate::{
+    compile::{make_iform, Asm, AsmOperand, IForm},
+    op::Opcode,
     runtime::object::{ExtendedPair, ObjectHeader, Pair, Type, Vector},
     runtime::value::Value,
     runtime::vector::make_vector,
+    vm::callframe::CallFrame,
 };
-use rsgc::{prelude::Handle, thread::Thread};
+use rsgc::{prelude::Handle, system::arraylist::ArrayList, thread::Thread};
+
+use super::{
+    fun::scm_make_subr_inliner,
+    module::{scm_define, scm_scheme_module},
+    object::{ScmResult, MAX_ARITY},
+    symbol::Intern,
+    violation::raise_argument_error,
+};
 
 pub fn scm_cons(t: &mut Thread, car: Value, cdr: Value) -> Value {
     Value::encode_object_value(t.allocate(Pair {
@@ -372,12 +385,19 @@ pub fn scm_last_pair(mut l: Value) -> Value {
 macro_rules! scm_append1 {
     ($t: expr, $start: expr, $last: expr, $obj: expr) => {
         if $start.is_null() {
-            *$start = $crate::runtime::list::scm_cons($t, $obj, $crate::runtime::value::Value::encode_null_value());
+            *$start = $crate::runtime::list::scm_cons(
+                $t,
+                $obj,
+                $crate::runtime::value::Value::encode_null_value(),
+            );
             *$last = *$start;
         } else {
             $t.write_barrier($last.pair());
-            $last.pair().cdr =
-                $crate::runtime::list::scm_cons($t, $obj, $crate::runtime::value::Value::encode_null_value());
+            $last.pair().cdr = $crate::runtime::list::scm_cons(
+                $t,
+                $obj,
+                $crate::runtime::value::Value::encode_null_value(),
+            );
             *$last = $last.pair().cdr;
         }
     };
@@ -465,4 +485,246 @@ macro_rules! scm_append {
             *$last = $crate::runtime::list::scm_last_pair(*$last);
         }
     }};
+}
+
+extern "C" fn car(cfr: &mut CallFrame) -> ScmResult {
+    if unlikely(!cfr.argument(0).is_pair()) {
+        return ScmResult::err(raise_argument_error("car", "pair?", cfr.argument(0)));
+    }
+
+    ScmResult::ok(cfr.argument(0).car())
+}
+
+extern "C" fn cdr(cfr: &mut CallFrame) -> ScmResult {
+    if unlikely(!cfr.argument(0).is_pair()) {
+        return ScmResult::err(raise_argument_error("cdr", "pair?", cfr.argument(0)));
+    }
+
+    ScmResult::ok(cfr.argument(0).cdr())
+}
+
+extern "C" fn set_car(cfr: &mut CallFrame) -> ScmResult {
+    if unlikely(!cfr.argument(0).is_pair()) {
+        return ScmResult::err(raise_argument_error("set-car!", "pair?", cfr.argument(0)));
+    }
+
+    Thread::current().write_barrier(cfr.argument(0).pair());
+    cfr.argument(0).pair().car = cfr.argument(1);
+
+    ScmResult::ok(Value::encode_undefined_value())
+}
+
+extern "C" fn set_cdr(cfr: &mut CallFrame) -> ScmResult {
+    if unlikely(!cfr.argument(0).is_pair()) {
+        return ScmResult::err(raise_argument_error("set-cdr!", "pair?", cfr.argument(0)));
+    }
+
+    Thread::current().write_barrier(cfr.argument(0).pair());
+    cfr.argument(0).pair().cdr = cfr.argument(1);
+
+    ScmResult::ok(Value::encode_undefined_value())
+}
+
+extern "C" fn list(cfr: &mut CallFrame) -> ScmResult {
+    let mut result = Value::encode_null_value();
+    for i in (0..cfr.argument_count()).rev() {
+        result = scm_cons(&mut Thread::current(), cfr.argument(i), result);
+    }
+    ScmResult::ok(result)
+}
+
+extern "C" fn cons(cfr: &mut CallFrame) -> ScmResult {
+    ScmResult::ok(scm_cons(
+        &mut Thread::current(),
+        cfr.argument(0),
+        cfr.argument(1),
+    ))
+}
+
+extern "C" fn pair_p(cfr: &mut CallFrame) -> ScmResult {
+    ScmResult::ok(Value::encode_bool_value(cfr.argument(0).is_pair()))
+}
+
+extern "C" fn list_p(cfr: &mut CallFrame) -> ScmResult {
+    ScmResult::ok(scm_is_list(cfr.argument(0)))
+}
+
+extern "C" fn null_p(cfr: &mut CallFrame) -> ScmResult {
+    ScmResult::ok(Value::encode_bool_value(cfr.argument(0).is_null()))
+}
+
+pub(crate) fn init_list() {
+    let module = scm_scheme_module().module();
+
+    let subr = scm_make_subr_inliner("car", car, 1, 1, |forms, _| {
+        if forms.len() != 1 {
+            return None;
+        }
+
+        let asm = Asm {
+            op: Opcode::Car,
+            args: ArrayList::from_slice(Thread::current(), &[forms[0]]),
+            operands: None,
+            exits: false,
+            pushes: true,
+            ic: false,
+        };
+
+        Some(make_iform(IForm::Asm(asm)))
+    });
+
+    scm_define(module, "car".intern(), subr).unwrap();
+
+    let subr = scm_make_subr_inliner("cdr", cdr, 1, 1, |forms, _| {
+        if forms.len() != 1 {
+            return None;
+        }
+
+        let asm = Asm {
+            op: Opcode::Cdr,
+            args: ArrayList::from_slice(Thread::current(), &[forms[0]]),
+            operands: None,
+            exits: false,
+            pushes: true,
+            ic: false,
+        };
+
+        Some(make_iform(IForm::Asm(asm)))
+    });
+
+    scm_define(module, "cdr".intern(), subr).unwrap();
+
+    let subr = scm_make_subr_inliner("set-car!", set_car, 2, 2, |forms, _| {
+        if forms.len() != 2 {
+            return None;
+        }
+
+        let asm = Asm {
+            op: Opcode::SetCar,
+            args: ArrayList::from_slice(Thread::current(), &[forms[0], forms[1]]),
+            operands: None,
+            exits: false,
+            pushes: false,
+            ic: false,
+        };
+
+        Some(make_iform(IForm::Asm(asm)))
+    });
+
+    scm_define(module, "set-car!".intern(), subr).unwrap();
+
+    let subr = scm_make_subr_inliner("set-cdr!", set_cdr, 2, 2, |forms, _| {
+        if forms.len() != 2 {
+            return None;
+        }
+
+        let asm = Asm {
+            op: Opcode::SetCdr,
+            args: ArrayList::from_slice(Thread::current(), &[forms[0], forms[1]]),
+            operands: None,
+            exits: false,
+            pushes: false,
+            ic: false,
+        };
+
+        Some(make_iform(IForm::Asm(asm)))
+    });
+
+    scm_define(module, "set-cdr!".intern(), subr).unwrap();
+
+    let subr = scm_make_subr_inliner("list", list, 0, MAX_ARITY, |forms, _| {
+        let args = ArrayList::from_slice(Thread::current(), &forms);
+
+        let asm = Asm {
+            op: Opcode::List,
+            args,
+            operands: Some(ArrayList::from_slice(
+                Thread::current(),
+                &[AsmOperand::I16(forms.len() as _)],
+            )),
+            exits: false,
+            pushes: true,
+            ic: false,
+        };
+
+        Some(make_iform(IForm::Asm(asm)))
+    });
+
+    scm_define(module, "list".intern(), subr).unwrap();
+
+    let subr = scm_make_subr_inliner("cons", cons, 2, 2, |forms, _| {
+        if forms.len() != 2 {
+            return None;
+        }
+
+        let asm = Asm {
+            op: Opcode::Cons,
+            args: ArrayList::from_slice(Thread::current(), &[forms[0], forms[1]]),
+            operands: None,
+            exits: false,
+            pushes: true,
+            ic: false,
+        };
+
+        Some(make_iform(IForm::Asm(asm)))
+    });
+
+    scm_define(module, "cons".intern(), subr).unwrap();
+
+    let subr = scm_make_subr_inliner("pair?", pair_p, 1, 1, |forms, _| {
+        if forms.len() != 1 {
+            return None;
+        }
+
+        let asm = Asm {
+            op: Opcode::IsPair,
+            args: ArrayList::from_slice(Thread::current(), &[forms[0]]),
+            operands: None,
+            exits: false,
+            pushes: true,
+            ic: false,
+        };
+
+        Some(make_iform(IForm::Asm(asm)))
+    });
+
+    scm_define(module, "pair?".intern(), subr).unwrap();
+
+    let subr = scm_make_subr_inliner("list?", list_p, 1, 1, |forms, _| {
+        if forms.len() != 1 {
+            return None;
+        }
+
+        let asm = Asm {
+            op: Opcode::IsList,
+            args: ArrayList::from_slice(Thread::current(), &[forms[0]]),
+            operands: None,
+            exits: false,
+            pushes: true,
+            ic: false,
+        };
+
+        Some(make_iform(IForm::Asm(asm)))
+    });
+
+    scm_define(module, "list?".intern(), subr).unwrap();
+
+    let subr = scm_make_subr_inliner("null?", null_p, 1, 1, |forms, _| {
+        if forms.len() != 1 {
+            return None;
+        }
+
+        let asm = Asm {
+            op: Opcode::IsNull,
+            args: ArrayList::from_slice(Thread::current(), &[forms[0]]),
+            operands: None,
+            exits: false,
+            pushes: true,
+            ic: false,
+        };
+
+        Some(make_iform(IForm::Asm(asm)))
+    });
+
+    scm_define(module, "null?".intern(), subr).unwrap();
 }

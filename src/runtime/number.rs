@@ -143,6 +143,7 @@ pub(crate) fn init_number() {
                 exits: false,
                 pushes: true,
                 operands: None,
+                ic: false,
             })))
         } else {
             None
@@ -158,6 +159,7 @@ pub(crate) fn init_number() {
                 exits: false,
                 pushes: true,
                 operands: None,
+                ic: false,
             })))
         } else {
             None
@@ -173,6 +175,7 @@ pub(crate) fn init_number() {
                 exits: false,
                 pushes: true,
                 operands: None,
+                ic: false,
             })))
         } else {
             None
@@ -188,6 +191,7 @@ pub(crate) fn init_number() {
                 exits: false,
                 pushes: true,
                 operands: None,
+                ic: false,
             })))
         } else {
             None
@@ -203,6 +207,7 @@ pub(crate) fn init_number() {
                 exits: false,
                 pushes: true,
                 operands: None,
+                ic: false,
             })))
         } else {
             None
@@ -219,6 +224,7 @@ pub(crate) fn init_number() {
                 exits: false,
                 pushes: true,
                 operands: None,
+                ic: false,
             })))
         } else {
             None
@@ -239,6 +245,7 @@ pub(crate) fn init_number() {
                     exits: false,
                     pushes: true,
                     operands: None,
+                    ic: false,
                 })))
             } else {
                 None
@@ -260,6 +267,7 @@ pub(crate) fn init_number() {
                     exits: false,
                     pushes: true,
                     operands: None,
+                    ic: false,
                 })))
             } else {
                 None
@@ -276,6 +284,7 @@ pub(crate) fn init_number() {
                 exits: false,
                 pushes: true,
                 operands: None,
+                ic: false,
             })))
         } else {
             None
@@ -291,6 +300,7 @@ pub(crate) fn init_number() {
                 exits: false,
                 pushes: true,
                 operands: None,
+                ic: false,
             })))
         } else {
             None
@@ -306,6 +316,7 @@ pub(crate) fn init_number() {
                 exits: false,
                 pushes: true,
                 operands: None,
+                ic: false,
             })))
         } else {
             None
@@ -322,6 +333,7 @@ pub(crate) fn init_number() {
                 exits: false,
                 pushes: true,
                 operands: None,
+                ic: false,
             })))
         } else {
             None
