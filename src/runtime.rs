@@ -34,5 +34,6 @@ pub(crate) fn init() {
     structure::initialize_struct();
     string::init_string();
     macros::init_macros();
+    portfun::init_ports();
     crate::vm::stacktrace::init_stacktrace();
 }

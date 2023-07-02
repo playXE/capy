@@ -6,7 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-rsgc = { path = "rsgc", features = ["conditional-safepoint"] }
+rsgc = { git = "https://github.com/playxe/rsgc" }
 #b3 = "0.1"
 macroassembler = "0.1"
 r7rs-parser = { git = "https://github.com/playxe/r7rs-parser" }
@@ -20,5 +20,10 @@ parse-display = "0.8"
 errno = "0.3"
 cfg-if = "1.0"
 naked-function = "0.1"
-rustyline = { git = "https://github.com/kkawakam/rustyline", features = ["custom-bindings"]}
+rustyline = { git = "https://github.com/kkawakam/rustyline", features = [
+    "custom-bindings",
+] }
 structopt = "0.3"
+
+[profile.release]
+lto = true

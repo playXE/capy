@@ -20,9 +20,9 @@ static LOAD_PATH: Lazy<Mutex<Value>> = Lazy::new(|| Mutex::new(Value::encode_nul
 
 pub(crate) fn init_load() {
     heap().add_root(SimpleRoot::new("load", "ld", |processor| unsafe {
-        let val = LOAD_PATH.unsafe_get();
-
-        val.trace(processor.visitor());
+        if let Some(mtx) = Lazy::get(&LOAD_PATH) {
+            mtx.unsafe_get().trace(processor.visitor());
+        }
     }));
 }
 

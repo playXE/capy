@@ -890,6 +890,19 @@ impl Value {
     pub fn is_output_port(self) -> bool {
         self.is_port() && (self.port().direction & SCM_PORT_DIRECTION_OUT) != 0
     }
+
+    pub fn get_int64(self) -> Option<i64> {
+        if !self.is_exact_integer() {
+            return None;
+        }
+
+        if self.is_int32() {
+            return Some(self.get_int32() as i64);
+        } 
+
+        let bignum = self.bignum();
+        bignum.i64()
+    }
 }
 
 impl Debug for Value {
@@ -997,7 +1010,7 @@ impl PartialEq<str> for Value {
         }
 
         if self.is_xtype(Type::Str) {
-            return &**self.string() == other;
+            return &***self.string() == other;
         } else if self.is_xtype(Type::Symbol) {
             return &**self.symbol() == other;
         } else {
@@ -1026,3 +1039,10 @@ pub fn scm_box(val: Value) -> Value {
     }).into()
 }
 
+pub fn scm_int(x: i64) -> Value {
+    if x as i32 as i64 == x {
+        Value::encode_int32(x as _)
+    } else {
+        BigInt::from_i64(Thread::current(), x).into()
+    }
+}

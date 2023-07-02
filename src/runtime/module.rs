@@ -62,10 +62,17 @@ fn trace_modules(visitor: &mut dyn rsgc::prelude::Visitor) {
     // SAFETY: All threads are paused during
     // root processing so using `unsafe_get` is being accessed by a single thread.
     unsafe {
-        MODULES.unsafe_get().iter().for_each(|(k, v)| {
+        /*MODULES.unsafe_get().iter().for_each(|(k, v)| {
             k.trace(visitor);
             v.trace(visitor);
-        })
+        })*/
+        if let Some(modules) = Lazy::get(&MODULES) {
+            let modules = modules.unsafe_get();
+            for (k, v) in modules.iter() {
+                k.trace(visitor);
+                v.trace(visitor);
+            }
+        }
     }
 }
 

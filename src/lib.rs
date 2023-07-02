@@ -10,9 +10,9 @@
 pub mod runtime;
 pub mod compaux;
 pub mod compile;
-pub mod interp;
 pub mod op;
 pub mod repl;
+pub mod support;
 pub mod vm;
 
 

@@ -21,7 +21,7 @@ use crate::{
         is_global_identifier_eq, scm_export_symbols, scm_find_module, scm_import_module,
         scm_insert_binding, scm_make_module,
     },
-    runtime::object::{Identifier, Module, ObjectHeader, Type},
+    runtime::{object::{Identifier, Module, ObjectHeader, Type}, macros::{get_make_er_transformer, get_make_er_transformer_toplevel}},
     runtime::symbol::{gensym, make_symbol},
     runtime::value::Value,
     runtime::{
@@ -1488,7 +1488,7 @@ fn er_macro_maker<const HAS_INJECT: bool>(
         let expr = scm_list(
             Thread::current(),
             &[
-                *MAKE_ER_TRANSFORMER_TOPLEVEL,
+                get_make_er_transformer_toplevel(),
                 xformer,
                 cenv_module(cenv).into(),
                 cenv_frames(cenv),
@@ -1500,7 +1500,7 @@ fn er_macro_maker<const HAS_INJECT: bool>(
     } else {
         let expr = scm_list(
             Thread::current(),
-            &[*MAKE_ER_TRANSFORMER, xformer, cenv, HAS_INJECT.into()],
+            &[get_make_er_transformer(), xformer, cenv, HAS_INJECT.into()],
         );
 
         pass1(expr, cenv)

@@ -268,9 +268,7 @@ impl Allocation for Rational {}
 #[repr(C)]
 pub struct Str {
     pub(crate) object: ObjectHeader,
-    pub(crate) length: u32,
-    pub(crate) _pad: u32,
-    pub(crate) data: [u8; 0],
+    pub(crate) string: rsgc::system::string::String
 }
 
 impl Str {
@@ -281,24 +279,19 @@ impl Str {
 
 impl Object for Str {}
 impl Allocation for Str {
-    const VARSIZE: bool = true;
-    const VARSIZE_ITEM_SIZE: usize = size_of::<u8>();
-    const VARSIZE_NO_HEAP_PTRS: bool = true;
-    const VARSIZE_OFFSETOF_CAPACITY: usize = offset_of!(Str, length);
-    const VARSIZE_OFFSETOF_LENGTH: usize = offset_of!(Str, length);
-    const VARSIZE_OFFSETOF_VARPART: usize = offset_of!(Str, data);
 }
 
 impl Deref for Str {
-    type Target = str;
+    type Target = rsgc::system::string::String;
 
     fn deref(&self) -> &Self::Target {
-        unsafe {
-            let ptr = self.data.as_ptr();
-            let len = self.length as usize;
-            let slice = std::slice::from_raw_parts(ptr, len);
-            std::str::from_utf8_unchecked(slice)
-        }
+        &self.string
+    }
+}
+
+impl DerefMut for Str {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.string
     }
 }
 
@@ -310,11 +303,7 @@ impl AsRef<str> for Str {
 
 impl AsRef<[u8]> for Str {
     fn as_ref(&self) -> &[u8] {
-        unsafe {
-            let ptr = self.data.as_ptr();
-            let len = self.length as usize;
-            std::slice::from_raw_parts(ptr, len)
-        }
+        self.string.as_bytes()
     }
 }
 

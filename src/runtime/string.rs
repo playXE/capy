@@ -5,17 +5,12 @@ use crate::{runtime::object::{ObjectHeader, Str, Type}, raise_exn, vm::{scm_vm, 
 use super::{port::{Port, port_puts, port_open_bytevector, SCM_PORT_DIRECTION_OUT, port_extract_string}, value::Value, error::{wrong_contract, contract_error, make_args_string}, print::Printer, object::{ScmResult, MAX_ARITY}, symbol::Intern, module::{scm_scheme_module, scm_define}, fun::scm_make_subr};
 
 pub fn make_string(thread: &mut Thread, s: impl AsRef<str>) -> Handle<Str> {
-    let mut str = thread.allocate_varsize::<Str>(s.as_ref().len());
-    let orig = s.as_ref();
-    unsafe {
-        let s = str.assume_init_mut();
-        s.object = ObjectHeader::new(Type::Str);
+    let string = rsgc::system::string::String::from_str(thread, s.as_ref());
 
-        s.data
-            .as_mut_ptr()
-            .copy_from_nonoverlapping(orig.as_ptr(), orig.len());
-        str.assume_init()
-    }
+    thread.allocate(Str {
+        object: ObjectHeader::new(Type::Str),
+        string,
+    })
 }
 pub fn do_format(
     who: &str,

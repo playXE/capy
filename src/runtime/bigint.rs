@@ -428,6 +428,32 @@ impl BigInt {
         Some(value)
     }
 
+    pub fn i64(self: Handle<Self>) -> Option<i64> {
+        if self.uwords().len() > 2 {
+            return None;
+        }
+
+        let mut value = self.uwords()[0usize] as u64;
+
+        if self.uwords().len() == 2 {
+            value += self.uwords()[1] as u64 * Self::BASE;
+        }
+
+        if self.negative && value == i64::MAX as u64 + 1 {
+            return Some(i64::MIN);
+        }
+
+        if value <= i64::MAX as u64 {
+            return Some(if self.negative {
+                -(value as i64)
+            } else {
+                value as i64
+            });
+        }
+
+        None
+    }
+
     pub fn f64(self: Handle<Self>) -> f64 {
         let mut res = 0.0;
         /*for word in self.uwords().iter().rev() {

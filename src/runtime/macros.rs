@@ -46,7 +46,7 @@ use crate::{
     scm_append, scm_append1, scm_for_each,
     vm::callframe::CallFrame,
 };
-use once_cell::sync::Lazy;
+use once_cell::sync::{Lazy, OnceCell};
 use rsgc::{
     heap::{heap, root_processor::SimpleRoot},
     prelude::{Allocation, Handle, Object},
@@ -1430,29 +1430,37 @@ extern "C" fn make_er_transformer_proc(cfr: &mut CallFrame) -> ScmResult {
     ScmResult::ok(xformer)
 }
 
-pub static MAKE_ER_TRANSFORMER_TOPLEVEL: Lazy<Value> = Lazy::new(|| {
-    scm_make_closed_native_procedure(
-        Thread::current(),
-        "%make-er-transformer-toplevel.".intern().into(),
-        make_er_transformer_toplevel_proc,
-        4,
-        4,
-        &[],
-    )
-    .into()
-});
+pub static MAKE_ER_TRANSFORMER_TOPLEVEL: OnceCell<Value> = OnceCell::new();
 
-pub static MAKE_ER_TRANSFORMER: Lazy<Value> = Lazy::new(|| {
-    scm_make_closed_native_procedure(
-        Thread::current(),
-        "%make-er-transformer.".intern().into(),
-        make_er_transformer_proc,
-        3,
-        3,
-        &[],
-    )
-    .into()
-});
+pub fn get_make_er_transformer_toplevel() -> Value {
+    *MAKE_ER_TRANSFORMER_TOPLEVEL.get_or_init(|| {
+        scm_make_closed_native_procedure(
+            Thread::current(),
+            "%make-er-transformer-toplevel.".intern().into(),
+            make_er_transformer_toplevel_proc,
+            4,
+            4,
+            &[],
+        )
+        .into()
+    })
+}
+
+pub static MAKE_ER_TRANSFORMER: OnceCell<Value> = OnceCell::new();
+
+pub fn get_make_er_transformer() -> Value {
+    *MAKE_ER_TRANSFORMER.get_or_init(|| {
+        scm_make_closed_native_procedure(
+            Thread::current(),
+            "%make-er-transformer.".intern().into(),
+            make_er_transformer_proc,
+            3,
+            3,
+            &[],
+        )
+        .into()
+    })
+}
 
 pub(crate) fn init_macros() {
     let module = scm_capy_module().module();
@@ -1462,7 +1470,7 @@ pub(crate) fn init_macros() {
     scm_define(module, "free-identifier=?".intern(), subr).unwrap();
 
     heap::heap().add_root(SimpleRoot::new("macros", "mc", |proc| {
-        MAKE_ER_TRANSFORMER.trace(proc.visitor());
-        MAKE_ER_TRANSFORMER_TOPLEVEL.trace(proc.visitor());
+        MAKE_ER_TRANSFORMER.get().map(|x| x.trace(proc.visitor()));
+        MAKE_ER_TRANSFORMER_TOPLEVEL.get().map(|x| x.trace(proc.visitor()));
     }));
 }

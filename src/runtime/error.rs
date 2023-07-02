@@ -14,7 +14,7 @@ use crate::{
         fun::scm_make_subr,
         module::scm_define,
         object::MAX_ARITY,
-        structure::{force_struct_type_info, make_struct_values, make_struct_names_from_array},
+        structure::{force_struct_type_info, make_struct_names_from_array, make_struct_values},
         symbol::Intern,
     },
     vm::{callframe::CallFrame, scm_vm},
@@ -25,7 +25,10 @@ use super::{
     module::scm_capy_module,
     object::{ScmResult, Type},
     string::make_string,
-    structure::{make_struct_instance_, STRUCT_EXPTIME, STRUCT_NO_MAKE_PREFIX, STRUCT_NO_SET, make_simple_struct_instance_from_array},
+    structure::{
+        make_simple_struct_instance_from_array, make_struct_instance_, STRUCT_EXPTIME,
+        STRUCT_NO_MAKE_PREFIX, STRUCT_NO_SET,
+    },
     value::Value,
 };
 
@@ -175,7 +178,6 @@ pub const EXN_BREAK_FIELDS: [&'static str; 1] = ["continuation"];
 pub const EXN_FLAGS: i32 = STRUCT_EXPTIME | STRUCT_NO_SET | STRUCT_NO_MAKE_PREFIX;
 
 pub static EXN_TABLE: Lazy<[ExnRec; Exception::Other as usize]> = Lazy::new(|| {
-    
     let mut exn_table = [ExnRec {
         args: 0,
         typ: Value::encode_null_value(),
@@ -753,8 +755,6 @@ extern "C" fn raise_range_error(cfr: &mut CallFrame) -> ScmResult {
     do_raise_range_error("raise-range-error", cfr.arguments())
 }
 
-
-
 const MAX_MISMATCH_EXTRAS: usize = 5;
 
 pub fn contract_error<'a, T>(name: &str, msg: &str, args: &'a [&'a dyn Any]) -> Result<T, Value> {
@@ -1160,7 +1160,14 @@ extern "C" fn raise_result_arity_error(cfr: &mut CallFrame) -> ScmResult {
         args[0].strsym()
     } else {
         return ScmResult::err(
-            wrong_contract::<()>("raise-result-arity-error", "(or/c #f symbol?)", 0, args.len() as _, args).unwrap_err()
+            wrong_contract::<()>(
+                "raise-result-arity-error",
+                "(or/c #f symbol?)",
+                0,
+                args.len() as _,
+                args,
+            )
+            .unwrap_err(),
         );
     };
 
@@ -1169,12 +1176,19 @@ extern "C" fn raise_result_arity_error(cfr: &mut CallFrame) -> ScmResult {
     } else if args[1].is_bignum() && !args[1].bignum().is_negative() {
         ((-1i32 as u32) >> 1) as i32
     } else {
-        -1 
+        -1
     };
 
     if expected < 1 {
         return ScmResult::err(
-            wrong_contract::<()>("raise-result-arity-error", "exact-nonnegative-integer?", 1, args.len() as _, args).unwrap_err()
+            wrong_contract::<()>(
+                "raise-result-arity-error",
+                "exact-nonnegative-integer?",
+                1,
+                args.len() as _,
+                args,
+            )
+            .unwrap_err(),
         );
     }
 
@@ -1184,26 +1198,56 @@ extern "C" fn raise_result_arity_error(cfr: &mut CallFrame) -> ScmResult {
         args[2].strsym()
     } else {
         return ScmResult::err(
-            wrong_contract::<()>("raise-result-arity-error", "(or/c #f string?)", 2, args.len() as _, args).unwrap_err()
+            wrong_contract::<()>(
+                "raise-result-arity-error",
+                "(or/c #f string?)",
+                2,
+                args.len() as _,
+                args,
+            )
+            .unwrap_err(),
         );
     };
 
-    ScmResult::err(wrong_return_arity_impl(where_, expected, args.len() as i32 - 3, Some(&args[2..]), detail).unwrap_err())
+    ScmResult::err(
+        wrong_return_arity_impl(
+            where_,
+            expected,
+            args.len() as i32 - 3,
+            Some(&args[2..]),
+            detail,
+        )
+        .unwrap_err(),
+    )
 }
 
 pub static SRCLOC: Lazy<Value> = Lazy::new(|| {
-    let typ = crate::runtime::structure::make_struct_type_from_string("srcloc", Value::encode_bool_value(false), 4, false.into(),false.into()).unwrap();
+    let typ = crate::runtime::structure::make_struct_type_from_string(
+        "srcloc",
+        Value::encode_bool_value(false),
+        4,
+        false.into(),
+        false.into(),
+    )
+    .unwrap();
     typ
 });
 
 pub fn make_srcloc(source: Value, line: i32, column: i32, position: i32) -> Value {
-    make_simple_struct_instance_from_array(&[source, Value::encode_int32(line), Value::encode_int32(column), Value::encode_int32(position)], *SRCLOC)
+    make_simple_struct_instance_from_array(
+        &[
+            source,
+            Value::encode_int32(line),
+            Value::encode_int32(column),
+            Value::encode_int32(position),
+        ],
+        *SRCLOC,
+    )
 }
-
 
 pub(crate) fn init_error() {
     let capy = scm_capy_module().module();
-    
+
     macro_rules! defproc {
         ($($name: ident, $lit: literal, $mina: expr, $maxa: expr)*) => {
             $(
@@ -1229,10 +1273,16 @@ pub(crate) fn init_error() {
     let _ = *EXN_TABLE;
     heap().add_root(SimpleRoot::new("exn-table", "exns", |processor| {
         let visitor = processor.visitor();
-        for rec in EXN_TABLE.iter() {
-            rec.exptime.trace(visitor);
-            rec.names.trace(visitor);
-            rec.typ.trace(visitor);
+        if let Some(table) = Lazy::get(&EXN_TABLE) {
+            for rec in table.iter() {
+                rec.exptime.trace(visitor);
+                rec.names.trace(visitor);
+                rec.typ.trace(visitor);
+            }
+        }
+
+        if let Some(srcloc) = Lazy::get(&SRCLOC) {
+            srcloc.trace(visitor);
         }
     }));
     for exn in EXN_TABLE.iter() {
@@ -1249,7 +1299,12 @@ pub(crate) fn init_error() {
     }
 
     let typ = *SRCLOC;
-    let mut names = make_struct_names_from_array("srcloc", 4, &["source", "line", "column", "position"], EXN_FLAGS);
+    let mut names = make_struct_names_from_array(
+        "srcloc",
+        4,
+        &["source", "line", "column", "position"],
+        EXN_FLAGS,
+    );
     let values = make_struct_values(typ, &mut names, EXN_FLAGS);
 
     for j in (0..names.len() - 1).rev() {
@@ -1257,6 +1312,4 @@ pub(crate) fn init_error() {
         let value = values.values_ref(j);
         scm_define(capy, name.strsym().intern(), value).unwrap();
     }
-
-
 }

@@ -1,11 +1,8 @@
-(define (cadr x) (car (cdr x)))
-(define (cddr x) (cdr (cdr x)))
+(define (display x . rest)
+    (put-string (current-output-port) (format "~a" x)))
 
-(define-syntax when 
-    (er-macro-transformer
-        (lambda (expr rename compare)
-            (let ((test (car (cdr expr)))
-                  (body (cdr (cdr expr))))
-                (list (rename 'if) test (cons (rename 'begin) body))))))
+(define (newline)
+    (put-string (current-output-port) "\n"))
 
-(when 1 (format "hello"))
+(display "Hello, world!")
+(newline)
