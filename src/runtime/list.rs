@@ -11,11 +11,11 @@ use crate::{
 use rsgc::{prelude::Handle, system::arraylist::ArrayList, thread::Thread};
 
 use super::{
+    error::wrong_contract,
     fun::scm_make_subr_inliner,
     module::{scm_define, scm_scheme_module},
     object::{ScmResult, MAX_ARITY},
     symbol::Intern,
-    violation::raise_argument_error,
 };
 
 pub fn scm_cons(t: &mut Thread, car: Value, cdr: Value) -> Value {
@@ -489,7 +489,9 @@ macro_rules! scm_append {
 
 extern "C" fn car(cfr: &mut CallFrame) -> ScmResult {
     if unlikely(!cfr.argument(0).is_pair()) {
-        return ScmResult::err(raise_argument_error("car", "pair?", cfr.argument(0)));
+        return ScmResult::err(
+            wrong_contract::<()>("car", "pair?", 0, 1, cfr.arguments()).unwrap_err(),
+        );
     }
 
     ScmResult::ok(cfr.argument(0).car())
@@ -497,7 +499,9 @@ extern "C" fn car(cfr: &mut CallFrame) -> ScmResult {
 
 extern "C" fn cdr(cfr: &mut CallFrame) -> ScmResult {
     if unlikely(!cfr.argument(0).is_pair()) {
-        return ScmResult::err(raise_argument_error("cdr", "pair?", cfr.argument(0)));
+        return ScmResult::err(
+            wrong_contract::<()>("cdr", "pair?", 0, 1, cfr.arguments()).unwrap_err(),
+        );
     }
 
     ScmResult::ok(cfr.argument(0).cdr())
@@ -505,7 +509,9 @@ extern "C" fn cdr(cfr: &mut CallFrame) -> ScmResult {
 
 extern "C" fn set_car(cfr: &mut CallFrame) -> ScmResult {
     if unlikely(!cfr.argument(0).is_pair()) {
-        return ScmResult::err(raise_argument_error("set-car!", "pair?", cfr.argument(0)));
+        return ScmResult::err(
+            wrong_contract::<()>("set-car!", "pair?", 0, 2, cfr.arguments()).unwrap_err(),
+        );
     }
 
     Thread::current().write_barrier(cfr.argument(0).pair());
@@ -516,7 +522,9 @@ extern "C" fn set_car(cfr: &mut CallFrame) -> ScmResult {
 
 extern "C" fn set_cdr(cfr: &mut CallFrame) -> ScmResult {
     if unlikely(!cfr.argument(0).is_pair()) {
-        return ScmResult::err(raise_argument_error("set-cdr!", "pair?", cfr.argument(0)));
+        return ScmResult::err(
+            wrong_contract::<()>("set-cdr!", "pair?", 0, 2, cfr.arguments()).unwrap_err(),
+        );
     }
 
     Thread::current().write_barrier(cfr.argument(0).pair());
@@ -727,4 +735,29 @@ pub(crate) fn init_list() {
     });
 
     scm_define(module, "null?".intern(), subr).unwrap();
+}
+
+pub fn scm_assoc_ref(
+    list: Value,
+    val: Value,
+    mut eq: impl FnMut(Value, Value) -> bool,
+    default: Option<Value>,
+) -> Value {
+    let mut list = list;
+
+    while !list.is_null() {
+        let pair = list.car();
+        let key = pair.car();
+
+        if eq(key, val) {
+            return pair.cdr();
+        }
+
+        list = list.cdr();
+    }
+
+    match default {
+        Some(default) => default,
+        None => false.into(),
+    }
 }

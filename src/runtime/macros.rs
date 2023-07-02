@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! # R5RS Macro
 //! Keeping hygienic reference
 //!
@@ -30,7 +31,7 @@ use std::{
 
 use crate::{
     compaux::{scm_identifier_env, scm_make_identifier, scm_unwrap_syntax, scm_wrap_identifier},
-    compile::{cenv_frames, cenv_module, env_lookup_int},
+    compile::{cenv_frames, cenv_module, env_lookup_int, make_cenv},
     runtime::cmp::scm_equal,
     runtime::fun::scm_make_closed_native_procedure,
     runtime::list::{
@@ -40,16 +41,25 @@ use crate::{
     runtime::module::scm_identifier_to_bound_gloc,
     runtime::object::{Identifier, Macro, Module, ObjectHeader, ScmResult, Type},
     runtime::string::make_string,
-    runtime::symbol::make_symbol,
     runtime::value::Value,
+    runtime::{symbol::make_symbol, value::scm_box},
     scm_append, scm_append1, scm_for_each,
     vm::callframe::CallFrame,
 };
 use once_cell::sync::Lazy;
 use rsgc::{
+    heap::{heap, root_processor::SimpleRoot},
     prelude::{Allocation, Handle, Object},
     system::array::Array,
     thread::Thread,
+};
+
+use super::{
+    fun::scm_make_subr,
+    list::scm_assoc_ref,
+    module::{scm_capy_module, scm_define},
+    symbol::Intern,
+    vector::scm_vector_copy,
 };
 
 // no need to trace these symbols, they are registered in the global symbol table
@@ -1184,4 +1194,275 @@ pub fn scm_make_macro(t: &mut Thread, transformer: Value) -> Handle<Macro> {
         header: ObjectHeader::new(Type::Macro),
         transformer,
     })
+}
+
+extern "C" fn free_identifier_eq(cfr: &mut CallFrame) -> ScmResult {
+    let id1 = cfr.argument(0);
+    let id2 = cfr.argument(1);
+    if !id1.is_wrapped_identifier() && !id2.is_wrapped_identifier() {
+        return ScmResult::ok(false);
+    }
+
+    if id1 == id2 {
+        return ScmResult::ok(true);
+    }
+
+    let b1 = env_lookup_int(
+        id1,
+        id1.identifier().module.module(),
+        scm_identifier_env(id1.identifier()),
+    );
+    let b2 = env_lookup_int(
+        id2,
+        id2.identifier().module.module(),
+        scm_identifier_env(id2.identifier()),
+    );
+
+    if b1.is_wrapped_identifier() && b2.is_wrapped_identifier() {
+        let g1 = scm_identifier_to_bound_gloc(id1.identifier());
+        let g2 = scm_identifier_to_bound_gloc(id2.identifier());
+
+        if let (Some(g1), Some(g2)) = (g1, g2) {
+            return ScmResult::ok(g1.as_ptr() == g2.as_ptr());
+        } else {
+            return ScmResult::ok(scm_unwrap_syntax(id1, false) == scm_unwrap_syntax(id2, false));
+        }
+    }
+
+    ScmResult::ok(b1 == b2)
+}
+
+fn er_rename(form: Value, dict: Value, module: Value, env: Value) -> (Value, Value) {
+    if form.is_identifier() {
+        let id = scm_assoc_ref(dict, form, |x, y| x == y, None);
+        if !id.is_false() {
+            (id, dict)
+        } else {
+            let id = scm_make_identifier(form, Some(module.module()), env);
+            (
+                id.into(),
+                scm_acons(Thread::current(), form, id.into(), dict),
+            )
+        }
+    } else if form.is_pair() {
+        let (a, dict) = er_rename(form.car(), dict, module, env);
+        let (d, dict) = er_rename(form.cdr(), dict, module, env);
+
+        if a == form.car() && d == form.cdr() {
+            (form, dict)
+        } else {
+            (scm_cons(Thread::current(), a, d), dict)
+        }
+    } else if form.is_vector() {
+        let t = Thread::current();
+        let mut dict = dict;
+        let mut vec = form;
+        let mut copied = false;
+        for i in 0..form.vector_len() {
+            let (e, ndict) = er_rename(form.vector_ref(i), dict, module, env);
+            if e == form.vector_ref(i) {
+                continue;
+            }
+            if !copied {
+                vec = scm_vector_copy(t, vec.vector()).into();
+                copied = true;
+            }
+            t.write_barrier(form.vector());
+            form.vector_set(i, e);
+            dict = ndict;
+        }
+
+        (vec, dict)
+    } else {
+        (form, dict)
+    }
+}
+
+pub fn make_er_transformer<const HAS_INJECT: bool>(xformer: Value, def_env: Value) -> Value {
+    let def_module = cenv_module(def_env);
+    let def_frames = cenv_frames(def_env);
+
+    extern "C" fn expand<const HAS_INJECT: bool>(cfr: &mut CallFrame) -> ScmResult {
+        let form = cfr.argument(0);
+        let use_env = cfr.argument(1);
+
+        let use_module = cenv_module(use_env);
+        let use_frames = cenv_frames(use_env);
+
+        let def_module = cfr.callee().closed_native_procedure()[0];
+        let def_frames = cfr.callee().closed_native_procedure()[1];
+        let xformer = cfr.callee().closed_native_procedure()[2];
+
+        let dict = scm_box(Value::encode_null_value());
+
+        let rename_proc: Value = scm_make_closed_native_procedure(
+            Thread::current(),
+            "%rename".intern().into(),
+            {
+                extern "C" fn rename(cfr: &mut CallFrame) -> ScmResult {
+                    let sym = cfr.argument(0);
+                    let clos = cfr.callee().closed_native_procedure();
+
+                    let dict = clos[0];
+                    let def_module = clos[1];
+                    let def_frames = clos[2];
+
+                    let (id, dict_) = er_rename(sym, dict.box_ref(), def_module, def_frames);
+                    Thread::current().write_barrier(dict.r#box());
+                    dict.box_set(dict_);
+
+                    ScmResult::ok(id)
+                }
+                rename
+            },
+            1,
+            1,
+            &[dict, def_module, def_frames],
+        )
+        .into();
+
+        let compare_proc: Value = scm_make_closed_native_procedure(
+            Thread::current(),
+            "%compare".intern().into(),
+            {
+                extern "C" fn compare(cfr: &mut CallFrame) -> ScmResult {
+                    let a = cfr.argument(0);
+                    let b = cfr.argument(1);
+
+                    let use_module = cfr.callee().closed_native_procedure()[0];
+                    let use_frames = cfr.callee().closed_native_procedure()[1];
+
+                    ScmResult::ok(scm_er_compare(a, b, use_module.module(), use_frames))
+                }
+                compare
+            },
+            2,
+            2,
+            &[use_module.into(), use_frames],
+        )
+        .into();
+
+        let inject = if HAS_INJECT {
+            scm_make_closed_native_procedure(
+                Thread::current(),
+                "%inject".intern().into(),
+                {
+                    extern "C" fn inject(cfr: &mut CallFrame) -> ScmResult {
+                        let sym = cfr.argument(0);
+                        let clos = cfr.callee().closed_native_procedure();
+
+                        let dict = clos[0];
+                        let use_module = clos[1];
+                        let use_frames = clos[2];
+
+                        let (id, dict_) = er_rename(sym, dict.box_ref(), use_module, use_frames);
+                        Thread::current().write_barrier(dict.r#box());
+                        dict.box_set(dict_);
+
+                        ScmResult::ok(id)
+                    }
+                    inject
+                },
+                1,
+                1,
+                &[dict, use_module.into(), use_frames],
+            )
+            .into()
+        } else {
+            Value::encode_bool_value(false)
+        };
+
+        if HAS_INJECT {
+            ScmResult::tail(xformer, &[form, rename_proc, compare_proc, inject])
+        } else {
+            ScmResult::tail(xformer, &[form, rename_proc, compare_proc])
+        }
+    }
+
+    let transformer = scm_make_closed_native_procedure(
+        Thread::current(),
+        "%er-transformer".intern().into(),
+        expand::<HAS_INJECT>,
+        2,
+        2,
+        &[def_module.into(), def_frames, xformer],
+    );
+
+    scm_make_macro(Thread::current(), transformer.into()).into()
+}
+
+pub fn make_er_transformer_toplevel<const HAS_INJECT: bool>(
+    xformer: Value,
+    def_module: Value,
+    _def_name: Value,
+) -> Value {
+    make_er_transformer::<HAS_INJECT>(
+        xformer,
+        make_cenv(def_module.module(), Value::encode_null_value()),
+    )
+}
+
+extern "C" fn make_er_transformer_toplevel_proc(cfr: &mut CallFrame) -> ScmResult {
+    let xformer = cfr.argument(0);
+    let def_module = cfr.argument(1);
+    let def_name = cfr.argument(2);
+    let has_inject = cfr.argument(3);
+
+    let xformer = if !has_inject.is_false() {
+        make_er_transformer_toplevel::<true>(xformer, def_module, def_name)
+    } else {
+        make_er_transformer_toplevel::<false>(xformer, def_module, def_name)
+    };
+
+    ScmResult::ok(xformer)
+}
+
+extern "C" fn make_er_transformer_proc(cfr: &mut CallFrame) -> ScmResult {
+    let xformer = cfr.argument(0);
+    let def_env = cfr.argument(1);
+    let has_inject = cfr.argument(2);
+    let xformer = if !has_inject.is_false() {
+        make_er_transformer::<true>(xformer, def_env)
+    } else {
+        make_er_transformer::<false>(xformer, def_env)
+    };
+
+    ScmResult::ok(xformer)
+}
+
+pub static MAKE_ER_TRANSFORMER_TOPLEVEL: Lazy<Value> = Lazy::new(|| {
+    scm_make_closed_native_procedure(
+        Thread::current(),
+        "%make-er-transformer-toplevel.".intern().into(),
+        make_er_transformer_toplevel_proc,
+        4,
+        4,
+        &[],
+    )
+    .into()
+});
+
+pub static MAKE_ER_TRANSFORMER: Lazy<Value> = Lazy::new(|| {
+    scm_make_closed_native_procedure(
+        Thread::current(),
+        "%make-er-transformer.".intern().into(),
+        make_er_transformer_proc,
+        3,
+        3,
+        &[],
+    )
+    .into()
+});
+
+pub(crate) fn init_macros() {
+    let module = scm_capy_module().module();
+
+    let subr = scm_make_subr("free-identifier=?", free_identifier_eq, 2, 2);
+
+    scm_define(module, "free-identifier=?".intern(), subr).unwrap();
+
+    heap::heap().add_root(SimpleRoot::new("macros", "mc", |proc| {
+        MAKE_ER_TRANSFORMER.trace(proc.visitor());
+        MAKE_ER_TRANSFORMER_TOPLEVEL.trace(proc.visitor());
+    }));
 }

@@ -81,3 +81,29 @@ pub fn make_values(thread: &mut Thread, values: &[Value]) -> Handle<Vector> {
         vec.assume_init()
     }
 }
+
+pub fn make_values_n(thread: &mut Thread, n: usize) -> Handle<Vector> {
+    let mut vec = thread.allocate_varsize::<Vector>(n);
+
+    unsafe {
+        let v = vec.assume_init_mut();
+        v.object = ObjectHeader::new(Type::Values);
+        for i in 0..n {
+            v.data.as_mut_ptr().add(i).write(Value::encode_undefined_value());
+        }
+        vec.assume_init()
+    }
+}
+
+pub fn scm_vector_copy(thread: &mut Thread, v: Handle<Vector>) -> Handle<Vector> {
+    let mut vec = thread.allocate_varsize::<Vector>(v.len());
+
+    unsafe {
+        let v = vec.assume_init_mut();
+        v.object = ObjectHeader::new(Type::Vector);
+        for i in 0..v.len() {
+            v.data.as_mut_ptr().add(i).write(v.data[i]);
+        }
+        vec.assume_init()
+    }
+}

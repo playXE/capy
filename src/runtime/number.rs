@@ -341,3 +341,15 @@ pub(crate) fn init_number() {
     });
     scm_define(module, "exact?".intern(), proc).unwrap();
 }
+
+
+pub fn scm_nonnegative_exact_integer(val: Value) -> bool {
+    if val.is_int32() {
+        val.get_int32() >= 0
+    } else if val.is_bignum() {
+        !val.bignum().is_negative()
+    } else {
+        false
+    }
+}
+

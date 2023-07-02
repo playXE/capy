@@ -27,6 +27,9 @@ use rsgc::sync::mutex::{Condvar, RawMutex};
 
 use crate::runtime::object::{Module, ScmResult};
 use crate::runtime::value::Value;
+
+use self::callframe::CallFrame;
+#[repr(C)]
 pub struct VM {
     thread: &'static mut Thread,
     state: i32,
@@ -43,6 +46,11 @@ pub struct VM {
     /// Trampoline from native to Scheme support
     tail_rator: Value,
     tail_rands: ArrayList<Value>,
+    pub(crate) top_call_frame: *mut CallFrame,
+    pub(crate) top_entry_frame: *mut CallFrame,
+    pub(crate) prev_top_call_frame: *mut CallFrame,
+    pub(crate) prev_top_entry_frame: *mut CallFrame,
+    
 }
 
 impl VM {
@@ -64,6 +72,10 @@ impl VM {
             tag: ScmResult::TAIL,
             value: Value::encode_undefined_value(),
         }
+    }
+
+    pub fn mutator(&mut self) -> &mut Thread {
+        self.thread
     }
 }
 
@@ -129,6 +141,10 @@ pub fn scm_init_vm() {
             entry: 0,
             tail_rands: ArrayList::new(Thread::current()),
             tail_rator: Value::encode_undefined_value(),
+            top_call_frame: null_mut(),
+            prev_top_entry_frame: null_mut(),
+            prev_top_call_frame: null_mut(),
+            top_entry_frame: null_mut()
         });
     }
 
@@ -158,7 +174,9 @@ pub fn scm_set_current_module(module: Option<Handle<Module>>) {
 
 pub mod callframe;
 pub mod interpreter;
+pub mod stacktrace;
 pub mod setjmp;
+//pub mod llint;
 
 /// A simple counter used to identify different VM entrypoints.
 ///

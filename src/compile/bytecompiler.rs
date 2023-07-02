@@ -13,17 +13,15 @@ use rsgc::{
 use crate::{
     compile::{make_cenv, pass1::pass1, ref_count_lvars, LetScope},
     op::{disassembly, Opcode},
-    runtime::fun::make_procedure,
-    //cruntime::string::make_string,
-    runtime::value::Value,
+    raise_exn,
+    runtime::object::{CodeBlock, Module, ObjectHeader, Type, MAX_ARITY},
     runtime::vector::make_vector_from_slice,
-    runtime::{
-        object::{CodeBlock, Module, ObjectHeader, Type, MAX_ARITY},
-        violation::raise_error,
-    },
+    runtime::{error::make_srcloc, fun::make_procedure},
+    //cruntime::string::make_string,
+    runtime::{string::make_string, value::Value},
 };
 
-use super::{r7rs_to_value, IForm, LVar, Lambda, AsmOperand};
+use super::{r7rs_to_value, AsmOperand, IForm, LVar, Lambda};
 
 struct BindingGroup {
     bindings: HashMap<usize, usize>,
@@ -138,23 +136,23 @@ impl ByteCompiler {
                 self.literals.push(thread, constant);
             }
 
-            self.code.push(Opcode::PushConstant as _);
+            self.emit_simple(Opcode::PushConstant);
             self.code.extend_from_slice(&(literal as u16).to_le_bytes());
         }
     }
 
     pub fn emit_call(&mut self, argc: u16) {
-        self.code.push(Opcode::Call as _);
+        self.emit_simple(Opcode::Call);
         self.code.extend_from_slice(&argc.to_le_bytes());
     }
 
     pub fn emit_tail_call(&mut self, argc: u16) {
-        self.code.push(Opcode::TailCall as _);
+        self.emit_simple(Opcode::TailCall);
         self.code.extend_from_slice(&argc.to_le_bytes());
     }
 
     pub fn emit_simple(&mut self, opcode: Opcode) {
-        self.code.push(opcode as _);
+        self.code.extend_from_slice(&(opcode as u8).to_le_bytes());
     }
 
     pub fn emit_ldarg(&mut self, arg: u16) {
@@ -191,7 +189,7 @@ impl ByteCompiler {
 
             ptr.assume_init()
         };
-        if true {
+        if !true {
             disassembly(
                 code,
                 termcolor::StandardStream::stderr(termcolor::ColorChoice::Always),
@@ -221,6 +219,21 @@ impl ByteCompiler {
                 parent: None,
             }),
         };
+        closure_compiler.emit_simple(Opcode::Enter);
+
+        let assert_argcount = lam.lvars.len() - lam.optarg as usize;
+
+        if lam.optarg {
+            closure_compiler.emit_simple(Opcode::AssertMinArgCount);
+            closure_compiler
+                .code
+                .extend_from_slice(&(assert_argcount as u16).to_le_bytes());
+        } else {
+            closure_compiler.emit_simple(Opcode::AssertArgCount);
+            closure_compiler
+                .code
+                .extend_from_slice(&(assert_argcount as u16).to_le_bytes());
+        }
 
         for ix in 0..lam.lvars.len() - lam.optarg as usize {
             closure_compiler.emit_ldarg(ix as _);
@@ -241,7 +254,7 @@ impl ByteCompiler {
                 .code
                 .extend_from_slice(&(lam.lvars.len() as u16 - 1).to_le_bytes());
             let ix = closure_compiler.next_local_index();
-            
+
             closure_compiler.bind(lvar, ix);
         }
 
@@ -265,6 +278,7 @@ impl ByteCompiler {
 
         closure_compiler.compile_body(thread, lam.body, lam.lvars.len());
         let mut code = closure_compiler.finalize(thread);
+        code.name = lam.name;
         code.mina = lam.lvars.len() as _;
         if lam.optarg {
             code.maxa = MAX_ARITY;
@@ -543,7 +557,6 @@ impl ByteCompiler {
                                 self.code.extend_from_slice(&(ix as u16).to_le_bytes());
                             }
                         }
-
                     }
                 }
 
@@ -610,7 +623,6 @@ impl ByteCompiler {
     }
 
     pub fn compile_body(&mut self, thread: &mut Thread, expr: Handle<IForm>, argc: usize) {
-        self.emit_simple(Opcode::Enter);
         let patch_alloc = self.code.len();
         for _ in 0..3 {
             self.emit_simple(Opcode::NoOp);
@@ -648,27 +660,44 @@ impl ByteCompiler {
                 Ok(x) => x,
                 Err(e) => match e {
                     ParseError::Lexical(loc, err) => {
-                        return Err(raise_error(
+                        /*return Err(raise_error(
                             "compile",
                             &format!(
                                 "lexical error at {}:{}:{}: {}",
                                 file, loc.line, loc.col, err
                             ),
                             0,
-                        ));
+                        ));*/
+                        return raise_exn!(
+                            FailRead,
+                            &[make_srcloc(
+                                make_string(thread, file).into(),
+                                loc.line as _,
+                                loc.col as _,
+                                0i32)
+                            ],
+                            "{}",
+                            err
+                        )
                     }
 
                     ParseError::Syntax(loc, err) => {
-                        return Err(raise_error(
-                            "compile",
-                            &format!("syntax error at {}:{}:{}: {}", file, loc.line, loc.col, err),
-                            0,
-                        ));
+                        return raise_exn!(
+                            FailRead,
+                            &[make_srcloc(
+                                make_string(thread, file).into(),
+                                loc.line as _,
+                                loc.col as _,
+                                0i32)
+                            ],
+                            "{}",
+                            err
+                        )
                     }
                 },
             };
-
-            let expr = r7rs_to_value(thread, &expr);
+            let file = make_string(thread, file);
+            let expr = r7rs_to_value(thread, file.into(), &expr);
 
             let form = pass1(expr, cenv)?;
 
@@ -696,16 +725,18 @@ impl ByteCompiler {
 
     pub fn compile_r7rs_expr(
         thread: &mut Thread,
+        filename: Value,
         module: Handle<Module>,
         expr: &Expr<NoIntern>,
     ) -> Result<Value, Value> {
         let cenv = make_cenv(module, Value::encode_null_value());
 
-        let form = pass1(r7rs_to_value(thread, expr), cenv)?;
+        let form = pass1(r7rs_to_value(thread, filename, expr), cenv)?;
 
         ref_count_lvars(form);
 
         let mut compiler = Self::new(thread);
+        compiler.emit_simple(Opcode::Enter);
         compiler.compile_body(thread, form, 0);
 
         let code = compiler.finalize(thread);

@@ -94,6 +94,8 @@ extern "C" fn equal(cfr: &mut CallFrame) -> ScmResult {
     ScmResult::ok(scm_equal(cfr.argument(0), cfr.argument(1)))
 }
 
+
+
 pub(crate) fn init_cmp() {
     let module = scm_scheme_module().module();
 

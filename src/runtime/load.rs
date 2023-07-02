@@ -102,7 +102,8 @@ pub fn scm_vm_load(
             &format!("load: error reading file {}: {}", path_to_use, err),
         )
         .into()
-    })?;
+    })?;    
+    let fname = make_string(t, &path_to_use);
 
     let mut i = r7rs_parser::expr::NoIntern;
     let mut p = r7rs_parser::parser::Parser::new(&mut i, &source, false);
@@ -116,7 +117,7 @@ pub fn scm_vm_load(
 
         match p.parse(true) {
             Ok(val) => {
-                let val = r7rs_to_value(t, &val);
+                let val = r7rs_to_value(t, fname.into(), &val);
                 let val = crate::compile::pass1::pass1(val, cenv)?;
                 ref_count_lvars(val);
                 Ok(Some(val))

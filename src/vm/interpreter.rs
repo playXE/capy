@@ -12,19 +12,18 @@ use crate::compaux::{
     scm_identifier_global_ref, scm_identifier_global_set, scm_outermost_identifier,
 };
 use crate::op::Opcode;
+use crate::runtime::error::{wrong_count, wrong_contract};
 use crate::runtime::fun::make_closed_procedure;
 use crate::runtime::list::{scm_cons, scm_is_list};
 use crate::runtime::module::{scm_make_binding, SCM_BINDING_CONST};
 use crate::runtime::number::{scm_is_exact, scm_is_integer};
 use crate::runtime::object::{
     check_arity, make_box, wrong_arity, ClosedNativeProcedure, CodeBlock, Module, NativeProcedure,
-    Procedure, Type,
+    Procedure, Type, MAX_ARITY,
 };
 use crate::runtime::string::make_string;
-use crate::runtime::tuple::scm_make_tuple;
 use crate::runtime::value::Value;
 use crate::runtime::vector::{make_vector, make_vector_from_slice};
-use crate::runtime::violation::{raise_argument_error, raise_error};
 
 /// Virtual machine interpreter loop.
 ///
@@ -128,6 +127,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                 ));
             }
             vm.sp = sp;
+            vm.top_call_frame = cfr;
             let result = if !callee.is_closed_native_procedure() {
                 (proc.callback)(&mut *cfr)
             } else {
@@ -181,6 +181,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                 continue 'eval;
             }
         } else {
+            #[cold]
             fn not_a_function(vm: &mut VM, callee: Value) -> Result<Value, Value> {
                 Err(Value::encode_object_value(make_string(
                     vm.thread,
@@ -239,6 +240,12 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
 
             match op {
                 Opcode::NoOp => {}
+                Opcode::Enter
+                | Opcode::EnterCompiling
+                | Opcode::EnterBlacklisted
+                | Opcode::EnterJit => {
+                    // TODO: Check for JIT trampoline
+                }
                 Opcode::Pop => {
                     pop!();
                 }
@@ -604,14 +611,34 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                 Opcode::AssertArgCount => {
                     let argc = read2!();
                     if unlikely(argc != (*cfr).argc.get_int32() as u16) {
-                        return Err(make_string(vm.thread, "wrong number of arguments").into());
+                        return wrong_count(
+                            code_block!().name.strsym(),
+                            code_block!().mina as _, 
+                            if code_block!().maxa >= MAX_ARITY {
+                                -1
+                            } else {
+                                code_block!().maxa as i32
+                            },
+                            (*cfr).argc.get_int32() as _,
+                            (*cfr).arguments()
+                        );
                     }
                 }
 
                 Opcode::AssertMinArgCount => {
                     let argc = read2!();
                     if unlikely(argc > (*cfr).argc.get_int32() as u16) {
-                        return Err(make_string(vm.thread, "wrong number of arguments").into());
+                        return wrong_count(
+                            code_block!().name.strsym(),
+                            code_block!().mina as _, 
+                            if code_block!().maxa >= MAX_ARITY {
+                                -1
+                            } else {
+                                code_block!().maxa as i32
+                            },
+                            (*cfr).argc.get_int32() as _,
+                            (*cfr).arguments()
+                        );
                     }
                 }
 
@@ -758,7 +785,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     let val = pop!();
 
                     if unlikely(!val.is_pair()) {
-                        return Err(raise_argument_error("car", "pair?", val));
+                        return wrong_contract("car", "pair?", 0, 1, &[val]);
                     }
 
                     push!(val.pair().car);
@@ -768,7 +795,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     let val = pop!();
 
                     if unlikely(!val.is_pair()) {
-                        return Err(raise_argument_error("cdr", "pair?", val));
+                        return wrong_contract("cdr", "pair?", 0, 1, &[val]);
                     }
 
                     push!(val.pair().cdr);
@@ -778,7 +805,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     let val = pop!();
                     let cell = pop!();
                     if unlikely(!cell.is_pair()) {
-                        return Err(raise_argument_error("set-car!", "pair?", cell));
+                        return wrong_contract("set-car!", "pair?", 0,2, &[cell, val]);
                     }
 
                     vm.thread.write_barrier(cell.pair());
@@ -789,7 +816,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     let val = pop!();
                     let cell = pop!();
                     if unlikely(!cell.is_pair()) {
-                        return Err(raise_argument_error("set-cdr!", "pair?", cell));
+                        return wrong_contract("set-cdr!", "pair?", 0,2, &[cell, val]);
                     }
 
                     vm.thread.write_barrier(cell.pair());
@@ -834,7 +861,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     push!(Value::encode_bool_value(val.is_undefined()));
                 }
 
-                Opcode::Tuple => {
+                /*Opcode::Tuple => {
                     let n = read2!();
 
                     let mut tuple = scm_make_tuple(vm.thread, n as _);
@@ -852,17 +879,19 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     let tuple = pop!();
 
                     if unlikely(!tuple.is_tuple()) {
-                        return Err(raise_argument_error("tuple-ref", "tuple?", tuple));
+                        return Err();
                     }
 
-                    if unlikely((n as usize)>= tuple.tuple().len()) {
-                        return Err(raise_error("tuple-ref", &format!("index out of bounds: length is {}, index is {}", tuple.tuple().len(), n), 0));
+                    if unlikely((n as usize) >= tuple.tuple().len()) {
+                        return Err(raise_out_of_bounds_error(
+                            "tuple-ref",
+                            n as _,
+                            tuple.tuple().len() as _,
+                        ));
                     }
 
                     push!(tuple.tuple()[n as usize]);
                 }
-
-                
 
                 Opcode::TupleSetI => {
                     let n = read2!();
@@ -872,8 +901,12 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                         return Err(raise_argument_error("tuple-set!", "tuple?", tuple));
                     }
 
-                    if unlikely((n as usize)>= tuple.tuple().len()) {
-                        return Err(raise_error("tuple-set!", &format!("index out of bounds: length is {}, index is {}", tuple.tuple().len(), n), 0));
+                    if unlikely((n as usize) >= tuple.tuple().len()) {
+                        return Err(raise_out_of_bounds_error(
+                            "tuple-set!",
+                            n as _,
+                            tuple.tuple().len() as _,
+                        ));
                     }
 
                     vm.thread.write_barrier(tuple.tuple());
@@ -894,8 +927,12 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
 
                     let n = n.get_int32();
 
-                    if unlikely((n as usize)>= tuple.tuple().len()) || n < 0 {
-                        return Err(raise_error("tuple-ref", &format!("index out of bounds: length is {}, index is {}", tuple.tuple().len(), n), 0));
+                    if unlikely((n as usize) >= tuple.tuple().len()) || n < 0 {
+                        return Err(raise_out_of_bounds_error(
+                            "tuple-ref",
+                            n as _,
+                            tuple.tuple().len() as _,
+                        ));
                     }
 
                     push!(tuple.tuple()[n as usize]);
@@ -915,13 +952,17 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
 
                     let n = n.get_int32();
 
-                    if unlikely((n as usize)>= tuple.tuple().len()) || n < 0 {
-                        return Err(raise_error("tuple-set!", &format!("index out of bounds: length is {}, index is {}", tuple.tuple().len(), n), 0));
+                    if unlikely((n as usize) >= tuple.tuple().len()) || n < 0 {
+                        return Err(raise_out_of_bounds_error(
+                            "tuple-set!",
+                            n as _,
+                            tuple.tuple().len() as _,
+                        ));
                     }
 
                     vm.thread.write_barrier(tuple.tuple());
                     tuple.tuple()[n as usize] = pop!();
-                }
+                }*/
 
                 /*Opcode::IsProperty => {
                     let v = pop!();
@@ -962,6 +1003,11 @@ pub unsafe fn _vm_entry_trampoline(
     let saved = vm.next_entry();
     let sp = vm.sp;
     let saved_module = vm.module;
+    let mut t4 = vm.top_call_frame;
+    vm.prev_top_call_frame = t4;
+    t4 = vm.top_entry_frame;
+    vm.prev_top_entry_frame = t4;
+
     vm.module = module;
 
     let cb = AssertUnwindSafe(|| {
@@ -978,12 +1024,14 @@ pub unsafe fn _vm_entry_trampoline(
         (*cfr).return_pc = null();
         (*cfr).callee = callee;
         (*cfr).argc = Value::encode_int32(args.len() as _);
-
+        vm.top_entry_frame = cfr;
         vm_eval(vm, cfr, 0)
     });
 
     let result = std::panic::catch_unwind(|| cb());
 
+    vm.top_call_frame = vm.prev_top_call_frame;
+    vm.top_entry_frame = vm.prev_top_entry_frame;
     vm.module = saved_module;
     vm.entry = saved;
     vm.sp = sp;

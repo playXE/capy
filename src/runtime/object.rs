@@ -2,10 +2,11 @@ use std::{
     fmt::{Debug, Display, Formatter},
     hash::Hash,
     mem::{offset_of, size_of},
-    ops::{Deref, DerefMut, Index, IndexMut, Try, FromResidual},
+    ops::{Deref, DerefMut, FromResidual, Index, IndexMut, Try}, convert::Infallible,
 };
 
-use rsgc::utils::bitfield::BitField;
+use once_cell::sync::Lazy;
+use rsgc::{utils::bitfield::BitField, heap::{heap, root_processor::SimpleRoot}};
 use rsgc::{
     prelude::{Allocation, Handle, Object},
     system::{array::Array, collections::hashmap::HashMap},
@@ -13,7 +14,10 @@ use rsgc::{
 };
 
 use crate::{
-    compile::IForm, runtime::string::make_string, runtime::value::Value, vm::{callframe::CallFrame, scm_vm},
+    compile::IForm,
+    runtime::string::make_string,
+    runtime::value::Value,
+    vm::{callframe::CallFrame, scm_vm},
 };
 
 pub const EXTENDED_PAIR_BIT: usize = 0;
@@ -81,6 +85,14 @@ pub enum Type {
     StructProperty,
     Parameter,
     Tuple,
+    BinaryInputPort,
+    BinaryOutputPort,
+    TextInputPort,
+    TextOutputPort,
+    SyntaxLocation,
+    Port,
+
+    EofObject,
 }
 
 #[repr(C)]
@@ -609,7 +621,6 @@ impl Allocation for CodeBlock {
 #[repr(C)]
 pub struct Procedure {
     pub(crate) header: ObjectHeader,
-    pub(crate) name: Value,
     pub code: Handle<CodeBlock>,
     pub(crate) env_size: u32,
     pub(crate) captures: [Value; 0],
@@ -617,7 +628,7 @@ pub struct Procedure {
 
 impl Object for Procedure {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
-        self.name.trace(visitor);
+        
         self.code.trace(visitor);
     }
 
@@ -669,6 +680,31 @@ pub struct ClosedNativeProcedure {
     pub(crate) callback: extern "C" fn(&mut CallFrame) -> ScmResult,
     pub(crate) env_size: u32,
     pub(crate) captures: [Value; 0],
+}
+
+impl AsRef<[Value]> for ClosedNativeProcedure {
+    fn as_ref(&self) -> &[Value] {
+        unsafe { std::slice::from_raw_parts(self.captures.as_ptr(), self.env_size as usize) }
+    }
+}
+
+impl AsMut<[Value]> for ClosedNativeProcedure {
+    fn as_mut(&mut self) -> &mut [Value] {
+        unsafe { std::slice::from_raw_parts_mut(self.captures.as_mut_ptr(), self.env_size as usize) }
+    }
+}
+
+impl Deref for ClosedNativeProcedure {
+    type Target = [Value];
+    fn deref(&self) -> &Self::Target {
+        unsafe { std::slice::from_raw_parts(self.captures.as_ptr(), self.env_size as usize) }
+    }
+}
+
+impl DerefMut for ClosedNativeProcedure {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { std::slice::from_raw_parts_mut(self.captures.as_mut_ptr(), self.env_size as usize) }
+    }
 }
 
 impl Index<usize> for ClosedNativeProcedure {
@@ -838,7 +874,7 @@ impl Allocation for Macro {}
 impl Try for ScmResult {
     type Output = Value;
     type Residual = Value;
-    
+
     fn branch(self) -> std::ops::ControlFlow<Self::Residual, Self::Output> {
         match self.tag {
             ScmResult::OK => std::ops::ControlFlow::Continue(self.value),
@@ -935,5 +971,88 @@ impl DerefMut for Tuple {
 impl AsMut<[Value]> for Tuple {
     fn as_mut(&mut self) -> &mut [Value] {
         self.deref_mut()
+    }
+}
+impl<T: Object + ?Sized> From<Result<Handle<T>, Value>> for ScmResult {
+    fn from(value: Result<Handle<T>, Value>) -> Self {
+        match value {
+            Ok(val) => Self::ok(Value::encode_object_value(val)),
+            Err(err) => Self::err(err),
+        }
+    }
+}
+
+
+#[repr(C)]
+pub struct SyntaxLocation {
+    pub(crate) header: ObjectHeader,
+    pub(crate) line: u32,
+    pub(crate) col: u32,
+    pub(crate) filename: Value,
+}
+
+impl Object for SyntaxLocation {
+    fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
+        self.filename.trace(visitor);
+    }
+}
+
+impl Allocation for SyntaxLocation {}
+
+#[repr(C)]
+pub struct EofObject {
+    pub(crate) header: ObjectHeader,
+}
+
+impl Object for EofObject {}
+impl Allocation for EofObject {}
+
+pub static EOF_OBJECT: Lazy<Value> = Lazy::new(|| {
+    let t = Thread::current();
+    let val = t.allocate(EofObject {
+        header: ObjectHeader::new(Type::EofObject),
+    });
+    heap::heap().add_root(SimpleRoot::new("eof-object", "eof", |p| {
+        EOF_OBJECT.trace(p.visitor());
+    }));
+    val.into()
+});
+
+impl Into<ScmResult> for Result<Value, Value> {
+    fn into(self) -> ScmResult {
+        match self {
+            Ok(val) => ScmResult::ok(val),
+            Err(err) => ScmResult::err(err),
+        }
+    }
+}
+
+impl Into<ScmResult> for Result<(), Value> {
+    fn into(self) -> ScmResult {
+        match self {
+            Ok(()) => ScmResult::ok(Value::encode_undefined_value()),
+            Err(err) => ScmResult::err(err),
+        }
+    }
+}
+
+impl Into<ScmResult> for Result<bool, Value> {
+    fn into(self) -> ScmResult {
+        match self {
+            Ok(val) => ScmResult::ok(Value::encode_bool_value(val)),
+            Err(err) => ScmResult::err(err),
+        }
+    }
+}
+
+impl FromResidual<Result<Infallible, Value>> for ScmResult {
+    fn from_residual(residual: Result<Infallible, Value>) -> Self {
+        match residual {
+            Ok(_) => ScmResult::ok(Value::encode_undefined_value()),
+            Err(value) => Self {
+                tag: ScmResult::ERR,
+                value,
+            },
+        }
     }
 }

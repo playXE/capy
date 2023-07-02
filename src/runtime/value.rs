@@ -1,4 +1,7 @@
-use std::{fmt::Debug, hash::Hash};
+use std::{
+    fmt::{self, Debug},
+    hash::Hash,
+};
 
 use crate::{
     compile::LVar,
@@ -8,10 +11,21 @@ use crate::{
         NativeProcedure, ObjectHeader, Pair, Procedure, ReaderReference, Str, Symbol, Syntax, Type,
         Vector, GLOC,
     },
+    vm::scm_vm,
 };
 
-use super::{bigint::BigInt, pure_nan::*, object::Tuple};
-use rsgc::prelude::{Allocation, Handle, Object};
+use super::{
+    bigint::BigInt,
+    object::Tuple,
+    port::{port_extract_string, port_open_bytevector, Port, SCM_PORT_DIRECTION_OUT, SCM_PORT_DIRECTION_IN},
+    print::Printer,
+    pure_nan::*,
+    symbol::Intern,
+};
+use rsgc::{
+    prelude::{Allocation, Handle, Object},
+    thread::Thread,
+};
 
 #[derive(Clone, Copy)]
 #[repr(transparent)]
@@ -268,18 +282,18 @@ impl Value {
     }
 
     #[inline]
-    pub fn get_native_u32(self) -> u32 {
-        unsafe { (self.0.as_int64 >> 16) as u32 }
+    pub fn get_char(self) -> char {
+        unsafe { char::from_u32_unchecked((self.0.as_int64 >> 16) as u32) }
     }
 
     #[inline]
-    pub fn encode_native_u32(x: u32) -> Self {
+    pub fn encode_char(x: char) -> Self {
         Self(EncodedValueDescriptor {
-            as_int64: (((x as u64) << 16) | Self::NATIVE32_TAG as u64) as i64,
+            as_int64: (((x as u32 as u64) << 16) | Self::NATIVE32_TAG as u64) as i64,
         })
     }
     #[inline]
-    pub fn is_native_value(self) -> bool {
+    pub fn is_char(self) -> bool {
         unsafe { (self.0.as_int64 & Self::NATIVE32_MASK) == Self::NATIVE32_TAG as i64 }
     }
 
@@ -543,10 +557,19 @@ impl Value {
     }
 
     pub fn is_values(self) -> bool {
-        debug_assert!(self.is_xtype(Type::Values));
-        {
-            self.vector().len() > 0
-        }
+        self.is_xtype(Type::Values)
+    }
+
+    pub fn is_eof_object(self) -> bool {
+        self.is_xtype(Type::EofObject)
+    }
+
+    pub fn eof_object() -> Self {
+        *super::object::EOF_OBJECT
+    }
+
+    pub fn is_bytevector(self) -> bool {
+        self.is_xtype(Type::Bytevector)
     }
 
     pub fn bytevector_ref(self, idx: usize) -> u8 {
@@ -765,6 +788,11 @@ impl Value {
         self.is_xtype(Type::Box)
     }
 
+    pub fn r#box(self) -> Handle<Box> {
+        debug_assert!(self.is_box());
+        unsafe { std::mem::transmute(self) }
+    }
+
     pub fn box_ref(self) -> Value {
         debug_assert!(self.is_box());
         unsafe {
@@ -845,11 +873,28 @@ impl Value {
             t[index] = value;
         }
     }
+
+    pub fn is_port(self) -> bool {
+        self.is_xtype(Type::Port)
+    }
+
+    pub fn port(self) -> Handle<Port> {
+        debug_assert!(self.is_port());
+        unsafe { std::mem::transmute(self) }
+    }
+
+    pub fn is_input_port(self) -> bool {
+        self.is_port() && (self.port().direction & SCM_PORT_DIRECTION_IN) != 0
+    }
+
+    pub fn is_output_port(self) -> bool {
+        self.is_port() && (self.port().direction & SCM_PORT_DIRECTION_OUT) != 0
+    }
 }
 
 impl Debug for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.is_bool() {
+        /*if self.is_bool() {
             if self.is_true() {
                 write!(f, "#t")
             } else {
@@ -922,6 +967,25 @@ impl Debug for Value {
             }
         } else {
             write!(f, "#<unknown>")
+        }*/
+
+        {
+            let port = Port::new(Thread::current());
+            port_open_bytevector(
+                port,
+                "Debug".intern().into(),
+                SCM_PORT_DIRECTION_OUT,
+                false.into(),
+                false.into(),
+            );
+            let mut printer = Printer::new(scm_vm(), port);
+            match printer.write(*self) {
+                Ok(_) => match printer.flush() {
+                    Ok(_) => write!(f, "{}", port_extract_string(port).unwrap().string()),
+                    Err(_) => write!(f, "Error flushing port"),
+                },
+                Err(_) => write!(f, "Error writing to port"),
+            }
         }
     }
 }
@@ -947,3 +1011,18 @@ impl Hash for Value {
         self.get_raw().hash(state);
     }
 }
+
+impl fmt::Display for Value {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+
+pub fn scm_box(val: Value) -> Value {
+    Thread::current().allocate(Box {
+        header: ObjectHeader::new(Type::Box),
+        value: val,
+    }).into()
+}
+

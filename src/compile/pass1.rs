@@ -1,6 +1,8 @@
 use rsgc::{prelude::Handle, system::arraylist::ArrayList, thread::Thread};
 
-use super::{cenv_copy, cenv_lookup, make_iform, IForm, LVar, Let, LetScope, List, Seq};
+use super::{
+    cenv_copy, cenv_lookup, cenv_toplevelp, make_iform, IForm, LVar, Let, LetScope, List, Seq,
+};
 use crate::{
     compaux::{
         identifier_to_symbol, scm_identifier_to_symbol, scm_make_identifier, scm_unwrap_syntax,
@@ -9,6 +11,7 @@ use crate::{
         cenv_extend, cenv_frames, cenv_make_bottom, cenv_module, global_call_type, Call, CallFlag,
         Define, GRef, GSet, GlobalCall, If, LFlag, LRef, LSet, Lambda,
     },
+    raise_exn,
     runtime::list::{
         scm_append, scm_assq, scm_cons, scm_is_list, scm_length, scm_list, scm_list_from_iter,
         scm_list_star, scm_map, scm_map2, scm_reverse,
@@ -18,10 +21,13 @@ use crate::{
         is_global_identifier_eq, scm_export_symbols, scm_find_module, scm_import_module,
         scm_insert_binding, scm_make_module,
     },
-    runtime::{object::{Identifier, Module, ObjectHeader, Type}, violation::raise_error},
-    runtime::string::make_string,
+    runtime::object::{Identifier, Module, ObjectHeader, Type},
     runtime::symbol::{gensym, make_symbol},
     runtime::value::Value,
+    runtime::{
+        macros::{MAKE_ER_TRANSFORMER, MAKE_ER_TRANSFORMER_TOPLEVEL},
+        string::make_string,
+    },
     scm_dolist,
     vm::interpreter::apply,
 };
@@ -409,7 +415,7 @@ pub fn define_syntax() {
             }
 
             let (reqs, rest) = parse_formals(formals, Value::encode_null_value())?;
-           
+
             pass1_vanilla_lambda(
                 form,
                 if !rest.is_false() {
@@ -672,7 +678,7 @@ pub fn define_syntax() {
     });
 
     define_syntax!("quote", None, form, _cenv, {
-        let val = form.cadr();
+        let val = scm_unwrap_syntax(form.cadr(), false);
 
         Ok(make_iform(IForm::Const(val)))
     });
@@ -788,6 +794,34 @@ pub fn define_syntax() {
         Ok(make_iform(IForm::Const(sr)))
     });
 
+    define_syntax!("er-macro-transformer", Some("capy"), form, cenv, {
+        if scm_length(form) == Some(2) {
+            let xformer = form.cadr();
+            er_macro_maker::<false>(form, xformer, cenv)
+        } else {
+            return raise_exn!(
+                Fail,
+                &[],
+                "(er-macro-transformer <xformer>) expected but got: {}",
+                form
+            );
+        }
+    });
+
+    define_syntax!("eri-macro-transformer", Some("capy"), form, cenv, {
+        if scm_length(form) == Some(2) {
+            let xformer = form.cadr();
+            er_macro_maker::<true>(form, xformer, cenv)
+        } else {
+            return raise_exn!(
+                Fail,
+                &[],
+                "(eri-macro-transformer <xformer>) expected but got {}",
+                form
+            );
+        }
+    });
+
     define_syntax!("define-syntax", None, form, cenv, {
         if scm_length(form) == Some(3) {
             let name = form.cadr();
@@ -894,8 +928,6 @@ pub fn pass1_define(
     module: Handle<Module>,
     cenv: Value,
 ) -> Result<Handle<IForm>, Value> {
-    let def = form.car();
-    debug_assert!(def.is_xtype(Type::Symbol) && &*def.symbol() == "define");
     let name = form.cadr();
 
     // (_ (name . args) body ...)
@@ -920,7 +952,12 @@ pub fn pass1_define(
     } else if form.cddr().is_null() {
         // allow R6RS style (define <name>)
         if !name.is_identifier() {
-            return Err(raise_error("define", "<name> should be an identifier", 0));
+            return raise_exn!(
+                Fail,
+                &[],
+                "define: expected an identifier for name, but got: {:?}",
+                name
+            );
         }
         pass1_define(
             scm_list(
@@ -940,7 +977,12 @@ pub fn pass1_define(
     } else if form.cddr().cdr().is_null() {
         let value = form.caddr();
         if !name.is_identifier() {
-            return Err(raise_error("define", "<name> should be an identifier", 0));
+            return raise_exn!(
+                Fail,
+                &[],
+                "define: expected an identifier for name, but got: {:?}",
+                name
+            );
         }
         let id = if name.is_wrapped_identifier() {
             rename_toplevel_identifier(name.identifier())
@@ -948,14 +990,16 @@ pub fn pass1_define(
             scm_make_identifier(name, module.into(), Value::encode_null_value())
         };
 
-        //let uname = scm_unwrap_syntax(name, false);
+        let mut value = pass1(value, cenv)?;
 
-        //scm_insert_binding(module, uname.symbol(), Value::encode_empty_value(), 0, true)?;
+        if let IForm::Lambda(ref mut lambda) = value.as_mut() {
+            lambda.name = id.into();
+        }
 
         Ok(make_iform(IForm::Define(Define {
             origin: oform,
             name: id.into(),
-            value: pass1(value, cenv)?,
+            value,
         })))
     } else {
         Err(make_string(Thread::current(), "define: invalid syntax").into())
@@ -1432,5 +1476,33 @@ fn eval_macro_rhs(name: &str, expr: Value, cenv: Value) -> Result<Value, Value> 
             ),
         )
         .into())
+    }
+}
+
+fn er_macro_maker<const HAS_INJECT: bool>(
+    _form: Value,
+    xformer: Value,
+    cenv: Value,
+) -> Result<Handle<IForm>, Value> {
+    if cenv_toplevelp(cenv) {
+        let expr = scm_list(
+            Thread::current(),
+            &[
+                *MAKE_ER_TRANSFORMER_TOPLEVEL,
+                xformer,
+                cenv_module(cenv).into(),
+                cenv_frames(cenv),
+                HAS_INJECT.into(),
+            ],
+        );
+
+        pass1(expr, cenv)
+    } else {
+        let expr = scm_list(
+            Thread::current(),
+            &[*MAKE_ER_TRANSFORMER, xformer, cenv, HAS_INJECT.into()],
+        );
+
+        pass1(expr, cenv)
     }
 }

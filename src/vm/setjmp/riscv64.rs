@@ -1,4 +1,4 @@
-use crate::JmpBuf;
+use super::JmpBuf;
 #[naked_function::naked]
 pub unsafe extern "C" fn setjmp(_: *mut JmpBuf) -> i32 {
     asm!(

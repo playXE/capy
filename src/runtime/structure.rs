@@ -1,70 +1,51 @@
-use std::mem::offset_of;
-use std::mem::size_of;
+#![allow(dead_code)]
+use std::mem::transmute;
 
-use rsgc::prelude::Allocation;
-use rsgc::prelude::Handle;
-use rsgc::prelude::Object;
-use rsgc::system::array::Array;
-use rsgc::system::arraylist::ArrayList;
-use rsgc::thread::Thread;
+use super::{
+    error::*,
+    fun::{
+        check_proc_arity, get_proc_name, scm_make_closed_native_procedure, scm_make_subr,
+        scm_make_subr_closed_inliner, SCM_PRIM_STRUCT_TYPE_CONSTR,
+        SCM_PRIM_STRUCT_TYPE_INDEXED_GETTER, SCM_PRIM_STRUCT_TYPE_INDEXED_SETTER,
+        SCM_PRIM_STRUCT_TYPE_INDEXLESS_GETTER, SCM_PRIM_STRUCT_TYPE_INDEXLESS_SETTER,
+        SCM_PRIM_STRUCT_TYPE_PRED, SCM_PRIM_STRUCT_TYPE_SIMPLE_CONSTR,
+    },
+    list::{scm_cons, scm_length, scm_list},
+    module::{scm_capy_module, scm_define},
+    object::ScmResult,
+    string::make_string,
+    symbol::{make_symbol, Intern},
+    vector::{make_values, make_values_n},
+};
+use crate::{
+    compile::{make_iform, Asm, AsmOperand, IForm},
+    op::Opcode,
+    vm::{callframe::CallFrame, interpreter::apply, scm_vm},
+};
+use rsgc::{
+    prelude::{Allocation, Handle, Object},
+    system::{array::Array, arraylist::ArrayList},
+    thread::Thread,
+};
 
-use crate::compile::make_iform;
-use crate::compile::Asm;
-use crate::compile::AsmOperand;
-use crate::compile::IForm;
-use crate::op::Opcode;
-use crate::runtime::fun::check_proc_arity;
-use crate::runtime::fun::scm_make_subr;
-use crate::runtime::fun::scm_make_subr_closed_inliner;
-use crate::runtime::fun::scm_make_subr_inliner;
-use crate::runtime::fun::SCM_PRIM_STRUCT_TYPE_STRUCT_PROP_PRED;
-use crate::runtime::fun::SCM_PRIM_TYPE_STRUCT_PROP_GETTER;
-use crate::vm::callframe::CallFrame;
-use crate::vm::scm_vm;
-
-use super::list::scm_length;
-use super::object::*;
-use super::string::make_string;
-use super::value::*;
-
-#[repr(C)]
-pub struct StructProperty {
-    pub(crate) header: ObjectHeader,
-    pub(crate) can_impersonate: bool,
-    pub(crate) name: Value,
-    pub(crate) guard: Value,
-    pub(crate) supers: Value,
-    pub(crate) contract_name: Value,
-    pub(crate) module: Value,
-}
-
-impl Object for StructProperty {
-    fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
-        self.name.trace(visitor);
-        self.guard.trace(visitor);
-        self.supers.trace(visitor);
-        self.contract_name.trace(visitor);
-        self.module.trace(visitor);
-    }
-}
-
-impl Allocation for StructProperty {}
+use super::{
+    object::{ObjectHeader, Type},
+    value::Value,
+};
 
 #[repr(C)]
 pub struct StructType {
     pub(crate) header: ObjectHeader,
-    pub(crate) num_slots: i16,
-    pub(crate) num_islots: i16,
-    pub(crate) name_pos: u16,
-    pub(crate) more_flags: i32,
+    pub(crate) num_slots: i32,
+    pub(crate) num_islots: i32,
+    pub(crate) name_pos: i32,
     pub(crate) name: Value,
     pub(crate) accessor: Value,
     pub(crate) mutator: Value,
     pub(crate) uninit_val: Value,
-    pub(crate) props: Handle<Array<(Value, Value)>>,
-    pub(crate) proc_attr: Value,
+    pub(crate) props: ArrayList<Value>,
     pub(crate) guard: Value,
-    pub(crate) parent_types: ArrayList<Handle<StructType>>
+    pub(crate) parent_types: ArrayList<Handle<Self>>,
 }
 
 impl Object for StructType {
@@ -74,57 +55,59 @@ impl Object for StructType {
         self.mutator.trace(visitor);
         self.uninit_val.trace(visitor);
         self.props.trace(visitor);
-        self.proc_attr.trace(visitor);
         self.guard.trace(visitor);
         self.parent_types.trace(visitor);
     }
-
-
 }
 
-impl Allocation for StructType {
-   
+impl Allocation for StructType {}
 
+#[repr(C)]
+pub struct StructProperty {
+    pub(crate) header: ObjectHeader,
+    pub(crate) name: Value,
+    pub(crate) guard: Value,
+    pub(crate) supers: Value,
+    pub(crate) contract_name: Value,
 }
+
+impl Object for StructProperty {
+    fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
+        self.name.trace(visitor);
+        self.guard.trace(visitor);
+        self.supers.trace(visitor);
+        self.contract_name.trace(visitor);
+    }
+}
+
+impl Allocation for StructProperty {}
 
 #[repr(C)]
 pub struct Structure {
     pub(crate) header: ObjectHeader,
     pub(crate) type_: Handle<StructType>,
-    pub(crate) num_slots: u32,
-    pub(crate) slots: [Value; 0],
+    pub(crate) slots: Handle<Array<Value>>,
 }
 
 impl Object for Structure {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.type_.trace(visitor);
-    }
-
-    fn trace_range(&self, from: usize, to: usize, visitor: &mut dyn rsgc::prelude::Visitor) {
-        unsafe {
-            for i in from..to {
-                let slot = self.slots.get_unchecked(i);
-                slot.trace(visitor);
-            }
-        }
+        self.slots.trace(visitor);
     }
 }
 
-impl Allocation for Structure {
-    const VARSIZE: bool = true;
-    const VARSIZE_ITEM_SIZE: usize = size_of::<Value>();
-    const VARSIZE_NO_HEAP_PTRS: bool = false;
-    const VARSIZE_OFFSETOF_CAPACITY: usize = offset_of!(Structure, num_slots);
-    const VARSIZE_OFFSETOF_LENGTH: usize = offset_of!(Structure, num_slots);
-    const VARSIZE_OFFSETOF_VARPART: usize = offset_of!(Structure, slots);
-}
+impl Allocation for Structure {}
 
-pub const MAX_STRUCT_FIELD_COUNT: usize = 32768;
-
-pub const STRUCT_TYPE_FLAG_NONFAIL_CONSTRUCTOR: i32 = 0x1;
-pub const STRUCT_TYPE_FLAG_SYSTEM_OPAQUE: i32 = 0x2;
-pub const STRUCT_TYPE_FLAG_AUTHENTIC: i32 = 0x4;
-pub const STRUCT_TYPE_FLAG_SEALED: i32 = 0x8;
+pub const STRUCT_NO_TYPE: i32 = 0x01;
+pub const STRUCT_NO_CONSTRUCTOR: i32 = 0x02;
+pub const STRUCT_NO_PRED: i32 = 0x04;
+pub const STRUCT_NO_GET: i32 = 0x08;
+pub const STRUCT_NO_SET: i32 = 0x10;
+pub const STRUCT_GEN_GET: i32 = 0x20;
+pub const STRUCT_GEN_SET: i32 = 0x40;
+pub const STRUCT_EXPTIME: i32 = 0x80;
+pub const STRUCT_NO_MAKE_PREFIX: i32 = 0x100;
+pub const STRUCT_NAMES_AS_STRINGS: i32 = 0x200;
 
 impl Value {
     pub fn is_struct_type(self) -> bool {
@@ -135,300 +118,510 @@ impl Value {
         self.is_xtype(Type::StructProperty)
     }
 
-    pub fn is_structure(self) -> bool {
+    pub fn is_struct(self) -> bool {
         self.is_xtype(Type::Struct)
     }
 
-    pub fn structure_type(self) -> Handle<StructType> {
-        debug_assert!(self.is_structure());
-        unsafe { std::mem::transmute(self) }
+    pub fn struct_type(self) -> Handle<StructType> {
+        unsafe {
+            debug_assert!(self.is_struct_type());
+            transmute(self)
+        }
+    }
+
+    pub fn struct_property(self) -> Handle<StructProperty> {
+        unsafe {
+            debug_assert!(self.is_struct_property());
+            transmute(self)
+        }
     }
 
     pub fn structure(self) -> Handle<Structure> {
-        debug_assert!(self.is_structure());
-        unsafe { std::mem::transmute(self) }
-    }
-
-    pub fn structure_property(self) -> Handle<StructProperty> {
-        debug_assert!(self.is_struct_property());
-        unsafe { std::mem::transmute(self) }
-    }
-}
-
-use super::symbol::*;
-use super::vector::make_values;
-
-fn make_name(base: &str, intern: bool) -> Value {
-    if intern {
-        make_symbol(base, true)
-    } else {
-        make_string(Thread::current(), base).into()
-    }
-}
-
-fn type_name(base: &str, intern: bool) -> Value {
-    make_name(&format!("struct:{}", base), intern)
-}
-
-fn cstr_name(base: &str, intern: bool) -> Value {
-    make_name(base, intern)
-}
-
-fn cstr_make_name(base: &str, intern: bool) -> Value {
-    make_name(&format!("make-{}", base), intern)
-}
-
-fn pred_name(base: &str, intern: bool) -> Value {
-    make_name(&format!("{}?", base), intern)
-}
-
-fn get_name(base: &str, field: &str, intern: bool) -> Value {
-    make_name(&format!("{}-{}", base, field), intern)
-}
-
-fn set_name(base: &str, field: &str, intern: bool) -> Value {
-    make_name(&format!("set-{}-{}!", base, field), intern)
-}
-
-fn genget_name(base: &str, intern: bool) -> Value {
-    make_name(&format!("{}-ref", base), intern)
-}
-
-fn genset_name(base: &str, intern: bool) -> Value {
-    make_name(&format!("{}-set!", base), intern)
-}
-
-extern "C" fn prop_pred(cfr: &mut CallFrame) -> ScmResult {
-    let prop = cfr.callee().closed_native_procedure()[0];
-
-    let v = cfr.argument(0);
-
-    let stype = if v.is_structure() {
-        v.structure().type_
-    } else if v.is_struct_type() {
-        v.structure_type()
-    } else {
-        return ScmResult::ok(false);
-    };
-
-    for i in 0..stype.props.len() {
-        if prop == stype.props[i].0 {
-            return ScmResult::ok(true);
+        unsafe {
+            debug_assert!(self.is_struct());
+            transmute(self)
         }
     }
+}
+/*
+fn apply_guards(stype: Handle<StructType>, mut args: &mut [Value])  {
+    let mut prev_guards = Value::encode_bool_value(false);
+    let mut guard = Value::encode_bool_value(false);
+    let t = Thread::current();
+    let mut guard_argv = None;
+    for p in (0..=stype.name_pos).rev() {
 
-    ScmResult::ok(false)
+
+        if stype.parent_types[p as usize].guard.is_procedure() || prev_guards.is_pair() {
+            let got = 0;
+
+                if guard_argv.is_none() {
+                    guard_argv = Some(ArrayList::from_slice_with_capacity(t, args, args.len() + 1));
+                    guard_argv.as_mut().unwrap().push(t, Value::encode_bool_value(false));
+                    args = &mut guard_argv.as_mut().unwrap();
+                }
+
+            if prev_guards.is_false() {
+                prev_guards = Value::encode_null_value();
+            }
+
+            while !prev_guards.is_false() {
+                if prev_guards.is_pair() {
+                    guard = prev_guards.car();
+                } else {
+                    guard = stype.parent_types[p as usize].guard;
+
+                    if !guard.is_false() {
+                        if guard.is_pair() {
+                            guard = guard.car();
+                        }
+                    } else {
+                        guard = Value::encode_bool_value(false);
+                    }
+                }
+
+            }
+        }
+    }
+}*/
+
+pub fn make_struct_instance_(stype: Value, args: &[Value]) -> Result<Value, Value> {
+    let vm = scm_vm();
+    let slots = Array::new(
+        vm.mutator(),
+        stype.struct_type().num_slots as usize,
+        |_, _| Value::encode_undefined_value(),
+    );
+    let mut inst = vm.mutator().allocate(Structure {
+        header: ObjectHeader::new(Type::Struct),
+        type_: stype.struct_type(),
+        slots,
+    });
+
+    // todo: args = apply_guards(vm, stype, args)?;
+
+    let c = stype.struct_type().num_slots as usize;
+
+    let mut j = c;
+    let mut i = args.len();
+
+    let mut p = stype.struct_type().name_pos;
+    let stype = stype.struct_type();
+    while p >= 0 {
+        let (mut ns, mut nis): (i32, i32) = if p != 0 {
+            (
+                stype.parent_types[p as usize].num_slots
+                    - stype.parent_types[(p as usize) - 1].num_slots,
+                stype.parent_types[p as usize].num_islots
+                    - stype.parent_types[(p as usize) - 1].num_islots,
+            )
+        } else {
+            let parent: Handle<StructType> = stype.parent_types[0];
+            let ns: i32 = parent.num_slots;
+            (ns, parent.num_islots)
+        };
+
+        ns -= nis;
+
+        // fill in automatic fields
+        while ns != 0 {
+            j -= 1;
+            vm.mutator().write_barrier(inst.slots);
+            inst.slots[j] = stype.parent_types[p as usize].uninit_val;
+            ns -= 1;
+        }
+        // fill in supplied fields
+        while nis > 0 {
+            j -= 1;
+            i -= 1;
+            vm.mutator().write_barrier(inst.slots);
+            inst.slots[j] = args[i];
+            nis -= 1;
+        }
+        p -= 1;
+    }
+
+    Ok(inst.into())
+}
+
+fn make_name(pre: &str, tn: &str, post1: &str, fun: &str, post2: &str, sym: bool) -> Value {
+    if sym {
+        make_symbol(
+            format!("{}{}{}{}{}", pre, tn, post1, fun, post2).as_str(),
+            true,
+        )
+    } else {
+        make_string(
+            Thread::current(),
+            format!("{}{}{}{}{}", pre, tn, post1, fun, post2).as_str(),
+        )
+        .into()
+    }
+}
+
+macro_rules! type_name {
+    ($base:expr, $sym:expr) => {
+        make_name("struct:", $base, "", "", "", $sym)
+    };
+}
+
+macro_rules! cstr_name {
+    ($base:expr, $sym:expr) => {
+        make_name("", $base, "", "", "", $sym)
+    };
+}
+
+macro_rules! cstr_make_name {
+    ($base:expr, $sym:expr) => {
+        make_name("make-", $base, "", "", "", $sym)
+    };
+}
+
+macro_rules! pred_name {
+    ($base:expr, $sym:expr) => {
+        make_name("", $base, "?", "", "", $sym)
+    };
+}
+
+macro_rules! get_name {
+    ($base:expr, $field:expr, $sym:expr) => {
+        make_name("", $base, "-", $field, "", $sym)
+    };
+}
+
+macro_rules! set_name {
+    ($base:expr, $field:expr, $sym:expr) => {
+        make_name("set-", $base, "-", $field, "!", $sym)
+    };
+}
+
+macro_rules! genget_name {
+    ($base:expr, $sym:expr) => {
+        make_name("", $base, "-ref", "", "", $sym)
+    };
+}
+
+macro_rules! genset_name {
+    ($base:expr, $sym:expr) => {
+        make_name("set-", $base, "!", "", "", $sym)
+    };
+}
+
+macro_rules! exptime_name {
+    ($base:expr, $sym:expr) => {
+        make_name("", $base, "", "", "", $sym)
+    };
+}
+#[allow(unused_macros)]
+macro_rules! type_name_str {
+    ($base:expr) => {
+        make_name("struct:", $base, "", "", "", false)
+    };
 }
 
 fn do_prop_accessor(prop: Value, arg: Value) -> Option<Value> {
-    let stype = if arg.is_structure() {
-        Some(arg.structure().type_)
+    let stype = if arg.is_struct() {
+        arg.structure().type_
     } else if arg.is_struct_type() {
-        Some(arg.structure_type())
+        arg.struct_type()
     } else {
-        None
+        return None;
     };
 
-    stype.and_then(|stype| {
-        for i in (0..stype.props.len()).rev() {
-            if stype.props[i].0 == prop {
-                return Some(stype.props[i].1);
-            }
+    for sprop in stype.props.iter().copied().rev() {
+        if sprop.car() == prop {
+            return Some(sprop.cdr());
         }
+    }
 
-        None
-    })
+    None
 }
 
 extern "C" fn prop_accessor(cfr: &mut CallFrame) -> ScmResult {
     let v = cfr.argument(0);
+    let prop = cfr.callee().closed_native_procedure()[0];
+    let v = do_prop_accessor(prop, v);
 
-    if let Some(v) = do_prop_accessor(cfr.callee().closed_native_procedure()[0], v) {
+    if let Some(v) = v {
         ScmResult::ok(v)
     } else if cfr.argument_count() == 1 {
-        todo!("error")
+        let prop = prop;
+
+        let ctc = if prop.struct_property().contract_name.is_string()
+            || prop.struct_property().contract_name.is_symbol()
+        {
+            prop.struct_property().contract_name.strsym()
+        } else {
+            prop.struct_property().name.strsym()
+        };
+
+        return ScmResult::err(
+            wrong_contract::<()>(
+                get_proc_name(cfr.callee()).unwrap_or(""),
+                ctc,
+                0,
+                1,
+                cfr.arguments(),
+            )
+            .unwrap_err(),
+        );
     } else {
         let v = cfr.argument(1);
-
         if v.is_procedure() {
             ScmResult::tail(v, &[])
+            //vm.tail_apply(v, &[])
         } else {
             ScmResult::ok(v)
         }
     }
 }
 
-fn make_struct_type_property_from_rust(args: &[Value]) -> Result<(Value, Value, Value), Value> {
+extern "C" fn prop_pred(cfr: &mut CallFrame) -> ScmResult {
+    let v = cfr.argument(0);
+    let prop = cfr.callee().closed_native_procedure()[0];
+
+    let stype = if v.is_struct() {
+        v.structure().type_
+    } else if v.is_struct_type() {
+        v.struct_type()
+    } else {
+        return ScmResult::ok(Value::encode_bool_value(false));
+    };
+
+    for sprop in stype.props.iter().copied().rev() {
+        if sprop.car() == prop {
+            return ScmResult::ok(Value::encode_bool_value(true));
+        }
+    }
+
+    ScmResult::ok(false)
+}
+
+pub(crate) fn make_struct_type_property_raw(
+    args: &[Value],
+    predout: &mut Value,
+    accessout: &mut Value,
+) -> Result<Value, Value> {
+    let mut supers = Value::encode_null_value();
     let who = "make-struct-type-property";
 
     if !args[0].is_symbol() {
-        todo!("error")
+        return wrong_contract(who, "symbol?", 0, args.len() as _, args);
     }
-    let mut a = [Value::encode_null_value(); 1];
-    let accessor_name;
-    let contract_name;
-    let module;
-    let mut guard = Value::encode_null_value();
-    let mut supers = Value::encode_null_value();
+    let mut a: [Value; 1] = [Value::encode_null_value()];
+    let mut accessor_name = None;
+    let mut contract_name = None;
     if args.len() > 1 {
-        guard = args[1];
-    }
-    if args.len() > 2 {
-        supers = args[2];
-
-        if scm_length(supers).is_none() {
-            todo!("error");
-        }
-
-        let mut pr = supers;
-
-        while pr.is_pair() {
-            let v = pr.car();
-
-            if !v.is_pair() {
-                supers = Value::encode_null_value();
-            } else {
-                if v.car().get_type() != Type::StructProperty {
-                    supers = Value::encode_null_value();
-                }
-
-                a[0] = v.cdr();
-
-                if !check_proc_arity(1, 0, &a, false) {
-                    supers = Value::encode_null_value();
-                }
-            }
-
-            pr = pr.cdr();
-        }
-
-        if supers.is_null() {
-            todo!("error");
+        if args[1].is_true() && !check_proc_arity("", 2, 1, args.len() as _, args)? {
+            return wrong_contract(
+                who,
+                "(or/c (any/c any/c . -> . any) #f)",
+                1,
+                args.len() as _,
+                args,
+            );
         }
 
         if args.len() > 2 {
-            accessor_name = args[2];
+            supers = args[2];
 
-            if args.len() > 3 {
-                contract_name = args[3];
+            if let Some(_) = scm_length(supers) {
+                let mut pr = supers;
 
-                if args.len() > 4 {
-                    module = args[4];
-                } else {
-                    module = Value::encode_null_value();
+                while pr.is_pair() {
+                    let v = pr.car();
+                    if !v.is_pair() {
+                        supers = Value::encode_bool_value(false);
+                    } else {
+                        if v.car().get_type() != Type::StructProperty {
+                            supers = Value::encode_bool_value(false);
+                        }
+
+                        a[0] = v.cdr();
+
+                        if !check_proc_arity("", 1, 0, 1, &a)? {
+                            supers = Value::encode_bool_value(false);
+                        }
+                    }
+                    pr = pr.cdr();
                 }
             } else {
-                contract_name = Value::encode_null_value();
-                module = Value::encode_null_value();
+                supers = Value::encode_bool_value(false);
             }
-        } else {
-            accessor_name = Value::encode_null_value();
-            contract_name = Value::encode_null_value();
-            module = Value::encode_null_value();
+            if supers.is_false() {
+                return wrong_contract(
+                    who,
+                    "(listof (cons struct-type-property? (any/c . -> any)))",
+                    2,
+                    args.len() as _,
+                    args,
+                );
+            }
+
+            if args.len() > 3 {
+                if args[3].is_true() {
+                    accessor_name = Some(args[3]);
+                    if !accessor_name.unwrap().is_symbol() {
+                        return wrong_contract(who, "(or/c symbol? #f)", 3, args.len() as _, args);
+                    }
+                }
+
+                if args.len() > 4 {
+                    if args[4].is_true() {
+                        contract_name = Some(args[4]);
+                        if !contract_name.unwrap().is_symbol() {
+                            return wrong_contract(
+                                who,
+                                "(or/c symbol? #f)",
+                                4,
+                                args.len() as _,
+                                args,
+                            );
+                        }
+                    }
+                }
+            }
         }
+    }
 
-        supers
-    } else {
-        contract_name = Value::encode_null_value();
-
-        accessor_name = Value::encode_null_value();
-        module = Value::encode_null_value();
-        Value::encode_null_value()
-    };
-
-    let prop = Thread::current().allocate(StructProperty {
+    let p = Thread::current().allocate(StructProperty {
         header: ObjectHeader::new(Type::StructProperty),
-        can_impersonate: false,
         name: args[0],
-        guard,
-        contract_name,
+        guard: if args.len() > 1 && args[1].to_bool() {
+            args[1]
+        } else {
+            Value::encode_bool_value(false)
+        },
         supers,
-        module,
+        contract_name: contract_name.unwrap_or(Value::encode_bool_value(false)),
     });
 
-    a[0] = prop.into();
+    /*StructProperty::new(
+        Thread::current(),
+        args[0],
+        if args.len() > 1 && args[1].is_true() {
+            args[1]
+        } else {
+            Value::make_false()
+        },
+        supers,
+        contract_name.unwrap_or(Value::make_false()),
+    );*/
 
-    let name = format!("{}?", args[0].strsym());
+    a[0] = p.into();
 
-    // create `prop?` predicate together with inliner.
-    let v = scm_make_subr_closed_inliner(&name, prop_pred, 1, 1, &a, |iforms, proc| {
-        if iforms.len() != 1 {
-            return None;
-        }
-        let prop = proc.closed_native_procedure()[0];
-        let operands = ArrayList::from_slice(Thread::current(), &[AsmOperand::Constant(prop)]);
+    let prop_pred = scm_make_subr_closed_inliner(
+        &format!("{}?", args[0]),
+        prop_pred,
+        1,
+        1,
+        &[p.into()],
+        |iforms, p| {
+            if iforms.len() != 1 {
+                return None;
+            }
 
-        Some(make_iform(IForm::Asm(Asm {
-            op: Opcode::IsProperty,
-            args: ArrayList::from_slice(Thread::current(), iforms),
-            operands: Some(operands),
-            exits: false,
-            pushes: true,
-        })))
-    });
-    v.native_procedure().header.flags |= SCM_PRIM_STRUCT_TYPE_STRUCT_PROP_PRED as u32;
-    let pred = v;
-    let name = if accessor_name.is_string() || accessor_name.is_symbol() {
+            Some(make_iform(IForm::Asm(Asm {
+                op: Opcode::StructPropPred,
+                args: ArrayList::from_slice(Thread::current(), iforms),
+                operands: Some(ArrayList::from_slice(
+                    Thread::current(),
+                    &[AsmOperand::Constant(p.closed_native_procedure()[0])],
+                )),
+                exits: false,
+                pushes: true,
+                ic: false,
+            })))
+        },
+    );
+
+    //Vm::make_closed_procedure(&format!("{}?", name), prop_pred, 1, 1, &[p]);
+
+    let name = if let Some(accessor_name) = accessor_name {
         accessor_name.strsym().to_string()
     } else {
-        format!("{:?}-accessor", args[0])
+        format!("{}-accessor", args[0])
     };
 
-    let v = scm_make_subr(&name, prop_accessor, 1, 2);
+    *predout = prop_pred;
+    *accessout = scm_make_closed_native_procedure(
+        Thread::current(),
+        make_string(Thread::current(), name).into(),
+        prop_accessor,
+        1,
+        2,
+        &[p.into()],
+    )
+    .into();
 
-    v.native_procedure().header.flags |= SCM_PRIM_TYPE_STRUCT_PROP_GETTER as u32;
-    let access = v;
-    Ok((a[0], pred, access))
+    Ok(a[0])
 }
 
 extern "C" fn make_struct_type_property(cfr: &mut CallFrame) -> ScmResult {
-    let (prop, pred, access) = match make_struct_type_property_from_rust(cfr.arguments()) {
+    let mut a = [Value::encode_null_value(); 3];
+    let mut pred = a[0];
+    let mut acc = a[0];
+
+    let p = match make_struct_type_property_raw(cfr.arguments(), &mut pred, &mut acc) {
         Ok(v) => v,
-        Err(v) => return ScmResult::err(v),
+        Err(e) => return ScmResult::err(e),
     };
 
-    ScmResult::ok(make_values(Thread::current(), &[prop, pred, access]))
+    a[0] = p;
+    a[1] = pred;
+    a[2] = acc;
+
+    ScmResult::ok(make_values(Thread::current(), &a))
 }
 
-pub fn scm_struct_type_property_ref(prop: Value, s: Value) -> Option<Value> {
-    do_prop_accessor(prop, s)
+pub fn make_struct_type_property_w_guard(name: Value, guard: Value) -> Result<Value, Value> {
+    let mut a = [Value::encode_null_value(); 2];
+    let mut pred = Value::encode_null_value();
+    let mut accessor = Value::encode_null_value();
+
+    a[0] = name;
+    a[1] = guard;
+
+    make_struct_type_property_raw(&a, &mut pred, &mut accessor)
 }
 
-pub fn scm_force_struct_type_info(stype: Handle<StructType>) {
-    if stype.accessor.is_false() || stype.accessor.is_null() {
-        let _fun = genget_name(stype.name.strsym(), false);
-        
+pub fn make_struct_type_property_(name: Value) -> Result<Value, Value> {
+    make_struct_type_property_w_guard(name, false.into())
+}
+
+extern "C" fn struct_type_property_p(cfr: &mut CallFrame) -> ScmResult {
+    ScmResult::ok(cfr.argument(0).is_struct_property())
+}
+
+pub fn is_struct_type(st: Handle<StructType>, v: Handle<Structure>) -> bool {
+    (st.name_pos <= v.type_.name_pos)
+        && (st.as_ptr() == v.type_.parent_types[st.name_pos as usize].as_ptr())
+}
+
+pub fn is_struct_instance(typ: Value, v: Value) -> bool {
+    if !typ.is_struct_type() {
+        return false;
     }
-}
 
-fn get_struct_type_info(args: &[Value], a: &mut [Value]) {
-    let stype = args[0].structure_type();
-
-}
-
-fn guard_property(prop: Value, v: Value, t: Handle<StructType>) -> Result<Value, Value> {
-    let p = prop.structure_property();
-
-    if p.guard.is_procedure() {
-
+    if !v.is_struct() {
+        return false;
     }
 
-    todo!()
+    is_struct_type(typ.struct_type(), v.structure())
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-pub enum ProcType {
-    Constr = 1,
-    Pred,
-    Getter,
-    Setter,
-    GenGetter,
-    GenSetter,
+pub fn struct_ref(sv: Value, pos: usize) -> Value {
+    sv.structure().slots[pos]
 }
 
-fn is_simple_struct_type(stype: Handle<StructType>) -> bool {
+pub fn struct_set(sv: Value, pos: usize, v: Value) {
+    Thread::current().write_barrier(sv.structure());
+    sv.structure().slots[pos] = v;
+}
+
+pub fn is_simple_struct_type(stype: Handle<StructType>) -> bool {
     for p in (0..=stype.name_pos).rev() {
-        if !stype.parent_types[p as usize].guard.is_false() || !stype.parent_types[p as usize].guard.is_null() {
+        if stype.parent_types[p as usize].guard.is_true() {
             return false;
         }
 
@@ -440,15 +633,1182 @@ fn is_simple_struct_type(stype: Handle<StructType>) -> bool {
     true
 }
 
-fn make_struct_proc_for_module(struct_type: Handle<StructType>, func_name: &str, module: Handle<Module>, contract: Value,proc_type: ProcType, field_num: i32) -> Value {
-    /*match proc_type {
-        ProcType::Constr => {
-            
-        }
-    }*/
-    todo!()
+pub fn make_simple_struct_instance_from_array(args: &[Value], typ: Value) -> Value {
+    let stype = typ.struct_type();
+
+    let c = stype.num_slots;
+    let t = Thread::current();
+    let slots = Array::new(t, c as _, |_, i| args[i]);
+
+    /*let s = Structure::new(vm.mutator(), stype, slots);*/
+
+    t.allocate(Structure {
+        header: ObjectHeader::new(Type::Struct),
+        type_: stype,
+        slots,
+    })
+    .into()
 }
 
-pub(crate) fn init_structure() {}
+pub(crate) extern "C" fn make_simple_struct_instance(cfr: &mut CallFrame) -> ScmResult {
+    ScmResult::ok(make_simple_struct_instance_from_array(
+        cfr.arguments(),
+        cfr.callee().closed_native_procedure()[0],
+    ))
+}
+
+pub(crate) fn parse_pos(
+    who: &str,
+    st: Handle<StructType>,
+    args: &[Value],
+    name: &str,
+) -> Result<i32, Value> {
+    let mut pos = if !args[1].is_int32() || args[1].get_int32() < 0 {
+        return wrong_contract(
+            if who.len() == 0 { name } else { who },
+            "exact-nonnegative-integer?",
+            2,
+            args.len() as _,
+            args,
+        );
+    } else {
+        args[1].get_int32()
+    };
+
+    if (pos < st.num_slots) && (st.name_pos != 0) {
+        pos += st.parent_types[st.name_pos as usize - 1].num_slots;
+    }
+
+    if pos >= st.num_slots {
+        let who = if who.len() == 0 { name } else { who };
+
+        let sc = if st.name_pos != 0 {
+            st.num_slots - st.parent_types[st.name_pos as usize - 1].num_slots
+        } else {
+            st.num_slots
+        };
+
+        return contract_error(
+            who,
+            "index too large",
+            &[
+                &"index",
+                &args[1],
+                &"maximum allowed index",
+                &Value::encode_int32(sc - 1),
+                &"structure",
+                &args[0],
+            ],
+        );
+    }
+
+    Ok(pos)
+}
+
+fn extract_field_proc_name(st_name: Value, vars: &[Value]) -> String {
+    let name_info = vars[2];
+    let pred_name;
+    if name_info.is_symbol() {
+        pred_name = name_info.strsym().to_string();
+    } else {
+        pred_name = format!("{}", st_name.strsym());
+    }
+
+    pred_name
+}
+
+fn extract_accessor_offset(acc: Value) -> i32 {
+    let st = acc.struct_type();
+
+    if st.name_pos != 0 {
+        st.parent_types[st.name_pos as usize - 1].num_slots
+    } else {
+        0
+    }
+}
+
+fn wrong_struct_type(
+    vars: &[Value],
+    name: &str,
+    expected: Value,
+    received: Value,
+    which: i32,
+    argc: i32,
+    args: &[Value],
+) -> Value {
+    let pred_name = extract_field_proc_name(expected, vars);
+
+    if expected == received {
+        return contract_error::<()>("contract violation;\n given value instantiates a different structure type with the same name", name, &[
+            &"expected", &pred_name,
+            &"given", &args[which as usize]
+        ]).unwrap_err();
+    } else {
+        return wrong_contract::<()>(name, &pred_name, which, argc, args).unwrap_err();
+    }
+}
+
+pub extern "C" fn struct_getter(cfr: &mut CallFrame) -> ScmResult {
+    let st = cfr.callee().closed_native_procedure()[0].struct_type();
+    let inst = cfr.argument(0);
+    let name = cfr.callee().native_procedure().name.strsym();
+    if !inst.is_struct() {
+        let pred_name = extract_field_proc_name(st.name, &cfr.callee().closed_native_procedure());
+        return match wrong_contract::<()>(
+            name,
+            &pred_name,
+            0,
+            cfr.argument_count() as _,
+            cfr.arguments(),
+        ) {
+            Ok(_) => unreachable!(),
+            Err(v) => ScmResult::err(v),
+        };
+    } else if !is_struct_instance(st.into(), inst) {
+        return ScmResult::err(wrong_struct_type(
+            &cfr.callee().closed_native_procedure(),
+            name,
+            st.name,
+            inst.structure().type_.name,
+            0,
+            cfr.arguments().len() as _,
+            cfr.arguments(),
+        ));
+    }
+
+    let pos = if cfr.arguments().len() == 2 {
+        match parse_pos(
+            "",
+            st,
+            cfr.arguments(),
+            cfr.callee().native_procedure().name.strsym(),
+        ) {
+            Ok(p) => p,
+            Err(e) => return ScmResult::err(e),
+        }
+    } else {
+        cfr.callee().closed_native_procedure()[1].get_int32()
+    };
+
+    ScmResult::ok(struct_ref(inst, pos as _))
+}
+
+pub extern "C" fn struct_setter(cfr: &mut CallFrame) -> ScmResult {
+    let st = cfr.callee().closed_native_procedure()[0].struct_type();
+    let inst = cfr.argument(0);
+    let name = cfr.callee().native_procedure().name.strsym();
+    if !inst.is_struct() {
+        let pred_name = extract_field_proc_name(st.name, &cfr.callee().closed_native_procedure());
+        return match wrong_contract::<()>(
+            name,
+            &pred_name,
+            0,
+            cfr.argument_count() as _,
+            cfr.arguments(),
+        ) {
+            Ok(_) => unreachable!(),
+            Err(v) => ScmResult::err(v),
+        };
+    } else if !is_struct_instance(st.into(), inst) {
+        return ScmResult::err(wrong_struct_type(
+            &cfr.callee().closed_native_procedure(),
+            name,
+            st.name,
+            inst.structure().type_.name,
+            0,
+            cfr.arguments().len() as _,
+            cfr.arguments(),
+        ));
+    }
+    let v;
+    let pos = if cfr.arguments().len() == 3 {
+        v = cfr.argument(2);
+        match parse_pos(
+            "",
+            st,
+            cfr.arguments(),
+            cfr.callee().native_procedure().name.strsym(),
+        ) {
+            Ok(p) => p,
+            Err(e) => return ScmResult::err(e),
+        }
+    } else {
+        v = cfr.argument(1);
+        cfr.callee().closed_native_procedure()[1].get_int32()
+    };
+    struct_set(inst, pos as _, v);
+    ScmResult::ok(Value::encode_undefined_value())
+}
+
+extern "C" fn struct_pred(cfr: &mut CallFrame) -> ScmResult {
+    let stype = cfr.callee().closed_native_procedure()[0].struct_type();
+
+    ScmResult::ok(is_struct_instance(stype.into(), cfr.argument(0)))
+}
+
+extern "C" fn struct_p(cfr: &mut CallFrame) -> ScmResult {
+    ScmResult::ok(cfr.argument(0).is_struct())
+}
+
+extern "C" fn struct_type_p(cfr: &mut CallFrame) -> ScmResult {
+    ScmResult::ok(cfr.argument(0).is_struct_type())
+}
+
+fn check_struct(who: &str, args: &[Value]) -> Result<(), Value> {
+    if !args[0].is_struct_type() {
+        return wrong_contract(who, "struct-type?", 0, args.len() as _, args);
+    }
+
+    Ok(())
+}
+
+extern "C" fn struct_type_pred(cfr: &mut CallFrame) -> ScmResult {
+    match check_struct("struct-type-make-predicate", cfr.arguments()) {
+        Ok(()) => (),
+        Err(e) => return ScmResult::err(e),
+    }
+
+    let stype = cfr.argument(0).struct_type();
+
+    let name = format!("{}?", stype.name.strsym());
+    let val = make_struct_proc(stype, &name, Value::encode_null_value(), ProcType::Pred, 0);
+
+    ScmResult::ok(val)
+}
+
+extern "C" fn struct_type_constr(cfr: &mut CallFrame) -> ScmResult {
+    match check_struct("struct-type-make-constructor", cfr.arguments()) {
+        Ok(()) => (),
+        Err(e) => return ScmResult::err(e),
+    }
+
+    let stype = cfr.argument(0).struct_type();
+    let args = cfr.arguments();
+    let v = if args.len() < 2 || args[1].is_false() {
+        format!("make-{}", stype.name.strsym())
+    } else if args[1].is_symbol() {
+        args[1].strsym().to_string()
+    } else {
+        return ScmResult::err(
+            wrong_contract::<()>(
+                "struct-type-make-constructor",
+                "symbol?",
+                1,
+                args.len() as _,
+                args,
+            )
+            .unwrap_err(),
+        );
+    };
+    let val = make_struct_proc(stype, &v, Value::encode_null_value(), ProcType::Constr, 0);
+
+    ScmResult::ok(val)
+}
+
+extern "C" fn make_struct_instance(cfr: &mut CallFrame) -> ScmResult {
+    match make_struct_instance_(cfr.callee().closed_native_procedure()[0], cfr.arguments()) {
+        Ok(v) => ScmResult::ok(v),
+        Err(e) => ScmResult::err(e),
+    }
+}
+
+pub fn make_struct_values(typ: Value, names: &mut [Value], flags: i32) -> Value {
+    let stype = typ.struct_type();
+
+    let mut count = names.len();
+
+    if (flags & STRUCT_EXPTIME) != 0 {
+        count -= 1;
+    }
+
+    let mut values = make_values_n(Thread::current(), count);
+
+    let mut pos = 0;
+
+    if (flags & STRUCT_NO_TYPE) == 0 {
+        values[pos] = typ;
+        pos += 1;
+    }
+
+    if (flags & STRUCT_NO_CONSTRUCTOR) == 0 {
+        let nm = names[pos].strsym();
+
+        let vi = make_struct_proc(
+            stype,
+            nm,
+            Value::encode_null_value(),
+            ProcType::Constr,
+            stype.num_slots,
+        );
+
+        values[pos] = vi;
+        pos += 1;
+    }
+    if (flags & STRUCT_NO_PRED) == 0 {
+        let nm = names[pos].strsym();
+
+        let vi = make_struct_proc(stype, nm, Value::encode_null_value(), ProcType::Pred, 0);
+
+        values[pos] = vi;
+        pos += 1;
+    }
+
+    if (flags & STRUCT_GEN_GET) != 0 {
+        count -= 1;
+    }
+
+    if (flags & STRUCT_GEN_SET) != 0 {
+        count -= 1;
+    }
+
+    let mut slot_num = if stype.name_pos != 0 {
+        stype.parent_types[stype.name_pos as usize - 1].num_slots
+    } else {
+        0
+    };
+    while pos < count {
+        if (flags & STRUCT_NO_GET) == 0 {
+            let nm = names[pos].strsym();
+
+            let vi = make_struct_proc(
+                stype,
+                nm,
+                Value::encode_null_value(),
+                ProcType::Getter,
+                slot_num,
+            );
+            values[pos] = vi;
+            pos += 1;
+        }
+
+        if (flags & STRUCT_NO_SET) == 0 {
+            let nm = names[pos].strsym();
+
+            let vi = make_struct_proc(
+                stype,
+                nm,
+                Value::encode_null_value(),
+                ProcType::Setter,
+                slot_num,
+            );
+            values[pos] = vi;
+            pos += 1;
+        }
+
+        slot_num += 1;
+    }
+
+    if (flags & STRUCT_GEN_GET) != 0 {
+        let nm = names[pos].strsym();
+
+        let vi = make_struct_proc(
+            stype,
+            nm,
+            Value::encode_null_value(),
+            ProcType::GenGetter,
+            slot_num,
+        );
+        values[pos] = vi;
+        pos += 1;
+    }
+
+    if (flags & STRUCT_GEN_SET) != 0 {
+        let nm = names[pos].strsym();
+
+        let vi = make_struct_proc(
+            stype,
+            nm,
+            Value::encode_null_value(),
+            ProcType::GenSetter,
+            slot_num,
+        );
+        values[pos] = vi;
+    }
+
+    values.into()
+}
+
+fn _make_struct_names(
+    base: &str,
+    fcount: usize,
+    mut field_symbols: Option<Value>,
+    field_strings: &[&str],
+    flags: i32,
+) -> ArrayList<Value> {
+    let mut count = 0;
+
+    if (flags & STRUCT_NO_TYPE) == 0 {
+        count += 1;
+    }
+
+    if (flags & STRUCT_NO_CONSTRUCTOR) == 0 {
+        count += 1;
+    }
+
+    if (flags & STRUCT_NO_PRED) == 0 {
+        count += 1;
+    }
+
+    if (flags & STRUCT_GEN_GET) != 0 {
+        count += fcount;
+    }
+
+    if (flags & STRUCT_GEN_SET) != 0 {
+        count += fcount;
+    }
+
+    if (flags & STRUCT_NO_GET) == 0 {
+        count += 1;
+    }
+
+    if (flags & STRUCT_NO_SET) == 0 {
+        count += 1;
+    }
+
+    let mut names = ArrayList::with_capacity(Thread::current(), count);
+
+    let as_sym = (flags & STRUCT_NAMES_AS_STRINGS) != 0;
+
+    if (flags & STRUCT_NO_TYPE) == 0 {
+        let nm = type_name!(base, as_sym);
+        names.push(Thread::current(), nm);
+    }
+
+    if (flags & STRUCT_NO_CONSTRUCTOR) == 0 {
+        let nm = if (flags & STRUCT_NO_MAKE_PREFIX) != 0 {
+            cstr_name!(base, as_sym)
+        } else {
+            cstr_make_name!(base, as_sym)
+        };
+        names.push(Thread::current(), nm);
+    }
+
+    if (flags & STRUCT_NO_PRED) == 0 {
+        let nm = pred_name!(base, as_sym);
+        names.push(Thread::current(), nm);
+    }
+
+    if fcount != 0 {
+        for slot_num in 0..fcount {
+            let fname = if let Some(fs) = field_symbols {
+                let fun = fs.car();
+                field_symbols = Some(fs.cdr());
+
+                fun.strsym()
+            } else {
+                field_strings[slot_num]
+            };
+
+            if (flags & STRUCT_NO_GET) == 0 {
+                let nm = get_name!(base, fname, as_sym);
+                names.push(Thread::current(), nm);
+            }
+
+            if (flags & STRUCT_NO_SET) == 0 {
+                let nm = set_name!(base, fname, as_sym);
+                names.push(Thread::current(), nm);
+            }
+        }
+    }
+
+    if (flags & STRUCT_GEN_GET) != 0 {
+        let nm = genget_name!(base, as_sym);
+        names.push(Thread::current(), nm);
+    }
+
+    if (flags & STRUCT_GEN_SET) != 0 {
+        let nm = genset_name!(base, as_sym);
+        names.push(Thread::current(), nm);
+    }
+
+    if (flags & STRUCT_EXPTIME) != 0 {
+        let nm = exptime_name!(base, as_sym);
+        names.push(Thread::current(), nm);
+    }
+
+    names
+}
+
+pub fn make_struct_names(
+    base: Value,
+    fcount: usize,
+    field_symbols: Option<Value>,
+    field_strings: &[&str],
+    flags: i32,
+) -> ArrayList<Value> {
+    _make_struct_names(base.strsym(), fcount, field_symbols, field_strings, flags)
+}
+
+pub fn make_struct_names_from_array(
+    base: &str,
+    fcount: usize,
+    fields: &[&str],
+    flags: i32,
+) -> ArrayList<Value> {
+    _make_struct_names(base, fcount, None, fields, flags)
+}
+
+fn append_super_props(p: Handle<StructProperty>, arg: Value, orig: Value) -> Result<Value, Value> {
+    let mut first = None::<Value>;
+    let mut last = None::<Value>;
+
+    if p.supers.is_pair() {
+        let mut props = p.supers;
+
+        while props.is_pair() {
+            let v = props.car();
+
+            let c = apply(v.cdr(), &[arg])?;
+            let v = scm_cons(Thread::current(), v.car(), c);
+
+            let pr = scm_cons(Thread::current(), v, Value::encode_null_value());
+
+            if let Some(last) = last {
+                last.set_cdr(pr);
+            } else {
+                first = Some(pr);
+            }
+
+            last = Some(pr);
+
+            props = props.cdr();
+        }
+    }
+
+    Ok(if let Some(last) = last {
+        last.set_cdr(orig);
+        first.unwrap()
+    } else {
+        orig
+    })
+}
+
+pub fn force_struct_type_info(mut stype: Handle<StructType>) {
+    if !stype.accessor.is_procedure() {
+        let fun = genget_name!(stype.name.strsym(), false);
+        let p = make_struct_proc(
+            stype,
+            fun.strsym(),
+            Value::encode_null_value(),
+            ProcType::GenGetter,
+            0,
+        );
+
+        stype.accessor = p;
+
+        let fun = genset_name!(stype.name.strsym(), false);
+        let p = make_struct_proc(
+            stype,
+            fun.strsym(),
+            Value::encode_null_value(),
+            ProcType::GenSetter,
+            0,
+        );
+
+        stype.mutator = p;
+    }
+}
+
+fn get_struct_type_info(args: &[Value], a: &mut [Value]) {
+    let stype = args[0].struct_type();
+
+    force_struct_type_info(stype);
+
+    let parent = if stype.name_pos != 0 {
+        Some(stype.parent_types[stype.name_pos as usize - 1])
+    } else {
+        None
+    };
+
+    a[0] = stype.name;
+    let cnt = stype.num_islots - parent.map(|x| x.num_islots).unwrap_or(0);
+    a[1] = Value::encode_int32(cnt);
+    a[2] = Value::encode_int32(stype.num_slots - parent.map(|x| x.num_slots).unwrap_or(0) - cnt);
+    a[3] = stype.accessor;
+    a[4] = stype.mutator;
+
+    a[5] = Value::encode_null_value();
+    let p = stype.name_pos - 1;
+
+    a[6] = if p >= 0 {
+        stype.parent_types[p as usize].into()
+    } else {
+        Value::encode_bool_value(false)
+    };
+
+    a[7] = (p == stype.name_pos - 1).into();
+}
+
+fn guard_property(prop: Value, v: Value, t: Handle<StructType>) -> Result<Value, Value> {
+    let p = prop.struct_property();
+
+    if p.guard.is_true() && p.guard.is_procedure() {
+        let mut info: [Value; 7] = [Value::encode_null_value(); 7];
+        get_struct_type_info(&[t.into()], &mut info);
+
+        let l = scm_list(Thread::current(), &info);
+
+        return apply(p.guard, &[v, l]);
+    } else {
+        Ok(v)
+    }
+}
+
+fn _make_struct_type(
+    name: Value,
+    parent: Value,
+    num_fields: usize,
+    num_uninit_fields: usize,
+    uninit_val: Option<Value>,
+    _props: Value,
+    guard: Value,
+) -> Result<Value, Value> {
+    let parent_type = if parent.is_false() {
+        None
+    } else {
+        Some(parent.struct_type())
+    };
+
+    let depth = parent_type.map(|x| 1 + x.name_pos).unwrap_or(0);
+
+    let num_slots = num_fields as i32
+        + num_uninit_fields as i32
+        + parent_type.map(|x| x.num_slots).unwrap_or(0);
+    let num_islots = num_fields as i32 + parent_type.map(|x| x.num_islots).unwrap_or(0);
+    //let sprops = parent_type.map(|x| x.props);
+    //let mut num_props = parent_type.map(|x| x.props.len()).unwrap_or(0);
+    let uninit_val = uninit_val.unwrap_or(false.into());
+    /*
+    if props.pairp() {
+        let snum_props = props.list_length();
+        let mut i = 0;
+        let mut can_override = HashMap::with_hasher_and_capacity(RandomState::new(), snum_props as u32 + num_props as u32);
+        while i < num_props {
+            let prop = sprops.unwrap()[i].car();
+            can_override.put(vm.mutator(), prop, true);
+            i += 1;
+        }
+
+        let mut pa = Array::new(vm.mutator(), i as usize + snum_props as usize, |_, _| Value::null());
+
+        if i != 0 {
+            pa.copy_from_slice(&sprops.unwrap()[..i]);
+        }
+
+        num_props = i;
+
+        let mut l = props;
+
+        while l.pairp() {
+            let mut skip_supers = false;
+
+            let a = l.car();
+
+            let prop = a.car();
+
+            //let propv = guard_property(vm, prop, a.cdr(), )
+
+            let propv = a.cdr();
+            let mut j = 0;
+            while j < num_props {
+                if pa[j].car() == prop {
+                    break;
+                }
+            }
+
+            if j < num_props {
+                if !can_override.get(&prop).copied().unwrap() {
+                    if propv != pa[j].cdr() {
+                        break;
+                    }
+                    skip_supers = true;
+                }
+
+                can_override.put(vm.mutator(), prop, false);
+            } else {
+                snum_props += 1;
+            }
 
 
+
+            l = l.cdr();
+
+            if !skip_supers {
+                l = append_super_props(vm, prop.downcast_structureproperty(), propv, l)?;
+            }
+
+            a = Value::make_cons(prop, propv);
+            pa[j] = a;
+        }
+
+        if snum_props != 0 {
+
+        }
+
+    }   */
+
+
+    let vm = scm_vm();
+    vm.mutator().safepoint();
+    let  props = ArrayList::with_capacity(Thread::current(), 1);
+
+    let mut parent_types = ArrayList::with_capacity(vm.mutator(), depth as usize + 1);
+    unsafe {
+        parent_types.set_len(depth as usize + 1);
+    }
+    for j in (0..depth).rev() {
+        parent_types.write_barrier(vm.mutator());
+        parent_types[j as usize] = parent_type.unwrap().parent_types[j as usize];
+        //parent_types[j as usize] = parent_type.unwrap().parent_types[j as usize];
+    }
+
+    /*let this = StructType::new(
+        vm.mutator(),
+        num_slots,
+        num_islots,
+        depth,
+        name,
+        Value::make_false(),
+        Value::make_false(),
+        uninit_val,
+        props,
+        guard,
+        parent_types,
+    );*/
+
+    let mut this = vm.mutator().allocate(StructType {
+        header: ObjectHeader::new(Type::StructType),
+        num_islots,
+        num_slots,
+        name_pos: depth,
+        name,
+        accessor: false.into(),
+        mutator: false.into(),
+        uninit_val,
+        props,
+        guard,
+        parent_types,
+    });
+
+    this.parent_types.write_barrier(vm.mutator());
+    this.parent_types[depth as usize] = this.into();
+
+    Ok(this.into())
+}
+
+pub fn make_struct_type(
+    name: Value,
+    parent: Value,
+    num_fields: usize,
+    num_uninit_fields: usize,
+    uninit_val: Option<Value>,
+    props: Value,
+    guard: Value,
+) -> Result<Value, Value> {
+    _make_struct_type(
+        name,
+        parent,
+        num_fields,
+        num_uninit_fields,
+        uninit_val,
+        props,
+        guard,
+    )
+}
+
+pub fn make_struct_type_from_string(
+    name: &str,
+    parent: Value,
+    num_fields: usize,
+    props: Value,
+    guard: Value,
+) -> Result<Value, Value> {
+    let name = name.intern().into();
+    _make_struct_type(name, parent, num_fields, 0, None, props, guard)
+}
+
+extern "C" fn make_struct_type_proc(cfr: &mut CallFrame) -> ScmResult {
+    let args = cfr.arguments();
+
+    if !args[0].is_symbol() {
+        return ScmResult::err(
+            wrong_contract::<()>("make-struct-type", "symbol?", 0, args.len() as _, args)
+                .unwrap_err(),
+        );
+    }
+
+    if !args[1].is_false() && !args[1].is_struct_type() {
+        return ScmResult::err(
+            wrong_contract::<()>(
+                "make-struct-type",
+                "(or/c struct-type? #f)",
+                1,
+                args.len() as _,
+                args,
+            )
+            .unwrap_err(),
+        );
+    }
+
+    let initc = if !args[2].is_int32() || args[2].get_int32() < 0 {
+        return ScmResult::err(
+            wrong_contract::<()>(
+                "make-struct-type",
+                "exact-nonnegative-integer?",
+                2,
+                args.len() as _,
+                args,
+            )
+            .unwrap_err(),
+        );
+    } else {
+        args[2].get_int32() as usize
+    };
+
+    let uninitc = if !args[3].is_int32() || args[3].get_int32() < 0 {
+        return ScmResult::err(
+            wrong_contract::<()>(
+                "make-struct-type",
+                "exact-nonnegative-integer?",
+                3,
+                args.len() as _,
+                args,
+            )
+            .unwrap_err(),
+        );
+    } else {
+        args[3].get_int32() as usize
+    };
+
+    let mut uninit_val: Value = false.into();
+    let mut props = Value::encode_null_value();
+    let mut guard = Value::encode_null_value();
+    let mut cstr_name = Value::encode_null_value();
+
+    if args.len() > 4 {
+        uninit_val = args[4];
+
+        if args.len() > 5 {
+            props = args[5];
+
+            if args.len() > 6 {
+                guard = args[6];
+
+                if !guard.is_procedure() {
+                    return ScmResult::err(
+                        wrong_contract::<()>(
+                            "make-struct-type",
+                            "procedure?",
+                            6,
+                            args.len() as _,
+                            args,
+                        )
+                        .unwrap_err(),
+                    );
+                }
+
+                if args.len() > 7 {
+                    cstr_name = args[7];
+
+                    if !cstr_name.is_symbol() {
+                        return ScmResult::err(
+                            wrong_contract::<()>(
+                                "make-struct-type",
+                                "symbol?",
+                                7,
+                                args.len() as _,
+                                args,
+                            )
+                            .unwrap_err(),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    let typ = match _make_struct_type(
+        args[0],
+        args[1],
+        initc,
+        uninitc,
+        Some(uninit_val),
+        props,
+        guard,
+    ) {
+        Ok(v) => v,
+        Err(e) => return ScmResult::err(e),
+    };
+
+    {
+        let mut names = make_struct_names(
+            args[0],
+            0,
+            None,
+            &[],
+            STRUCT_GEN_GET | STRUCT_GEN_SET | STRUCT_NAMES_AS_STRINGS,
+        );
+
+        if cstr_name.is_symbol() {
+            names[1] = make_string(Thread::current(), cstr_name.strsym()).into();
+        }
+
+        let r = make_struct_values(
+            typ,
+            &mut names,
+            STRUCT_GEN_GET | STRUCT_GEN_SET | STRUCT_NAMES_AS_STRINGS,
+        );
+
+        ScmResult::ok(r)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[allow(dead_code)]
+enum ProcType {
+    Constr,
+    Pred,
+    GenGetter,
+    GenSetter,
+    Getter,
+    Setter,
+}
+
+fn make_struct_proc(
+    stype: Handle<StructType>,
+    func_name: &str,
+    contract: Value,
+    proc_type: ProcType,
+    field_num: i32,
+) -> Value {
+    let mut flags = 0;
+    let mut p = if proc_type == ProcType::Constr {
+        let simple = is_simple_struct_type(stype);
+        flags |= if simple {
+            SCM_PRIM_STRUCT_TYPE_SIMPLE_CONSTR
+        } else {
+            SCM_PRIM_STRUCT_TYPE_CONSTR
+        };
+        scm_make_closed_native_procedure(
+            Thread::current(),
+            func_name.intern().into(),
+            if simple {
+                make_simple_struct_instance
+            } else {
+                make_struct_instance
+            },
+            stype.num_islots as _,
+            stype.num_islots as _,
+            &[stype.into()],
+        )
+    } else if proc_type == ProcType::Pred {
+        flags |= SCM_PRIM_STRUCT_TYPE_PRED;
+        scm_make_closed_native_procedure(
+            Thread::current(),
+            func_name.intern().into(),
+            struct_pred,
+            1,
+            1,
+            &[stype.into()],
+        )
+    } else {
+        let need_pos = proc_type == ProcType::GenSetter || proc_type == ProcType::GenGetter;
+
+        let mut a = [stype.into(), Value::encode_int32(field_num), contract];
+
+        if proc_type == ProcType::GenGetter || proc_type == ProcType::Getter {
+            if need_pos {
+                flags |= SCM_PRIM_STRUCT_TYPE_INDEXED_GETTER;
+            } else {
+                flags |= SCM_PRIM_STRUCT_TYPE_INDEXLESS_GETTER;
+            }
+            scm_make_closed_native_procedure(
+                Thread::current(),
+                func_name.intern().into(),
+                struct_getter,
+                if need_pos { 2 } else { 1 },
+                if need_pos { 2 } else { 1 },
+                &mut a,
+            )
+        } else {
+            if need_pos {
+                flags |= SCM_PRIM_STRUCT_TYPE_INDEXED_SETTER;
+            } else {
+                flags |= SCM_PRIM_STRUCT_TYPE_INDEXLESS_SETTER;
+            }
+            scm_make_closed_native_procedure(
+                Thread::current(),
+                func_name.intern().into(),
+                struct_setter,
+                if need_pos { 3 } else { 2 },
+                if need_pos { 3 } else { 2 },
+                &mut a,
+            )
+        }
+    };
+    p.header.flags |= flags as u32;
+    p.into()
+}
+
+fn make_struct_field_xxor(who: &str, getter: bool, args: &[Value]) -> ScmResult {
+    if !args[0].is_native_procedure()
+        || (args[0].object_header().flags
+            & if getter {
+                SCM_PRIM_STRUCT_TYPE_INDEXED_GETTER as u32
+            } else {
+                SCM_PRIM_STRUCT_TYPE_INDEXED_SETTER as u32
+            }
+            == 0)
+    {
+        return ScmResult::err(wrong_contract::<()>(who, if getter {
+            "(and/c struct-accessor-procedure? (lambda (p) (procedure-arity-includes? p 2)))"
+        } else {
+            "(and/c struct-mutator-procedure? (lambda (p) (procedure-arity-includes? p 3)))"
+        }, 0, args.len() as _, args).unwrap_err());
+    }
+
+    let pos = match parse_pos(
+        who,
+        args[0].closed_native_procedure()[0].struct_type(),
+        args,
+        "",
+    ) {
+        Ok(x) => x,
+        Err(e) => return ScmResult::err(e),
+    };
+
+    let fieldstr ;
+    let mut name = None;
+    let mut contract = Value::encode_null_value();
+    let mut _module = Value::encode_null_value();
+    if args.len() > 2 {
+        if args[2].is_false() {
+            fieldstr = None;
+        } else {
+            if !args[2].is_symbol() {
+                return ScmResult::err(
+                    wrong_contract::<()>(who, "(or/c symbol? #f)", 2, args.len() as _, args)
+                        .unwrap_err(),
+                );
+            }
+
+            fieldstr = Some(args[2].strsym());
+        }
+
+        if args.len() > 3 {
+            if args[3].is_false() {
+                name = None;
+            } else {
+                name = fieldstr;
+
+                if !args[3].is_symbol() && !args[3].is_string() {
+                    return ScmResult::err(
+                        wrong_contract::<()>(
+                            who,
+                            "(or/c symbol? string? #f)",
+                            3,
+                            args.len() as _,
+                            args,
+                        )
+                        .unwrap_err(),
+                    );
+                }
+
+                contract = args[3];
+
+                if args.len() > 4 {
+                    if !args[4].is_module() {
+                        return ScmResult::err(
+                            wrong_contract::<()>(
+                                who,
+                                "(or/c symbol? module?)",
+                                4,
+                                args.len() as _,
+                                args,
+                            )
+                            .unwrap_err(),
+                        );
+                    }
+
+                    _module = args[4];
+                }
+            }
+        }
+    } else {
+        fieldstr = None;
+        name = None;
+    }
+
+    let fieldstr = if name.is_none() && fieldstr.is_none() {
+        Some(format!("field{:x}", args[1].get_int32()))
+    } else {
+        fieldstr.map(|x| x.to_string())
+    };
+    let st = args[0].closed_native_procedure()[0].struct_type();
+
+    if name.is_none() {
+        if fieldstr.is_none() {
+            if getter {
+                name = Some("accessor");
+            } else {
+                name = Some("mutator");
+            }
+        } else if getter {
+            name = Some(get_name!(st.name.strsym(), &fieldstr.unwrap(), false).strsym());
+        } else {
+            name = Some(set_name!(st.name.strsym(), &fieldstr.unwrap(), false).strsym());
+        }
+    }
+
+    ScmResult::ok(make_struct_proc(
+        st,
+        name.unwrap(),
+        contract,
+        if getter {
+            ProcType::Getter
+        } else {
+            ProcType::Setter
+        },
+        pos,
+    ))
+}
+
+extern "C" fn make_struct_field_accessor(cfr: &mut CallFrame) -> ScmResult {
+    make_struct_field_xxor("make-struct-field-accessor", true, cfr.arguments())
+}
+
+extern "C" fn make_struct_field_mutator(cfr: &mut CallFrame) -> ScmResult {
+    make_struct_field_xxor("make-struct-field-mutator", false, cfr.arguments())
+}
+
+pub(crate) fn initialize_struct() {
+    let module = scm_capy_module().module();
+
+    let subr = scm_make_subr("make-struct-type", make_struct_type_proc, 4, 8);
+    scm_define(module, "make-struct-type".intern(), subr).unwrap();
+
+    let subr = scm_make_subr("make-struct-type-property", make_struct_type_property, 1, 5);
+    scm_define(module, "make-struct-type-property".intern(), subr).unwrap();
+
+    let subr = scm_make_subr("struct-type-property?", struct_type_property_p, 1, 1);
+    scm_define(module, "struct-type-property?".intern(), subr).unwrap();
+
+    let subr = scm_make_subr("struct?", struct_p, 1, 1);
+    scm_define(module, "struct?".intern(), subr).unwrap();
+
+    let subr = scm_make_subr("struct-type?", struct_type_p, 1, 1);
+    scm_define(module, "struct-type?".intern(), subr).unwrap();
+
+    let subr = scm_make_subr("struct-type-make-predicate", struct_type_pred, 1, 1);
+    scm_define(module, "struct-type-make-predicate".intern(), subr).unwrap();
+
+    let subr = scm_make_subr("struct-type-make-constructor", struct_type_constr, 1, 2);
+
+    scm_define(module, "struct-type-make-constructor".intern(), subr).unwrap();
+
+    let subr = scm_make_subr("make-struct-field-accessor", make_struct_field_accessor, 2, 5);
+    scm_define(module, "make-struct-field-accessor".intern(), subr).unwrap();
+
+    let subr = scm_make_subr("make-struct-field-mutator", make_struct_field_mutator, 2, 5);
+    scm_define(module, "make-struct-field-mutator".intern(), subr).unwrap();
+}

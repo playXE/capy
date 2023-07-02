@@ -5,9 +5,9 @@ use crate::{
     runtime::list::{scm_acons, scm_cons, scm_econs},
     runtime::object::{Module, ObjectHeader, Syntax, Type},
     runtime::string::make_string,
-    runtime::symbol::make_symbol,
     runtime::value::Value,
     runtime::vector::{make_bytevector_from_slice, make_vector},
+    runtime::{error::make_srcloc, symbol::make_symbol},
     scm_dolist, scm_for_each,
     vm::scm_current_module,
 };
@@ -803,13 +803,18 @@ impl IForm {
         Ok(())
     }
 }
-fn r7rs_to_value_k(thread: &mut Thread, expr: &Expr<NoIntern>, cont: &mut dyn FnMut(Value)) {
+fn r7rs_to_value_k(
+    thread: &mut Thread,
+    filename: Value,
+    expr: &Expr<NoIntern>,
+    cont: &mut dyn FnMut(Value),
+) {
     match expr {
         Expr::Bool(x) => cont(Value::encode_bool_value(*x)),
         Expr::Fixnum(i) => cont(Value::encode_int32(*i)),
         Expr::Float(f) => cont(Value::encode_f64_value(*f)),
-        Expr::Pair(car, cdr) => r7rs_to_value_k(thread, car, &mut |car| {
-            r7rs_to_value_k(Thread::current(), cdr, &mut |cdr| {
+        Expr::Pair(car, cdr) => r7rs_to_value_k(thread, filename, car, &mut |car| {
+            r7rs_to_value_k(Thread::current(), filename, cdr, &mut |cdr| {
                 cont(scm_cons(Thread::current(), car, cdr))
             })
         }),
@@ -820,7 +825,7 @@ fn r7rs_to_value_k(thread: &mut Thread, expr: &Expr<NoIntern>, cont: &mut dyn Fn
         Expr::GrowableVector(x) | Expr::ImmutableVector(x) => {
             let vec = make_vector(thread, x.len());
             for (i, e) in x.iter().enumerate() {
-                r7rs_to_value_k(thread, e, &mut move |e| {
+                r7rs_to_value_k(thread, filename, e, &mut move |e| {
                     let mut vec = vec;
                     Thread::current().write_barrier(vec);
                     vec[i] = e;
@@ -832,25 +837,23 @@ fn r7rs_to_value_k(thread: &mut Thread, expr: &Expr<NoIntern>, cont: &mut dyn Fn
         Expr::Null => cont(Value::encode_null_value()),
         Expr::Syntax(loc, e) => {
             if let Expr::Pair(car, cdr) = &**e {
-                let mut pos = make_vector(thread, 2);
-                pos[0] = Value::encode_int32(loc.line as i32);
-                pos[1] = Value::encode_int32(loc.col as i32);
-                let car = r7rs_to_value(thread, car);
-                let cdr = r7rs_to_value(thread, cdr);
-                let p = scm_econs(thread, pos.into(), car, cdr).into();
+                let srcloc = make_srcloc(filename, loc.line as i32, loc.col as i32, 0);
+                let car = r7rs_to_value(thread, filename, car);
+                let cdr = r7rs_to_value(thread, filename, cdr);
+                let p = scm_econs(thread, srcloc.into(), car, cdr).into();
 
                 cont(p)
             } else {
-                r7rs_to_value_k(thread, e, cont)
+                r7rs_to_value_k(thread, filename, e, cont)
             }
         }
         _ => unsafe { std::hint::unreachable_unchecked() },
     }
 }
 
-pub fn r7rs_to_value(thread: &mut Thread, expr: &Expr<NoIntern>) -> Value {
+pub fn r7rs_to_value(thread: &mut Thread, filename: Value, expr: &Expr<NoIntern>) -> Value {
     let mut ret = Value::encode_null_value();
-    r7rs_to_value_k(thread, expr, &mut |x| ret = x);
+    r7rs_to_value_k(thread, filename, expr, &mut |x| ret = x);
     ret
 }
 
@@ -937,9 +940,13 @@ pub fn compile(expr: Value, cenv: Value) -> Result<Value, Value> {
     Ok(make_procedure(thread, code_block).into())
 }
 
-pub fn compile_r7rs_expr(expr: &Expr<NoIntern>, cenv: Value) -> Result<Value, Value> {
+pub fn compile_r7rs_expr(
+    expr: &Expr<NoIntern>,
+    filename: Value,
+    cenv: Value,
+) -> Result<Value, Value> {
     let thread = Thread::current();
-    let expr = r7rs_to_value(thread, expr);
+    let expr = r7rs_to_value(thread, filename, expr);
 
     compile(expr, cenv)
 }

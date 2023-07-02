@@ -1,9 +1,6 @@
-use std::path::PathBuf;
-
 use capy::{repl::repl, runtime::load::scm_vm_load, runtime::value::Value};
-
 use rsgc::{prelude::HeapArguments, thread::main_thread};
-
+use std::path::PathBuf;
 use structopt::StructOpt;
 
 #[derive(StructOpt)]
@@ -14,11 +11,12 @@ pub struct Args {
 
 fn main() {
     env_logger::init();
+
     let _ = main_thread(HeapArguments::from_env(), |heap| {
         heap.add_core_root_set();
-
-        capy::init();
         capy::vm::scm_init_vm();
+        capy::init();
+        
 
         let args = Args::from_args();
 

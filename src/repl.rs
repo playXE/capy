@@ -299,10 +299,13 @@ pub fn repl() {
 
     let mut interner = NoIntern;
     let t = Thread::current();
+    let fname = make_string(t, "<repl>");
     let cenv = make_cenv(scm_user_module().module(), Value::encode_null_value());
     loop {
+
         match rl.readline("capy> ") {
             Ok(input) => {
+                t.safepoint();
                 rl.add_history_entry(input.clone()).unwrap();
                 let mut parser = Parser::new(&mut interner, &input, false);
                 let proc = ByteCompiler::compile_while(t, |t| {
@@ -314,7 +317,7 @@ pub fn repl() {
 
                     match expr {
                         Ok(expr) => {
-                            let expr = r7rs_to_value(t, &expr);
+                            let expr = r7rs_to_value(t,  fname.into(), &expr);
                             let iform = pass1(
                                 expr,
                                 make_cenv(scm_user_module().module(), Value::encode_null_value()),

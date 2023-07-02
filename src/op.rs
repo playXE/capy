@@ -1,4 +1,3 @@
-
 use parse_display::Display;
 use rsgc::prelude::Handle;
 use termcolor::{ColorSpec, WriteColor};
@@ -9,8 +8,18 @@ use crate::runtime::object::CodeBlock;
 #[display(style = "snake_case")]
 pub enum Opcode {
     NoOp,
+    /// Regular `enter` opcode. Means that function is not yet JIT compiled.
+    /// Will simply increment hotness counter until certain threshold is reached.
+    /// After JIT compilation is requested changes to `EnterCompiling`.
     Enter,
+    /// Current function is being compiled with JIT, no-op for interpreter.
+    EnterCompiling,
+    /// Function compiled, background thread patched `EnterCompiling` to this opcode.
+    /// 
+    /// Will enter JITed code.
     EnterJit,
+    /// Function was blacklisted from JIT compilation.
+    EnterBlacklisted,
     Pop,
     Popn,
     Dup,
@@ -70,7 +79,6 @@ pub enum Opcode {
     BranchIfArgMismatch,
     BranchIfMinArgMismatch,
 
-
     IsNumber,
     IsComplex,
     IsReal,
@@ -90,6 +98,9 @@ pub enum Opcode {
     IsList,
     IsVector,
     IsTuple,
+    IsStructTypeProperty,
+    IsStruct,
+    IsStructType,
     //IsProperty,
     List,
     Cons,
@@ -109,14 +120,21 @@ pub enum Opcode {
     TupleSetI,
     ListToVector,
     VectorAppend,
-    
+    StructPropPred,
+    StructRef,
+    StructSet,
+    StructPred,
+
     Not,
 
-
     Count,
+    Wide = 255,
 }
 
-pub fn disassembly(code: Handle<CodeBlock>, mut out: impl WriteColor) -> Result<(), std::io::Error> {
+pub fn disassembly(
+    code: Handle<CodeBlock>,
+    mut out: impl WriteColor,
+) -> Result<(), std::io::Error> {
     let mut ip = 0;
 
     let cb = code;
@@ -144,11 +162,12 @@ pub fn disassembly(code: Handle<CodeBlock>, mut out: impl WriteColor) -> Result<
             u64::from_le_bytes([a, b, c, d, e, f, g, h])
         }};
     }
-
-    writeln!(out, "constants:")?;
-    for i in 0..cb.literals.vector_len() {
-        let val = cb.literals.vector_ref(i);
-        writeln!(out, "  {}: '{:?}'", i, val)?;
+    if cb.literals.vector_len() != 0 {
+        writeln!(out, "constants:")?;
+        for i in 0..cb.literals.vector_len() {
+            let val = cb.literals.vector_ref(i);
+            writeln!(out, "  {}: '{:?}'", i, val)?;
+        }
     }
 
     while ip < code.len() {
@@ -195,8 +214,7 @@ pub fn disassembly(code: Handle<CodeBlock>, mut out: impl WriteColor) -> Result<
             | Opcode::VectorSet
             | Opcode::Tuple
             | Opcode::TupleRef
-            | Opcode::TupleSet
-             => {
+            | Opcode::TupleSet => {
                 let n = read2!();
                 writeln!(out, " {}", n)?;
             }
@@ -222,28 +240,17 @@ pub fn disassembly(code: Handle<CodeBlock>, mut out: impl WriteColor) -> Result<
 
             Opcode::BranchIf | Opcode::BranchIfNot | Opcode::KeepBranchIfNot => {
                 let n = read4!() as i32;
-                
-                writeln!(
-                    out,
-                    " {}; => {}",
-                    n,
-                    ip as i32 + n,
-                )?;
+
+                writeln!(out, " {}; => {}", n, ip as i32 + n,)?;
             }
 
             Opcode::BranchIfArgMismatch | Opcode::BranchIfMinArgMismatch => {
                 let argc = read2!();
                 let n = read4!() as i32;
 
-                writeln!(
-                    out,
-                    " {}, {}; => {}",
-                    argc,
-                    n,
-                    ip as i32 + n,
-                )?;
+                writeln!(out, " {}, {}; => {}", argc, n, ip as i32 + n,)?;
             }
-            
+
             Opcode::PushConstant => {
                 let n = read2!();
                 writeln!(out, " {}", n)?;

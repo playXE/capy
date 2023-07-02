@@ -47,7 +47,7 @@ use crate::{
     vm::callframe::CallFrame,
 };
 
-use super::{object::ScmResult, violation::raise_argument_error};
+use super::{object::ScmResult, error::wrong_contract};
 type Modules = Mutex<HashMap<Handle<Symbol>, Value>>;
 
 pub const SCM_BINDING_STAY_IN_MODULE: i32 = 1 << 0;
@@ -1028,11 +1028,7 @@ pub fn scm_module_name_to_path(name: Value) -> Result<PathBuf, Value> {
     } else if name.is_symbol() {
         name.symbol()
     } else {
-        return Err(raise_argument_error(
-            "module-name->path",
-            "identifier?",
-            name,
-        ));
+        return wrong_contract("module-name->path", "(or/c symbol? identifier?)", 0, 1, &[name]);
     };
 
     let name: &str = &name;

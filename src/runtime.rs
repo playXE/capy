@@ -13,13 +13,16 @@ pub mod module;
 pub mod number;
 pub mod object;
 pub mod pure_nan;
-pub mod violation;
 pub mod string;
-//pub mod structure;
+pub mod structure;
 pub mod symbol;
 pub mod tuple;
 pub mod value;
 pub mod values;
+pub mod error;
+pub mod port;
+pub mod portfun;
+pub mod print;
 
 pub(crate) fn init() {
     number::init_number();
@@ -27,4 +30,9 @@ pub(crate) fn init() {
     tuple::init_tuple();
     cmp::init_cmp();
     list::init_list();
+    error::init_error();
+    structure::initialize_struct();
+    string::init_string();
+    macros::init_macros();
+    crate::vm::stacktrace::init_stacktrace();
 }
