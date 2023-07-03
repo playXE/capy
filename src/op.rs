@@ -53,6 +53,16 @@ pub enum Opcode {
     Return,
     Apply,
 
+    Add,
+    Sub,
+    Mul,
+    Div,
+    NumberEqual,
+    Less,
+    LessEqual,
+    Greater,
+    GreaterEqual,
+
     AssertArgCount,
     AssertMinArgCount,
     NoMatchingArgCount,

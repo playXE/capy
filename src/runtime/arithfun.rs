@@ -1,6 +1,8 @@
 use std::{hint::unreachable_unchecked, intrinsics::unlikely, cmp::Ordering};
 
-use crate::{vm::{callframe::CallFrame, scm_vm}, runtime::{fun::scm_make_subr, module::scm_define, object::MAX_ARITY, symbol::Intern}};
+use rsgc::{prelude::Handle, system::arraylist::ArrayList, thread::Thread};
+
+use crate::{vm::{callframe::CallFrame, scm_vm}, runtime::{fun::{scm_make_subr, scm_make_subr_inliner}, module::scm_define, object::MAX_ARITY, symbol::Intern}, compile::{IForm, make_iform, Asm}, op::Opcode};
 
 use super::{
     arith::{arith_add, arith_negate, scm_is_number, arith_sub, arith_mul, arith_div, arith_quotient, arith_remainder, scm_is_integer, scm_n_compare, scm_is_real, scm_is_number_equal},
@@ -13,26 +15,166 @@ pub(crate) fn init_arith() {
     let capy = scm_capy_module().module();
 
     macro_rules! defproc {
-        ($($name: ident, $lit: literal, $mina: expr, $maxa: expr)*) => {
+        ($($name: ident, $lit: literal, $mina: expr, $maxa: expr, $inliner: expr)*) => {
             $(
-
-                let subr = scm_make_subr($lit, $name, $mina, $maxa);
-                scm_define(capy, $lit.intern().into(), subr).unwrap();
+                if let Some(inliner) = $inliner {
+                    let subr = scm_make_subr_inliner($lit, $name, $mina, $maxa, inliner);
+                    scm_define(capy, $lit.intern().into(), subr).unwrap();
+                } else {
+                    let subr = scm_make_subr($lit, $name, $mina, $maxa);
+                    scm_define(capy, $lit.intern().into(), subr).unwrap();
+                }
             )*
         };
     }
+    
+    fn inline_add(iforms: &[Handle<IForm>], _: Value) -> Option<Handle<IForm>> {
+        if iforms.len() != 2 {
+            return None;
+        }
+
+        Some(make_iform(IForm::Asm(Asm {
+            op: Opcode::Add,
+            args: ArrayList::from_slice(Thread::current(), iforms),
+            operands: None,
+            exits: false,
+            pushes: true,
+            ic: false 
+        })))
+    }
+
+    fn inline_sub(iforms: &[Handle<IForm>], _: Value) -> Option<Handle<IForm>> {
+        if iforms.len() != 2 {
+            return None;
+        }
+
+        Some(make_iform(IForm::Asm(Asm {
+            op: Opcode::Sub,
+            args: ArrayList::from_slice(Thread::current(), iforms),
+            operands: None,
+            exits: false,
+            pushes: true,
+            ic: false 
+        })))
+    }
+
+    fn inline_mul(iforms: &[Handle<IForm>], _: Value) -> Option<Handle<IForm>> {
+        if iforms.len() != 2 {
+            return None;
+        }
+
+        Some(make_iform(IForm::Asm(Asm {
+            op: Opcode::Mul,
+            args: ArrayList::from_slice(Thread::current(), iforms),
+            operands: None,
+            exits: false,
+            pushes: true,
+            ic: false 
+        })))
+    }
+
+    fn inline_div(iforms: &[Handle<IForm>], _: Value) -> Option<Handle<IForm>> {
+        if iforms.len() != 2 {
+            return None;
+        }
+
+        Some(make_iform(IForm::Asm(Asm {
+            op: Opcode::Div,
+            args: ArrayList::from_slice(Thread::current(), iforms),
+            operands: None,
+            exits: false,
+            pushes: true,
+            ic: false 
+        })))
+    }
+
+    fn inline_equal(iforms: &[Handle<IForm>], _: Value) -> Option<Handle<IForm>> {
+        if iforms.len() != 2 {
+            return None;
+        }
+
+        Some(make_iform(IForm::Asm(Asm {
+            op: Opcode::NumberEqual,
+            args: ArrayList::from_slice(Thread::current(), iforms),
+            operands: None,
+            exits: false,
+            pushes: true,
+            ic: false 
+        })))
+    }
+
+    fn inline_less(iforms: &[Handle<IForm>], _: Value) -> Option<Handle<IForm>> {
+        if iforms.len() != 2 {
+            return None;
+        }
+
+        Some(make_iform(IForm::Asm(Asm {
+            op: Opcode::Less,
+            args: ArrayList::from_slice(Thread::current(), iforms),
+            operands: None,
+            exits: false,
+            pushes: true,
+            ic: false 
+        })))
+    }
+
+    fn inline_less_equal(iforms: &[Handle<IForm>], _: Value) -> Option<Handle<IForm>> {
+        if iforms.len() != 2 {
+            return None;
+        }
+
+        Some(make_iform(IForm::Asm(Asm {
+            op: Opcode::LessEqual,
+            args: ArrayList::from_slice(Thread::current(), iforms),
+            operands: None,
+            exits: false,
+            pushes: true,
+            ic: false 
+        })))
+    }
+
+    fn inline_greater(iforms: &[Handle<IForm>], _: Value) -> Option<Handle<IForm>> {
+        if iforms.len() != 2 {
+            return None;
+        }
+
+        Some(make_iform(IForm::Asm(Asm {
+            op: Opcode::Greater,
+            args: ArrayList::from_slice(Thread::current(), iforms),
+            operands: None,
+            exits: false,
+            pushes: true,
+            ic: false 
+        })))
+    }
+
+    fn inline_greater_equal(iforms: &[Handle<IForm>], _: Value) -> Option<Handle<IForm>> {
+        if iforms.len() != 2 {
+            return None;
+        }
+
+        Some(make_iform(IForm::Asm(Asm {
+            op: Opcode::GreaterEqual,
+            args: ArrayList::from_slice(Thread::current(), iforms),
+            operands: None,
+            exits: false,
+            pushes: true,
+            ic: false 
+        })))
+    }
+
     defproc! {
-        plus, "+", 0, MAX_ARITY
-        minus, "-", 1, MAX_ARITY
-        mul, "*", 0, MAX_ARITY
-        div, "/", 1, MAX_ARITY
-        quotient, "quotient", 2, 2
-        remainder, "remainder", 2, 2
-        less, "<", 2, MAX_ARITY
-        less_equal, "<=", 2, MAX_ARITY
-        greater, ">", 2, MAX_ARITY
-        greater_equal, ">=", 2, MAX_ARITY
-        equal, "=", 2, MAX_ARITY
+        plus, "+", 0, MAX_ARITY, Some(inline_add)
+        minus, "-", 1, MAX_ARITY, Some(inline_sub)
+        mul, "*", 0, MAX_ARITY, Some(inline_mul)
+        div, "/", 1, MAX_ARITY, Some(inline_div)
+        quotient, "quotient", 2, 2, None 
+        remainder, "remainder", 2, 2, None 
+        less, "<", 2, MAX_ARITY, Some(inline_less)
+        less_equal, "<=", 2, MAX_ARITY, Some(inline_less_equal)
+        greater, ">", 2, MAX_ARITY, Some(inline_greater)
+        greater_equal, ">=", 2, MAX_ARITY, Some(inline_greater_equal)
+        equal, "=", 2, MAX_ARITY, Some(inline_equal)
     }
 }
 

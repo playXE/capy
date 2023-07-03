@@ -37,16 +37,22 @@
     body ...))))
 
 
-(define (fac n) 
-  (let loop ((n n) (acc 1))
+(define (fib-cps n k)
+  (if (< n 2)
+      (k n)
+      (fib-cps (- n 1)
+               (lambda (n1)
+                 (fib-cps (- n 2)
+                          (lambda (n2)
+                            (k (+ n1 n2))))))))
+
+(define (fib-iter n)
+  (let loop ((n n)
+             (a 1)
+             (b 0))
     (if (= n 0)
-        acc
-        (loop (- n 1) (* acc n)))))
+        b
+        (loop (- n 1) (+ a b) a))))
 
-
-(define (fac-cps n k)
-  (if (= n 0)
-      (k 1)
-      (fac-cps (- n 1) (lambda (v) (k (* v n))))))
-(fac-cps 60000 (lambda (v) v))
+(fib-iter 200000)
 0

@@ -896,9 +896,9 @@ pub fn arith_sub(vm: &mut VM, lhs: Value, rhs: Value) -> Option<Value> {
             ));
         }
 
-        if rhs.is_double() {
-            return Some(Value::encode_f64_value(
-                lhs.bignum().f64() - rhs.get_double(),
+        if rhs.is_bignum() {
+            return Some(Value::encode_object_value(
+                lhs.bignum().minus(vm.mutator(), rhs.bignum()),
             ));
         }
 
@@ -1158,6 +1158,12 @@ pub fn arith_add(vm: &mut VM, lhs: Value, rhs: Value) -> Option<Value> {
         if rhs.is_double() {
             return Some(Value::encode_f64_value(
                 lhs.bignum().f64() + rhs.get_double(),
+            ));
+        }
+
+        if rhs.is_bignum() {
+            return Some(Value::encode_object_value(
+                lhs.bignum().plus(vm.mutator(), rhs.bignum()),
             ));
         }
 

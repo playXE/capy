@@ -1,6 +1,7 @@
 #![allow(unused_variables, unused_assignments, unused_labels)]
 use rsgc::prelude::Handle;
 use rsgc::system::arraylist::ArrayList;
+use std::cmp::Ordering;
 use std::intrinsics::{likely, unlikely};
 use std::mem::{size_of, transmute};
 use std::panic::AssertUnwindSafe;
@@ -354,6 +355,268 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
 
                     let val = code_block!().literals.vector_ref(ix as _);
                     push!(val);
+                }
+
+                Opcode::Add => {
+                    let y = pop!();
+                    let x = pop!();
+
+                    if x.is_int32() && y.is_int32() {
+                        if let Some(res) = x.get_int32().checked_add(y.get_int32()) {
+                            push!(Value::encode_int32(res));
+                            continue 'interp;
+                        } 
+                    }
+
+                    if x.is_double() && y.is_double() {
+                        push!(Value::encode_untrusted_f64_value(x.get_double() + y.get_double()));
+                        continue 'interp;
+                    }
+
+                    if unlikely(!scm_is_number(x)) {
+                        return wrong_contract("+", "number?", 0, 2, &[x, y]);
+                    }
+
+                    if unlikely(!scm_is_number(y)) {
+                        return wrong_contract("+", "number?", 1, 2, &[x, y]);
+                    }
+                    
+                    let res = arith_add(vm, x, y).unwrap();
+
+                    push!(res);
+                }
+
+                Opcode::Sub => {
+                    let y = pop!();
+                    let x = pop!();
+
+                    if x.is_int32() && y.is_int32() {
+                        if let Some(res) = x.get_int32().checked_sub(y.get_int32()) {
+                            push!(Value::encode_int32(res));
+                            continue 'interp;
+                        } 
+                    }
+
+                    if x.is_double() && y.is_double() {
+                        push!(Value::encode_untrusted_f64_value(x.get_double() - y.get_double()));
+                        continue 'interp;
+                    }
+
+                    if unlikely(!scm_is_number(x)) {
+                        return wrong_contract("-", "number?", 0, 2, &[x, y]);
+                    }
+
+                    if unlikely(!scm_is_number(y)) {
+                        return wrong_contract("-", "number?", 1, 2, &[x, y]);
+                    }
+
+                    let res = arith_sub(vm, x, y).unwrap();
+
+                    push!(res);
+                }
+
+                Opcode::Div => {
+                    let y = pop!();
+                    let x = pop!();
+
+                    if x.is_int32() && y.is_int32() {
+                        if let Some(res) = x.get_int32().checked_div(y.get_int32()) {
+                            push!(Value::encode_int32(res));
+                            continue 'interp;
+                        } 
+                    }
+
+                    if x.is_double() && y.is_double() {
+                        push!(Value::encode_untrusted_f64_value(x.get_double() / y.get_double()));
+                        continue 'interp;
+                    }
+
+                    if unlikely(!scm_is_number(x)) {
+                        return wrong_contract("/", "number?", 0, 2, &[x, y]);
+                    }
+
+                    if unlikely(!scm_is_number(y)) {
+                        return wrong_contract("/", "number?", 1, 2, &[x, y]);
+                    }
+                    let res = arith_div(vm, x, y).unwrap();
+
+                    push!(res);
+                }
+
+                Opcode::Mul => {
+                    let y = pop!();
+                    let x = pop!();
+
+                    if x.is_int32() && y.is_int32() {
+                        if let Some(res) = x.get_int32().checked_mul(y.get_int32()) {
+                            push!(Value::encode_int32(res));
+                            continue 'interp;
+                        } 
+                    }
+
+                    if x.is_double() && y.is_double() {
+                        push!(Value::encode_untrusted_f64_value(x.get_double() * y.get_double()));
+                        continue 'interp;
+                    }
+
+                    if unlikely(!scm_is_number(x)) {
+                        return wrong_contract("*", "number?", 0, 2, &[x, y]);
+                    }
+
+                    if unlikely(!scm_is_number(y)) {
+                        return wrong_contract("*", "number?", 1, 2, &[x, y]);
+                    }
+
+                    let res = arith_mul(vm, x, y).unwrap();
+
+                    push!(res);
+                }
+
+                Opcode::NumberEqual => {
+                    let y = pop!();
+                    let x = pop!();
+
+                    if x.is_int32() && y.is_int32() {
+                        push!(Value::encode_bool_value(x.get_int32() == y.get_int32()));
+                        continue 'interp;
+                    }
+
+                    if x.is_double() && y.is_double() {
+                        push!(Value::encode_bool_value(x.get_double() == y.get_double()));
+                        continue 'interp;
+                    }
+
+                    if unlikely(!scm_is_real(x)) {
+                        return wrong_contract("=", "number?", 0, 2, &[x, y]);
+                    }
+
+                    if unlikely(!scm_is_real(y)) {
+                        return wrong_contract("=", "number?", 1, 2, &[x, y]);
+                    }
+
+                    let res = scm_is_number_equal(x, y).unwrap();
+
+                    push!(res.into());
+                }
+
+                Opcode::Less => {
+                    let y = pop!();
+                    let x = pop!();
+                    
+                    if x.is_int32() && y.is_int32() {
+                        push!(Value::encode_bool_value(x.get_int32() < y.get_int32()));
+                        continue 'interp;
+                    }
+
+                    if x.is_double() && y.is_double() {
+                        push!(Value::encode_bool_value(x.get_double() < y.get_double()));
+                        continue 'interp;
+                    }
+
+                    if unlikely(!scm_is_number(x)) {
+                        return wrong_contract("<", "number?", 0, 2, &[x, y]);
+                    }
+
+                    if unlikely(!scm_is_number(y)) {
+                        return wrong_contract("<", "number?", 1, 2, &[x, y]);
+                    }
+
+                    let cmp = scm_n_compare(x, y).unwrap();
+
+                    match cmp {
+                        Ordering::Less => push!(Value::encode_bool_value(true)),
+                        _ => push!(Value::encode_bool_value(false)),
+                    }
+                }
+
+                Opcode::LessEqual => {
+                    let y = pop!();
+                    let x = pop!();
+
+                    if x.is_int32() && y.is_int32() {
+                        push!(Value::encode_bool_value(x.get_int32() <= y.get_int32()));
+                        continue 'interp;
+                    }
+
+                    if x.is_double() && y.is_double() {
+                        push!(Value::encode_bool_value(x.get_double() <= y.get_double()));
+                        continue 'interp;
+                    }
+
+                    if unlikely(!scm_is_number(x)) {
+                        return wrong_contract("<=", "number?", 0, 2, &[x, y]);
+                    }
+
+                    if unlikely(!scm_is_number(y)) {
+                        return wrong_contract("<=", "number?", 1, 2, &[x, y]);
+                    }
+
+                    let cmp = scm_n_compare(x, y).unwrap();
+
+                    match cmp {
+                        Ordering::Less | Ordering::Equal => push!(Value::encode_bool_value(true)),
+                        _ => push!(Value::encode_bool_value(false)),
+                    }
+                }
+
+                Opcode::Greater => {
+                    let y = pop!();
+                    let x = pop!();
+
+                    if x.is_int32() && y.is_int32() {
+                        push!(Value::encode_bool_value(x.get_int32() > y.get_int32()));
+                        continue 'interp;
+                    }
+
+                    if x.is_double() && y.is_double() {
+                        push!(Value::encode_bool_value(x.get_double() > y.get_double()));
+                        continue 'interp;
+                    }
+
+                    if unlikely(!scm_is_number(x)) {
+                        return wrong_contract(">", "number?", 0, 2, &[x, y]);
+                    }
+
+                    if unlikely(!scm_is_number(y)) {
+                        return wrong_contract(">", "number?", 1, 2, &[x, y]);
+                    }
+
+                    let cmp = scm_n_compare(x, y).unwrap();
+
+                    match cmp {
+                        Ordering::Greater => push!(Value::encode_bool_value(true)),
+                        _ => push!(Value::encode_bool_value(false)),
+                    }
+                }
+
+                Opcode::GreaterEqual => {
+                    let y = pop!();
+                    let x = pop!();
+
+                    if x.is_int32() && y.is_int32() {
+                        push!(Value::encode_bool_value(x.get_int32() >= y.get_int32()));
+                        continue 'interp;
+                    }
+
+                    if x.is_double() && y.is_double() {
+                        push!(Value::encode_bool_value(x.get_double() >= y.get_double()));
+                        continue 'interp;
+                    }
+
+                    if unlikely(!scm_is_number(x)) {
+                        return wrong_contract(">=", "number?", 0, 2, &[x, y]);
+                    }
+
+                    if unlikely(!scm_is_number(y)) {
+                        return wrong_contract(">=", "number?", 1, 2, &[x, y]);
+                    }
+
+                    let cmp = scm_n_compare(x, y).unwrap();
+
+                    match cmp {
+                        Ordering::Greater | Ordering::Equal => push!(Value::encode_bool_value(true)),
+                        _ => push!(Value::encode_bool_value(false)),
+                    }
                 }
 
                 Opcode::Call => {
