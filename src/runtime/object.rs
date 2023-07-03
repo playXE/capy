@@ -599,6 +599,8 @@ impl Object for CodeBlock {
 }
 
 impl Allocation for CodeBlock {
+    const DESTRUCTIBLE: bool = true;
+    const FINALIZE: bool = true;
     const VARSIZE: bool = true;
     const VARSIZE_ITEM_SIZE: usize = 1;
     const VARSIZE_NO_HEAP_PTRS: bool = true;
@@ -612,16 +614,17 @@ pub struct Procedure {
     pub(crate) header: ObjectHeader,
     pub code: Handle<CodeBlock>,
     pub(crate) env_size: u32,
+    pub(crate) _pad: u32,
     pub(crate) captures: [Value; 0],
 }
 
 impl Object for Procedure {
-    fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
-        
+    fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {   
         self.code.trace(visitor);
     }
 
     fn trace_range(&self, from: usize, to: usize, visitor: &mut dyn rsgc::prelude::Visitor) {
+        
         for i in from..to {
             unsafe {
                 self.captures.get_unchecked(i).trace(visitor);
@@ -630,7 +633,9 @@ impl Object for Procedure {
     }
 }
 
+
 impl Allocation for Procedure {
+    
     const VARSIZE: bool = true;
     const VARSIZE_ITEM_SIZE: usize = size_of::<Value>();
     const VARSIZE_NO_HEAP_PTRS: bool = false;
@@ -638,6 +643,7 @@ impl Allocation for Procedure {
     const VARSIZE_OFFSETOF_LENGTH: usize = offset_of!(Procedure, env_size);
     const VARSIZE_OFFSETOF_VARPART: usize = offset_of!(Procedure, captures);
 }
+
 
 pub type ProcedureInliner = fn(&[Handle<IForm>], Value) -> Option<Handle<IForm>>;
 
@@ -1044,4 +1050,24 @@ impl FromResidual<Result<Infallible, Value>> for ScmResult {
             },
         }
     }
+}
+
+pub fn make_complex(real: Value, imag: Value) -> Value {
+    let t = Thread::current();
+    let val = t.allocate(Complex {
+        object: ObjectHeader::new(Type::Complex),
+        real,
+        imag,
+    });
+    val.into()
+}
+
+pub fn make_rational(num: Value, den: Value) -> Value {
+    let t = Thread::current();
+    let val = t.allocate(Rational {
+        object: ObjectHeader::new(Type::Rational),
+        num,
+        den,
+    });
+    val.into()
 }

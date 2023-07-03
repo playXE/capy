@@ -120,6 +120,8 @@ pub fn scm_vm_load(
                 let val = r7rs_to_value(t, fname.into(), &val);
                 let val = crate::compile::pass1::pass1(val, cenv)?;
                 ref_count_lvars(val);
+               // val.pretty_print(termcolor::StandardStream::stderr(termcolor::ColorChoice::Always)).unwrap();
+                //eprintln!();
                 Ok(Some(val))
             }
 

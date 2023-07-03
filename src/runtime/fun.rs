@@ -18,13 +18,14 @@ use super::{
 };
 
 pub fn make_procedure(t: &mut Thread, code_block: Handle<CodeBlock>) -> Handle<Procedure> {
-    t.allocate(Procedure {
+    /*t.allocate(Procedure {
         header: ObjectHeader::new(Type::Procedure),
-
         code: code_block,
+        _pad: 0,
         env_size: 0,
         captures: [],
-    })
+    })*/
+    make_closed_procedure(t, code_block, 0)
 }
 
 pub fn make_closed_procedure(
@@ -41,7 +42,7 @@ pub fn make_closed_procedure(
 
         proc.code = code_block;
         proc.env_size = ncaptures as _;
-
+        
         for i in 0..ncaptures {
             proc.captures
                 .as_mut_ptr()

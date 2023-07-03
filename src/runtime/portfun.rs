@@ -49,7 +49,7 @@ macro_rules! check_opened_input_port {
         }
     };
 }
-
+#[allow(unused_macros)]
 macro_rules! check_opened_output_port {
     ($port: expr, $name: expr, $which: expr, $args: expr) => {
         if !$port.opened || ($port.direction & SCM_PORT_DIRECTION_OUT) == 0 {
@@ -325,6 +325,27 @@ fn init_std(fd: i32, name: &str, dir: u8) -> Result<Value, Value> {
     port.force_sync = true;
     port.mark = std_port_position(fd)?;
     Ok(port.into())
+}
+
+pub fn get_current_input_port() -> Result<Value, Value> {
+    Ok(*CURREN_INPUT_PORT.get_or_try_init(|| -> Result<Mutex<Value>, Value> {
+        let port = init_std(0, "/dev/stdin", SCM_PORT_DIRECTION_IN)?;
+        Ok(Mutex::new(port))
+    })?.lock(true))
+}
+
+pub fn get_current_output_port() -> Result<Value, Value> {
+    Ok(*CURREN_OUTPUT_PORT.get_or_try_init(|| -> Result<Mutex<Value>, Value> {
+        let port = init_std(1, "/dev/stdout", SCM_PORT_DIRECTION_OUT)?;
+        Ok(Mutex::new(port))
+    })?.lock(true))
+}
+
+pub fn get_current_error_port() -> Result<Value, Value> {
+    Ok(*CURREN_ERROR_PORT.get_or_try_init(|| -> Result<Mutex<Value>, Value> {
+        let port = init_std(2, "/dev/stderr", SCM_PORT_DIRECTION_OUT)?;
+        Ok(Mutex::new(port))
+    })?.lock(true))
 }
 
 extern "C" fn current_input_port(cfr: &mut CallFrame) -> ScmResult {
@@ -2156,6 +2177,37 @@ extern "C" fn put_string(cfr: &mut CallFrame) -> ScmResult {
 
     return ScmResult::ok(Value::encode_undefined_value());
 }
+
+
+extern "C" fn read(cfr: &mut CallFrame) -> ScmResult {
+    let port = if cfr.argument_count() > 0 {
+        cfr.argument(0)
+    } else {
+        get_current_input_port()?
+    };
+
+    if !port.is_port() {
+        return wrong_contract::<()>(
+            "read",
+            "input-port?",
+            0,
+            cfr.arguments().len() as _,
+            cfr.arguments(),
+        )
+        .into();
+    }
+
+    let port = port.port();
+
+    port.lock.lock(true);
+
+    check_opened_input_textual_port!(port, "read", 0, cfr.arguments());
+
+    
+
+    todo!()
+}
+
 
 pub(crate) fn init_ports() {
     heap::heap().add_root(SimpleRoot::new("portfun", "ports", |proc| {

@@ -74,6 +74,8 @@ impl<'a> Iterator for StackTrace<'a> {
     }
 }
 
+
+
 extern "C" fn print_stacktrace(_: &mut CallFrame) -> ScmResult {
     let vm = scm_vm();
 

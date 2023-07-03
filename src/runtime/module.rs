@@ -845,10 +845,6 @@ pub fn scm_insert_binding(
 ) -> Result<Value, Value> {
     // when 'fresh' is #t insert only if there's no binding yet
     if fresh && !scm_global_variable_ref(module, name, SCM_BINDING_STAY_IN_MODULE).is_undefined() {
-        println!(
-            "insert {:?}",
-            scm_global_variable_ref(module, name, SCM_BINDING_STAY_IN_MODULE)
-        );
         Ok(Value::encode_bool_value(false))
     } else {
         scm_make_binding(module, name, value, flags).map(|x| x.into())

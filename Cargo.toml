@@ -20,7 +20,7 @@ parse-display = "0.8"
 errno = "0.3"
 cfg-if = "1.0"
 naked-function = "0.1"
-rustyline = { git = "https://github.com/kkawakam/rustyline", features = [
+rustyline = { version = "12.0", features = [
     "custom-bindings",
 ] }
 structopt = "0.3"

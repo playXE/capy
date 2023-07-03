@@ -5,8 +5,8 @@ use crate::{
     runtime::list::{scm_acons, scm_cons, scm_econs},
     runtime::object::{Module, ObjectHeader, Syntax, Type},
     runtime::string::make_string,
-    runtime::value::Value,
     runtime::vector::{make_bytevector_from_slice, make_vector},
+    runtime::{bigint::BigInt, value::Value},
     runtime::{error::make_srcloc, symbol::make_symbol},
     scm_dolist, scm_for_each,
     vm::scm_current_module,
@@ -715,9 +715,15 @@ impl IForm {
                 let args_pret = allocator
                     .intersperse(
                         lam.lvars.iter().map(|lvar| {
-                            allocator
-                                .text(format!("{:?}", lvar.name))
-                                .annotate(ColorSpec::new().set_fg(Some(Color::Red)).clone())
+                            if lvar.set_count != 0 {
+                                allocator
+                                    .text(format!("&{:?}", lvar.name))
+                                    .annotate(ColorSpec::new().set_fg(Some(Color::Red)).clone())
+                            } else {
+                                allocator
+                                    .text(format!("{:?}", lvar.name))
+                                    .annotate(ColorSpec::new().set_fg(Some(Color::Red)).clone())
+                            }
                         }),
                         allocator.space(),
                     )
@@ -847,6 +853,11 @@ fn r7rs_to_value_k(
                 r7rs_to_value_k(thread, filename, e, cont)
             }
         }
+        Expr::BigInt(x) => cont(
+            BigInt::from_str(thread, &x.to_str_radix(10), &BigInt::DEC_BASE)
+                .unwrap()
+                .into(),
+        ),
         _ => unsafe { std::hint::unreachable_unchecked() },
     }
 }
@@ -936,7 +947,12 @@ pub fn compile(expr: Value, cenv: Value) -> Result<Value, Value> {
     bc.compile_body(thread, iform, 0);
 
     let code_block = bc.finalize(thread);
-
+    /*iform
+        .pretty_print(termcolor::StandardStream::stderr(
+            termcolor::ColorChoice::Always,
+        ))
+        .unwrap();
+    eprintln!();*/
     Ok(make_procedure(thread, code_block).into())
 }
 

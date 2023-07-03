@@ -8,6 +8,7 @@ use rsgc::system::collections::hashmap::HashMap;
 use crate::compaux::scm_outermost_identifier;
 
 
+use super::bigint::BigInt;
 use super::fun::SCM_PRIM_TYPE_PARAMETER;
 use super::port::*;
 use super::{object::*, value::*};
@@ -492,8 +493,15 @@ impl<'a> Printer<'a> {
             self.puts("#<")?;
             self._write(ht, obj.structure().type_.name)?;
             self.puts(">")
+        } else if obj.is_bignum() {
+            self.puts(&obj.bignum().to_string(&BigInt::DEC_BASE))
+        } else if obj.is_box() {
+            self.puts("#<box ")?;
+            self._write(ht, obj.box_ref())?;
+            self.puts(">")
+        
         } else {
-            self.puts(&format!("#<unknown {:x}>", obj.get_raw()))
+            self.puts(&format!("#<unknown {:?}@{:x}>", obj.get_type(), obj.get_raw()))
         }
     }
 }

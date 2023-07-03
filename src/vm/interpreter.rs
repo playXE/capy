@@ -13,10 +13,10 @@ use crate::compaux::{
 };
 use crate::op::Opcode;
 use crate::runtime::error::{wrong_count, wrong_contract};
-use crate::runtime::fun::make_closed_procedure;
+use crate::runtime::fun::{make_closed_procedure, get_proc_name};
 use crate::runtime::list::{scm_cons, scm_is_list};
 use crate::runtime::module::{scm_make_binding, SCM_BINDING_CONST};
-use crate::runtime::number::{scm_is_exact, scm_is_integer};
+use crate::runtime::arith::*;
 use crate::runtime::object::{
     check_arity, make_box, wrong_arity, ClosedNativeProcedure, CodeBlock, Module, NativeProcedure,
     Procedure, Type, MAX_ARITY,
@@ -24,6 +24,7 @@ use crate::runtime::object::{
 use crate::runtime::string::make_string;
 use crate::runtime::value::Value;
 use crate::runtime::vector::{make_vector, make_vector_from_slice};
+use crate::vm::stacktrace::StackTrace;
 
 /// Virtual machine interpreter loop.
 ///
@@ -43,7 +44,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
         () => {{
             debug_assert!(sp < cfr.cast::<Value>());
             let val = sp.read();
-
+            sp.write(Value::encode_empty_value());
             sp = sp.add(1);
 
             val
@@ -183,10 +184,38 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
         } else {
             #[cold]
             fn not_a_function(vm: &mut VM, callee: Value) -> Result<Value, Value> {
-                Err(Value::encode_object_value(make_string(
+                /*Err(Value::encode_object_value(make_string(
                     vm.thread,
                     &format!("'{:?}' is not a function", callee),
-                )))
+                )))*/
+
+                eprintln!("tried to invoke not a function: {:?}", callee);
+
+                let st = StackTrace::new(vm);
+                for frame in st {
+                    let callee = frame.callee();
+                    let ip = frame.return_pc();
+                    let code_block = frame.code_block();
+
+                    let name = get_proc_name(callee);
+
+                    if let Some(name) = name {
+                        eprint!("  at {}", name)
+                    } else {
+                        eprint!("  at <unknown>")
+                    }
+
+                    if !ip.is_null() {
+                        eprint!(":{:p} {}", ip, unsafe { std::mem::transmute::<_, Opcode>(ip.read()) });
+                    } else {
+                        eprint!("<entrypoint>");
+                    }
+
+                    eprintln!();
+
+                }
+
+                Err(Value::encode_int32(0))
             }
 
             return not_a_function(vm, callee);
@@ -244,6 +273,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                 | Opcode::EnterCompiling
                 | Opcode::EnterBlacklisted
                 | Opcode::EnterJit => {
+                    vm.mutator().safepoint();
                     // TODO: Check for JIT trampoline
                 }
                 Opcode::Pop => {
@@ -270,6 +300,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     let n = read2!();
                     let arg = (*cfr).args.as_ptr().add(n as usize).read();
                     let prev = sp;
+                   
                     push!(arg);
                 }
 
@@ -340,6 +371,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     if callee.is_vm_procedure() {
                         (*cfr).code_block = callee.procedure().code.into();
                         pc = callee.procedure().code.start_ip();
+              
                         continue 'interp;
                     }
                     continue 'eval;
@@ -403,7 +435,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     let off = read2!();
 
                     let val = cfr.cast::<Value>().sub(off as usize + 1).read();
-
+              
                     push!(val);
                 }
 
@@ -460,7 +492,9 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                         .captures
                         .as_mut_ptr()
                         .copy_from_nonoverlapping(captures.as_ptr(), ncaptures as _);
-
+                    for _ in 0..ncaptures {
+                        sp = sp.add(1);
+                    }
                     push!(Value::encode_object_value(closure));
                 }
 
@@ -670,7 +704,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
 
                 Opcode::Branch => {
                     let offset = read4!();
-
+                    vm.mutator().safepoint();
                     pc = pc.offset(offset as _);
                 }
 

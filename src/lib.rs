@@ -20,7 +20,6 @@ pub fn init() {
     runtime::symbol::init_symbols();
     runtime::module::init_modules();
     compile::init_compiler();
-    vm::init_runtime();
     runtime::load::init_load();
     runtime::init();
 }

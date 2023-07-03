@@ -100,6 +100,7 @@ impl ByteCompiler {
     }
 
     pub fn add_constant(&mut self, thread: &mut Thread, constant: Value) -> usize {
+        assert!(!constant.is_empty());
         if let Some(ix) = self.literals.iter().position(|&value| value == constant) {
             ix
         } else {
@@ -110,6 +111,9 @@ impl ByteCompiler {
     }
 
     pub fn emit_load(&mut self, thread: &mut Thread, constant: Value) {
+        if constant.is_empty() {
+            panic!("wtf??");
+        }
         if constant.is_int32() {
             self.code.push(Opcode::PushInt32 as _);
             self.code
@@ -334,6 +338,7 @@ impl ByteCompiler {
                     self.emit_lref(ix as _);
                     if !lvar.is_immutable() && unbox {
                         self.emit_simple(Opcode::BoxRef);
+                        
                     }
                     return;
                 } else {
@@ -342,6 +347,7 @@ impl ByteCompiler {
 
                     if !lvar.is_immutable() && unbox {
                         self.emit_simple(Opcode::BoxRef);
+                        
                     }
                     return;
                 }
@@ -395,6 +401,7 @@ impl ByteCompiler {
             IForm::Define(def) => {
                 self.compile_iform(thread, def.value, false);
                 self.emit_simple(Opcode::Define);
+                assert!(!def.name.is_empty());
                 let id = self.add_constant(thread, def.name) as u16;
                 self.code.extend_from_slice(&id.to_le_bytes());
                 self.code.push(0);

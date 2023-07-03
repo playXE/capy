@@ -15,7 +15,7 @@ pub enum Opcode {
     /// Current function is being compiled with JIT, no-op for interpreter.
     EnterCompiling,
     /// Function compiled, background thread patched `EnterCompiling` to this opcode.
-    /// 
+    ///
     /// Will enter JITed code.
     EnterJit,
     /// Function was blacklisted from JIT compilation.
@@ -181,7 +181,7 @@ pub fn disassembly(
         }
 
         let op = unsafe { std::mem::transmute::<u8, Opcode>(op) };
-        write!(out, "{:04}: ", ip)?;
+        write!(out, "({:p}){:04}: ", &code[ip], ip)?;
         out.set_color(&ColorSpec::new().set_fg(Some(termcolor::Color::Blue)))?;
         write!(out, "{}", op)?;
         out.reset()?;

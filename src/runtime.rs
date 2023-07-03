@@ -3,6 +3,7 @@ pub mod list;
 #[macro_use]
 pub mod vector;
 pub mod arith;
+pub mod arithfun;
 pub mod bigint;
 pub mod cmp;
 pub mod complex;
@@ -23,6 +24,7 @@ pub mod error;
 pub mod port;
 pub mod portfun;
 pub mod print;
+pub mod reader;
 
 pub(crate) fn init() {
     number::init_number();
@@ -35,5 +37,6 @@ pub(crate) fn init() {
     string::init_string();
     macros::init_macros();
     portfun::init_ports();
+    arithfun::init_arith();
     crate::vm::stacktrace::init_stacktrace();
 }

@@ -7,13 +7,12 @@ use crate::{
 };
 
 use super::{
-    complex::scm_complex_is_exact,
     fun::scm_make_subr_inliner,
     module::{scm_define, scm_scheme_module},
-    object::{ScmResult, Type},
+    object::{ScmResult},
     string::make_string,
     symbol::Intern,
-    value::Value,
+    value::Value, arith::{scm_is_zero, scm_is_exact},
 };
 
 extern "C" fn number_p(cfr: &mut CallFrame) -> ScmResult {
@@ -100,25 +99,6 @@ extern "C" fn inexact_real_p(cfr: &mut CallFrame) -> ScmResult {
 
 extern "C" fn flonum_p(cfr: &mut CallFrame) -> ScmResult {
     ScmResult::ok(cfr.argument(0).is_double())
-}
-
-pub fn scm_is_exact(n: Value) -> Option<bool> {
-    if n.is_double() {
-        return Some(false);
-    }
-    if n.is_int32() {
-        Some(true)
-    } else {
-        let typ = n.get_type();
-
-        if typ == Type::BigNum || typ == Type::Rational {
-            Some(true)
-        } else if typ == Type::Complex {
-            Some(scm_complex_is_exact(n))
-        } else {
-            None
-        }
-    }
 }
 
 extern "C" fn exact_p(cfr: &mut CallFrame) -> ScmResult {
@@ -353,3 +333,76 @@ pub fn scm_nonnegative_exact_integer(val: Value) -> bool {
     }
 }
 
+pub fn scm_real_valued(val: Value) -> bool {
+    if val.is_real() {
+        return true;
+    }
+
+    if val.is_complex() {
+        let cn = val.complex();
+
+        return scm_is_zero(cn.i) == Some(true);
+    }
+
+    false
+}
+
+pub fn scm_positive(val: Value) -> Option<bool> {
+    if !scm_real_valued(val) {
+        return None;
+    }
+
+    if val.is_int32() {
+        return Some(val.get_int32() > 0);
+    }
+
+    if val.is_bignum() {
+        return Some(!val.bignum().is_negative() && !val.bignum().is_zero());
+    }
+
+    if val.is_double() {
+        return Some(val.get_double() > 0.0);
+    }
+
+    if val.is_rational() {
+        return scm_positive(val.rational().num);
+    }
+
+    if val.is_complex() {
+        let cn = val.complex();
+
+        return scm_positive(cn.r);
+    }
+
+    None
+}
+
+pub fn scm_negative(val: Value) -> Option<bool> {
+    if !scm_real_valued(val) {
+        return None;
+    }
+
+    if val.is_int32() {
+        return Some(val.get_int32() < 0);
+    }
+
+    if val.is_bignum() {
+        return Some(val.bignum().is_negative() && !val.bignum().is_zero());
+    }
+
+    if val.is_double() {
+        return Some(val.get_double() < 0.0);
+    }
+
+    if val.is_rational() {
+        return scm_negative(val.rational().num);
+    }
+
+    if val.is_complex() {
+        let cn = val.complex();
+
+        return scm_negative(cn.r);
+    }
+
+    None
+}

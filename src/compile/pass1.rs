@@ -21,12 +21,12 @@ use crate::{
         is_global_identifier_eq, scm_export_symbols, scm_find_module, scm_import_module,
         scm_insert_binding, scm_make_module,
     },
-    runtime::{object::{Identifier, Module, ObjectHeader, Type}, macros::{get_make_er_transformer, get_make_er_transformer_toplevel}},
+    runtime::string::make_string,
     runtime::symbol::{gensym, make_symbol},
     runtime::value::Value,
     runtime::{
-        macros::{MAKE_ER_TRANSFORMER, MAKE_ER_TRANSFORMER_TOPLEVEL},
-        string::make_string,
+        macros::{get_make_er_transformer, get_make_er_transformer_toplevel},
+        object::{Identifier, Module, ObjectHeader, Type},
     },
     scm_dolist,
     vm::interpreter::apply,
@@ -1441,7 +1441,7 @@ fn expand_inliner(
 ) -> Result<Handle<IForm>, Value> {
     let Some(proc) = inliner.native_procedure().inliner else {
         let gref = make_iform(IForm::GRef(GRef { id }));
-        return pass1_call(program, gref, program.cdr(), cenv)
+        return pass1_call(program, gref, program.cdr(), cenv);
     };
 
     let mut args = ArrayList::with_capacity(Thread::current(), scm_length(program.cdr()).unwrap());

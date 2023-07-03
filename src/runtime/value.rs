@@ -16,7 +16,7 @@ use crate::{
 
 use super::{
     bigint::BigInt,
-    object::Tuple,
+    object::{Tuple, Rational, },
     port::{port_extract_string, port_open_bytevector, Port, SCM_PORT_DIRECTION_OUT, SCM_PORT_DIRECTION_IN},
     print::Printer,
     pure_nan::*,
@@ -331,6 +331,7 @@ impl<T: Object> Into<Value> for Handle<T> {
 impl Object for Value {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         if self.is_object() && !self.is_empty() {
+            
             self.get_object().trace(visitor);
         }
     }
@@ -402,6 +403,8 @@ impl Value {
         if self.is_double() {
             return Type::Double;
         }
+
+        
 
         unreachable!()
     }
@@ -849,6 +852,12 @@ impl Value {
         unsafe { std::mem::transmute(self) }
     }
 
+    pub fn rational(self) -> Handle<Rational> {
+        debug_assert!(self.is_rational());
+        unsafe { std::mem::transmute(self) }
+    }
+
+
     pub fn is_tuple(self) -> bool {
         self.is_xtype(Type::Tuple)
     }
@@ -902,6 +911,36 @@ impl Value {
 
         let bignum = self.bignum();
         bignum.i64()
+    }
+
+    pub fn normalized(self) -> Value {
+        if self.is_bignum() {
+            if let Some(x) = self.bignum().i32() {
+                Self::encode_int32(x)
+            } else {
+                self 
+            }
+        } else if self.is_rational() {
+            let d = self.rational().den;
+
+            if d.is_int32() {
+                if d.get_int32() == 1 {
+                    self.rational().num.normalized()
+                } else {
+                    self 
+                }
+            } else if d.is_bignum() {
+                if d.bignum().is_one() {
+                    self.rational().num.normalized()
+                } else {
+                    self 
+                }
+            } else {
+                self 
+            }
+        } else {
+            self
+        }
     }
 }
 

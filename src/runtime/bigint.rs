@@ -38,11 +38,11 @@ impl BigInt {
         unsafe { std::slice::from_raw_parts_mut(self.uwords.as_mut_ptr(), self.count as usize) }
     }
 
-    pub fn is_negative(self: Handle<Self>) -> bool {
+    pub fn is_negative(&self) -> bool {
         self.negative
     }
 
-    pub fn is_zero(self: Handle<Self>) -> bool {
+    pub fn is_zero(&self) -> bool {
         self.uwords().len() == 1 && self.uwords()[0] == 0u32
     }
 
@@ -548,10 +548,10 @@ impl BigInt {
             }
 
             if sum > 0 {
-                res[N - 1] = sum as u32;
+                res[c] = sum as u32;
             }
         }
-        Self::from_words_u32(thr, &res, negative)
+        Self::from_list(thr, &res, negative)
     }
 
     pub fn plus(self: Handle<Self>, thr: &mut Thread, rhs: Handle<Self>) -> Handle<Self> {
@@ -560,6 +560,7 @@ impl BigInt {
         }
 
         if self.negative != rhs.negative {
+            let rhs = rhs.negate(thr);
             return self.minus(thr, rhs);
         }
 
@@ -571,16 +572,17 @@ impl BigInt {
 
         // When the number of digits is small, we execute a fast path that does not allocate
         // heap buffer for addition.
-        if b2.count <= 2 {
-            return Self::plus_fast_digits::<2>(thr, self.negative, b1, b2);
-        } else if b2.count <= 4 {
-            return Self::plus_fast_digits::<4>(thr, self.negative, b1, b2);
-        } else if b2.count <= 8 {
-            return Self::plus_fast_digits::<8>(thr, self.negative, b1, b2);
-        } else if b2.count <= 16 {
-            return Self::plus_fast_digits::<16>(thr, self.negative, b1, b2);
+        if false {
+            if b2.count <= 2 {
+                return Self::plus_fast_digits::<2>(thr, self.negative, b1, b2);
+            } else if b2.count <= 4 {
+                return Self::plus_fast_digits::<4>(thr, self.negative, b1, b2);
+            } else if b2.count <= 8 {
+                return Self::plus_fast_digits::<8>(thr, self.negative, b1, b2);
+            } else if b2.count <= 16 {
+                return Self::plus_fast_digits::<16>(thr, self.negative, b1, b2);
+            }
         }
-
         Self::plus_generic(thr, self.negative, b1, b2)
     }
 
@@ -624,6 +626,7 @@ impl BigInt {
         }
 
         if self.negative != rhs.negative {
+            let rhs = rhs.negate(thr);
             return self.plus(thr, rhs);
         }
 
@@ -675,8 +678,8 @@ impl BigInt {
             (rhs, self)
         } else {
             (self, rhs)
-        };
-
+        };      
+       
         b1.times_generic(thr, b2)
     }
 
@@ -686,7 +689,7 @@ impl BigInt {
             for i in 0..rhs.count as usize {
                 let mut sum = 0;
                 for j in 0..self.count as usize {
-                    let mult = *self.uwords().get_unchecked(i) as u64
+                    let mult = *self.uwords().get_unchecked(j) as u64
                         * *rhs.uwords().get_unchecked(i) as u64;
                     sum += *res.get_unchecked(i + j) as u64 + mult;
                     *res.get_unchecked_mut(i + j) = Self::loword(sum);
@@ -1260,6 +1263,18 @@ impl BigInt {
     pub fn is_odd(self: Handle<Self>) -> bool {
         self.and32(Thread::current(), 1, false).is_one()
     }
+
+    pub fn remainder_digit(self: Handle<Self>, denominator: i32) -> i32 {
+        let count = self.count;
+
+        let mut remainder = 0i64;
+
+        for i in (0..=(count - 1)).rev() {
+            remainder = ((remainder << 32) + self.uwords()[i as usize] as i64) % denominator as i64;
+        }
+
+        remainder as i32
+    }
 }
 
 pub struct BigIntBase<'a> {
@@ -1359,5 +1374,71 @@ impl Hash for BigInt {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.uwords().hash(state);
         self.negative.hash(state);
+    }
+}
+
+impl std::fmt::Display for BigInt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let radix = 10;
+        if self.is_zero() {
+            return write!(f, "0");
+        }
+
+        let mut radix_pow = 1u32;
+        let mut digits = 0;
+
+        loop {
+            let (pow, overflow) = radix_pow.overflowing_mul(radix);
+            if !overflow || pow == 0 {
+                digits += 1;
+                radix_pow = pow;
+            }
+
+            if overflow {
+                break;
+            }
+        }
+
+        let mut res = "".to_string();
+
+        if radix_pow == 0 {
+            for i in self.uwords()[0..self.uwords().len() - 1].iter() {
+                Self::word_to_str(*i, &mut res, digits as usize, &BigInt::DEC_BASE);
+            }
+
+            Self::word_to_str(
+                self.uwords()[self.uwords().len() - 1],
+                &mut res,
+                0,
+                &BigInt::DEC_BASE,
+            );
+        } else {
+            let mut words = self.uwords().to_vec();
+
+            while words.len() > 0 {
+                let mut rem = 0;
+                for i in (0..words.len()).rev() {
+                    let x = Self::joinwords(words[i], rem);
+                    words[i] = (x / radix_pow as u64) as u32;
+                    rem = (x % radix_pow as u64) as u32;
+                }
+
+                while words.last().copied() == Some(0) {
+                    words.pop();
+                }
+                Self::word_to_str(
+                    rem,
+                    &mut res,
+                    if words.len() > 0 { digits as usize } else { 0 },
+                    &BigInt::DEC_BASE,
+                );
+            }
+        }
+
+        if self.negative {
+            res.insert(0, '-');
+        }
+
+        write!(f, "{}", res)
     }
 }

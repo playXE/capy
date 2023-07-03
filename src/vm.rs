@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 use std::mem::MaybeUninit;
 use std::ptr::null_mut;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering, AtomicBool};
 
 use rsgc::heap::heap::heap;
 use rsgc::heap::root_processor::SimpleRoot;
@@ -88,6 +88,8 @@ impl Object for VM {
         self.module.trace(visitor);
         self.tail_rands.trace(visitor);
         self.tail_rator.trace(visitor);
+       
+        visitor.visit_conservative(self.stack.as_ptr().cast(), self.stack.len());
     }
 }
 
@@ -101,7 +103,12 @@ pub struct Runtime {
 
 static mut RUNTIME: MaybeUninit<Runtime> = MaybeUninit::uninit();
 
+static RT_INITIALIZED: AtomicBool = AtomicBool::new(false);
+
 pub(crate) fn init_runtime() {
+    if RT_INITIALIZED.swap(true, std::sync::atomic::Ordering::AcqRel) {
+        return;
+    }
     unsafe {
         RUNTIME = MaybeUninit::new(Runtime {
             threads: Vec::new(),
@@ -114,17 +121,19 @@ pub(crate) fn init_runtime() {
         // synchronization: no mutex needed because roots are only processed during STW phase.
         for &thread in rt.threads.iter() {
             // parallel process thread roots
-            processor.add_task(
+            /*processor.add_task(
                 move |processor| {
                     (*thread).trace(processor.visitor());
                 },
                 false,
-            );
+            );*/
+            (*thread).trace(processor.visitor());
         }
     }));
 }
 
 pub fn scm_init_vm() {
+    init_runtime();
     unsafe {
         VM = MaybeUninit::new(VM {
             thread: Thread::current(),
@@ -154,6 +163,8 @@ pub fn scm_init_vm() {
         rt.rlock.lock(true);
         rt.threads.push(VM.assume_init_mut());
         rt.rlock.unlock();
+
+
     }
 }
 
