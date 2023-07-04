@@ -1,5 +1,5 @@
 #![allow(dead_code, unused_variables)]
-use std::any::Any;
+use std::{any::Any, cmp::Ordering};
 
 use once_cell::sync::Lazy;
 use rsgc::{
@@ -21,6 +21,7 @@ use crate::{
 };
 
 use super::{
+    arith::scm_n_compare,
     fun::get_proc_name,
     module::scm_capy_module,
     object::{ScmResult, Type},
@@ -609,10 +610,16 @@ fn do_out_of_range(
 ) -> Result<(), Value> {
     let typ = typ.unwrap_or("string");
     let vm = scm_vm();
-    /*if !bin_lt(vm, slen, sstart)? {
+    let cmp = scm_n_compare(slen, sstart);
+    if cmp.is_some() && cmp != Some(Ordering::Less) {
         let mut small_end = false;
         if ending {
-            if bin_gte(vm, i, low_bound)? && bin_lt(vm, i, sstart)? {
+            let cmp1 = scm_n_compare(i, low_bound);
+            let cmp2 = scm_n_compare(i, sstart);
+            if
+            /*bin_gte(vm, i, low_bound)?*/
+            cmp1 != Some(Ordering::Less) && /*bin_lt(vm, i, sstart)?*/ cmp2 == Some(Ordering::Less)
+            {
                 small_end = true;
             }
         }
@@ -622,7 +629,7 @@ fn do_out_of_range(
         raise_exn!(
             FailContract,
             &[],
-            "{}: {} index is {}\n  {}index: {}\n  {}{}{}{}]\n  {}: {}",
+            "{}: {}index is {}\n  {}index: {}\n  {}{}{}{}]\n  {}: {}",
             name,
             which,
             if small_end {
@@ -643,8 +650,7 @@ fn do_out_of_range(
             typ,
             sstr
         )
-    } else*/
-    {
+    } else {
         raise_exn!(
             FailContract,
             &[],

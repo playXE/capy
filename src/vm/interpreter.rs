@@ -13,11 +13,11 @@ use crate::compaux::{
     scm_identifier_global_ref, scm_identifier_global_set, scm_outermost_identifier,
 };
 use crate::op::Opcode;
-use crate::runtime::error::{wrong_count, wrong_contract};
-use crate::runtime::fun::{make_closed_procedure, get_proc_name};
+use crate::runtime::arith::*;
+use crate::runtime::error::{wrong_contract, wrong_count};
+use crate::runtime::fun::{get_proc_name, make_closed_procedure};
 use crate::runtime::list::{scm_cons, scm_is_list};
 use crate::runtime::module::{scm_make_binding, SCM_BINDING_CONST};
-use crate::runtime::arith::*;
 use crate::runtime::object::{
     check_arity, make_box, wrong_arity, ClosedNativeProcedure, CodeBlock, Module, NativeProcedure,
     Procedure, Type, MAX_ARITY,
@@ -121,12 +121,13 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                 proc.maxa,
                 (*cfr).argc.get_int32() as _,
             )) {
-                return Err(wrong_arity(
-                    proc.name,
+                return wrong_count(
+                    get_proc_name(proc.into()).unwrap_or("()"),
+                    proc.mina as _,
+                    proc.maxa as _,
                     (*cfr).argc.get_int32() as _,
-                    proc.mina,
-                    proc.maxa,
-                ));
+                    (*cfr).arguments()
+                );
             }
             vm.sp = sp;
             vm.top_call_frame = cfr;
@@ -207,13 +208,14 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     }
 
                     if !ip.is_null() {
-                        eprint!(":{:p} {}", ip, unsafe { std::mem::transmute::<_, Opcode>(ip.read()) });
+                        eprint!(":{:p} {}", ip, unsafe {
+                            std::mem::transmute::<_, Opcode>(ip.read())
+                        });
                     } else {
                         eprint!("<entrypoint>");
                     }
 
                     eprintln!();
-
                 }
 
                 Err(Value::encode_int32(0))
@@ -301,7 +303,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     let n = read2!();
                     let arg = (*cfr).args.as_ptr().add(n as usize).read();
                     let prev = sp;
-                   
+
                     push!(arg);
                 }
 
@@ -365,11 +367,13 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                         if let Some(res) = x.get_int32().checked_add(y.get_int32()) {
                             push!(Value::encode_int32(res));
                             continue 'interp;
-                        } 
+                        }
                     }
 
                     if x.is_double() && y.is_double() {
-                        push!(Value::encode_untrusted_f64_value(x.get_double() + y.get_double()));
+                        push!(Value::encode_untrusted_f64_value(
+                            x.get_double() + y.get_double()
+                        ));
                         continue 'interp;
                     }
 
@@ -380,7 +384,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     if unlikely(!scm_is_number(y)) {
                         return wrong_contract("+", "number?", 1, 2, &[x, y]);
                     }
-                    
+
                     let res = arith_add(vm, x, y).unwrap();
 
                     push!(res);
@@ -394,11 +398,13 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                         if let Some(res) = x.get_int32().checked_sub(y.get_int32()) {
                             push!(Value::encode_int32(res));
                             continue 'interp;
-                        } 
+                        }
                     }
 
                     if x.is_double() && y.is_double() {
-                        push!(Value::encode_untrusted_f64_value(x.get_double() - y.get_double()));
+                        push!(Value::encode_untrusted_f64_value(
+                            x.get_double() - y.get_double()
+                        ));
                         continue 'interp;
                     }
 
@@ -423,11 +429,13 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                         if let Some(res) = x.get_int32().checked_div(y.get_int32()) {
                             push!(Value::encode_int32(res));
                             continue 'interp;
-                        } 
+                        }
                     }
 
                     if x.is_double() && y.is_double() {
-                        push!(Value::encode_untrusted_f64_value(x.get_double() / y.get_double()));
+                        push!(Value::encode_untrusted_f64_value(
+                            x.get_double() / y.get_double()
+                        ));
                         continue 'interp;
                     }
 
@@ -451,11 +459,13 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                         if let Some(res) = x.get_int32().checked_mul(y.get_int32()) {
                             push!(Value::encode_int32(res));
                             continue 'interp;
-                        } 
+                        }
                     }
 
                     if x.is_double() && y.is_double() {
-                        push!(Value::encode_untrusted_f64_value(x.get_double() * y.get_double()));
+                        push!(Value::encode_untrusted_f64_value(
+                            x.get_double() * y.get_double()
+                        ));
                         continue 'interp;
                     }
 
@@ -502,7 +512,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                 Opcode::Less => {
                     let y = pop!();
                     let x = pop!();
-                    
+
                     if x.is_int32() && y.is_int32() {
                         push!(Value::encode_bool_value(x.get_int32() < y.get_int32()));
                         continue 'interp;
@@ -614,7 +624,9 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     let cmp = scm_n_compare(x, y).unwrap();
 
                     match cmp {
-                        Ordering::Greater | Ordering::Equal => push!(Value::encode_bool_value(true)),
+                        Ordering::Greater | Ordering::Equal => {
+                            push!(Value::encode_bool_value(true))
+                        }
                         _ => push!(Value::encode_bool_value(false)),
                     }
                 }
@@ -634,7 +646,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     if callee.is_vm_procedure() {
                         (*cfr).code_block = callee.procedure().code.into();
                         pc = callee.procedure().code.start_ip();
-              
+
                         continue 'interp;
                     }
                     continue 'eval;
@@ -698,7 +710,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     let off = read2!();
 
                     let val = cfr.cast::<Value>().sub(off as usize + 1).read();
-              
+
                     push!(val);
                 }
 
@@ -909,15 +921,15 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     let argc = read2!();
                     if unlikely(argc != (*cfr).argc.get_int32() as u16) {
                         return wrong_count(
-                            code_block!().name.strsym(),
-                            code_block!().mina as _, 
+                            &code_block!().name.to_string(),
+                            code_block!().mina as _,
                             if code_block!().maxa >= MAX_ARITY {
                                 -1
                             } else {
                                 code_block!().maxa as i32
                             },
                             (*cfr).argc.get_int32() as _,
-                            (*cfr).arguments()
+                            (*cfr).arguments(),
                         );
                     }
                 }
@@ -926,15 +938,15 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     let argc = read2!();
                     if unlikely(argc > (*cfr).argc.get_int32() as u16) {
                         return wrong_count(
-                            code_block!().name.strsym(),
-                            code_block!().mina as _, 
+                            &code_block!().name.to_string(),
+                            code_block!().mina as _,
                             if code_block!().maxa >= MAX_ARITY {
                                 -1
                             } else {
                                 code_block!().maxa as i32
                             },
                             (*cfr).argc.get_int32() as _,
-                            (*cfr).arguments()
+                            (*cfr).arguments(),
                         );
                     }
                 }
@@ -1102,7 +1114,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     let val = pop!();
                     let cell = pop!();
                     if unlikely(!cell.is_pair()) {
-                        return wrong_contract("set-car!", "pair?", 0,2, &[cell, val]);
+                        return wrong_contract("set-car!", "pair?", 0, 2, &[cell, val]);
                     }
 
                     vm.thread.write_barrier(cell.pair());
@@ -1113,7 +1125,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     let val = pop!();
                     let cell = pop!();
                     if unlikely(!cell.is_pair()) {
-                        return wrong_contract("set-cdr!", "pair?", 0,2, &[cell, val]);
+                        return wrong_contract("set-cdr!", "pair?", 0, 2, &[cell, val]);
                     }
 
                     vm.thread.write_barrier(cell.pair());

@@ -502,7 +502,7 @@ impl ByteCompiler {
                         for (_, &lvar) in var.lvars.iter().enumerate() {
                             let index = self.next_local_index();
                             group.bindings.insert(lvar.as_ptr() as usize, index);
-
+                            
                             if !lvar.is_immutable() {
                                 self.emit_simple(Opcode::PushUndef);
                                 self.emit_simple(Opcode::StackBox);

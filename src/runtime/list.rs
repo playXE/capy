@@ -497,6 +497,7 @@ extern "C" fn car(cfr: &mut CallFrame) -> ScmResult {
     ScmResult::ok(cfr.argument(0).car())
 }
 
+
 extern "C" fn cdr(cfr: &mut CallFrame) -> ScmResult {
     if unlikely(!cfr.argument(0).is_pair()) {
         return ScmResult::err(
@@ -506,6 +507,9 @@ extern "C" fn cdr(cfr: &mut CallFrame) -> ScmResult {
 
     ScmResult::ok(cfr.argument(0).cdr())
 }
+
+
+
 
 extern "C" fn set_car(cfr: &mut CallFrame) -> ScmResult {
     if unlikely(!cfr.argument(0).is_pair()) {

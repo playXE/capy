@@ -94,7 +94,13 @@ extern "C" fn equal(cfr: &mut CallFrame) -> ScmResult {
     ScmResult::ok(scm_equal(cfr.argument(0), cfr.argument(1)))
 }
 
+extern "C" fn boolean_p(cfr: &mut CallFrame) -> ScmResult {
+    ScmResult::ok(cfr.argument(0).is_boolean())
+}
 
+extern "C" fn not(cfr: &mut CallFrame) -> ScmResult {
+    ScmResult::ok(Value::encode_bool_value(cfr.argument(0).is_false()))
+}
 
 pub(crate) fn init_cmp() {
     let module = scm_scheme_module().module();
@@ -107,4 +113,10 @@ pub(crate) fn init_cmp() {
 
     let subr = scm_make_subr("equal?", equal, 2, 2);
     scm_define(module, "equal?".intern(), subr).unwrap();
+
+    let subr = scm_make_subr("boolean?", boolean_p, 1, 1);
+    scm_define(module, "boolean?".intern(), subr).unwrap();
+
+    let subr = scm_make_subr("not", not, 1, 1);
+    scm_define(module, "not".intern(), subr).unwrap();
 }

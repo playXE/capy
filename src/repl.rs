@@ -24,7 +24,7 @@ use crate::{
         bytecompiler::ByteCompiler, make_cenv, pass1::pass1, r7rs_to_value, ref_count_lvars,
     },
     runtime::module::{scm_search_for_symbols, scm_user_module},
-    runtime::string::make_string,
+    runtime::{string::make_string, structure::{is_struct_instance, struct_ref}, error::{EXN_TABLE, Exception}},
     runtime::value::Value,
     vm::{interpreter::apply, scm_current_module, scm_set_current_module},
 };
@@ -336,7 +336,12 @@ pub fn repl() {
                             println!("{:?}", v);
                         }
                         Err(e) => {
-                            println!("Error: {:?}", e);
+                            if is_struct_instance(EXN_TABLE[Exception::Exn as usize].typ, e) {
+                                let msg = struct_ref(e, 0);
+                                println!("{}", msg);
+                            } else {
+                                println!("Error: {:?}", e);
+                            }
                         }
                     },
                     Err(err) => {

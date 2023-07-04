@@ -25,8 +25,10 @@ pub mod port;
 pub mod portfun;
 pub mod print;
 pub mod reader;
+pub mod base;
 
 pub(crate) fn init() {
+    base::init_base();
     number::init_number();
     fun::init();
     tuple::init_tuple();

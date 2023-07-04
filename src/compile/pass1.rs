@@ -21,7 +21,7 @@ use crate::{
         is_global_identifier_eq, scm_export_symbols, scm_find_module, scm_import_module,
         scm_insert_binding, scm_make_module,
     },
-    runtime::string::make_string,
+    runtime::{string::make_string, module::scm_identifier_to_bound_gloc},
     runtime::symbol::{gensym, make_symbol},
     runtime::value::Value,
     runtime::{
@@ -1098,14 +1098,6 @@ fn pass1_body_rec(
                         );
                     }
 
-                    head if !head.is_wrapped_identifier() => {
-                        return Err(make_string(
-                            Thread::current(),
-                            &format!("[internal] pass1/body: '{:?}'", head),
-                        )
-                        .into())
-                    }
-
                     head if head.is_pair() && head.car() == make_symbol(":rec", true) => {
                         return pass1_body_finish(exprs, mframe, vframe, cenv)
                     }
@@ -1197,7 +1189,28 @@ fn pass1_body_rec(
                         pass1_body_rec(args, mframe, vframe, cenv)
                     }
 
-                    _ => pass1_body_finish(exprs, mframe, vframe, cenv),
+                    head if head.is_wrapped_identifier() => {
+                        if let Some(gloc) = scm_identifier_to_bound_gloc(head.identifier()) {
+                            if gloc.value.is_macro() {
+                                let expanded = apply(head.r#macro().transformer, &[exprs.car(), cenv])?;
+
+                                return pass1_body_rec(
+                                    scm_list_star(Thread::current(), &[expanded, rest]),
+                                    mframe,
+                                    vframe,
+                                    cenv,
+                                );
+                            }
+                        }
+                        pass1_body_finish(exprs, mframe, vframe, cenv)
+                    }
+
+                    _ => {
+                        return Err(make_string(
+                            Thread::current(),
+                            &format!("[internal] pass1/body {}'", head),
+                        ).into())
+                    },
                 }
             } else {
                 pass1_body_finish(exprs, mframe, vframe, cenv)

@@ -1,8 +1,10 @@
 #![allow(dead_code)]
 use std::mem::MaybeUninit;
+use std::ops::Index;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicU64, Ordering, AtomicBool};
 
+use once_cell::sync::Lazy;
 use rsgc::heap::heap::heap;
 use rsgc::heap::root_processor::SimpleRoot;
 use rsgc::prelude::{Handle, Object};
@@ -26,6 +28,7 @@ macro_rules! scm_error {
 use rsgc::sync::mutex::{Condvar, RawMutex};
 
 use crate::runtime::object::{Module, ScmResult};
+use crate::runtime::symbol::Intern;
 use crate::runtime::value::Value;
 
 use self::callframe::CallFrame;
@@ -194,3 +197,63 @@ pub mod setjmp;
 /// Used to protect call/cc from being called from a different VM
 /// or call/cc going through a Rust frame.
 static ENTRY: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(usize)]
+pub enum InherentSymbol {
+    Quote = 0,
+    Quasiquote,
+    Unquote,
+    UnquoteSplicing,
+    Syntax,
+    Quasisyntax,
+    Unsyntax,
+    UnsyntaxSplicing,
+    LParen,
+    RParen,
+    LBrack,
+    RBrack,
+    Dot,
+
+    Count
+}
+
+pub struct InherentSymbols {
+    symbols: [Value; InherentSymbol::Count as usize],
+}   
+
+impl Index<InherentSymbol> for InherentSymbols {
+    type Output = Value;
+
+    fn index(&self, index: InherentSymbol) -> &Self::Output {
+        &self.symbols[index as usize]
+    }
+}
+
+impl InherentSymbols {
+    fn new() -> Self {
+        let mut symbols = [Value::encode_undefined_value(); InherentSymbol::Count as usize];
+        symbols[InherentSymbol::Quote as usize] = "quote".intern().into();
+        symbols[InherentSymbol::Quasiquote as usize] = "quasiquote".intern().into();
+        symbols[InherentSymbol::Unquote as usize] = "unquote".intern().into();
+        symbols[InherentSymbol::UnquoteSplicing as usize] = "unquote-splicing".intern().into();
+        symbols[InherentSymbol::Syntax as usize] = "syntax".intern().into();
+        symbols[InherentSymbol::Quasisyntax as usize] = "quasisyntax".intern().into();
+        symbols[InherentSymbol::Unsyntax as usize] = "unsyntax".intern().into();
+        symbols[InherentSymbol::UnsyntaxSplicing as usize] = "unsyntax-splicing".intern().into();
+        symbols[InherentSymbol::LParen as usize] = "(".intern().into();
+        symbols[InherentSymbol::RParen as usize] = ")".intern().into();
+        symbols[InherentSymbol::LBrack as usize] = "[".intern().into();
+        symbols[InherentSymbol::RBrack as usize] = "]".intern().into();
+        symbols[InherentSymbol::Dot as usize] = ".".intern().into();
+        InherentSymbols {
+            symbols
+        }
+    }
+}
+
+pub fn inherent_symbols() -> &'static InherentSymbols {
+    static SYMBOLS: Lazy<InherentSymbols> = Lazy::new(InherentSymbols::new);
+
+    &SYMBOLS
+}

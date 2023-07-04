@@ -1,15 +1,11 @@
-use std::{cmp::Ordering};
+use std::cmp::Ordering;
 
-use rsgc::{thread::Thread};
+use rsgc::thread::Thread;
 
-use crate::{
-    raise_exn,
-    runtime::object::Type,
-    vm::{VM},
-};
+use crate::{raise_exn, runtime::object::Type, vm::VM};
 
 use super::{
-    bigint::{BigInt},
+    bigint::BigInt,
     error::wrong_contract,
     number::{scm_negative, scm_real_valued},
     object::{make_complex, make_rational},
@@ -548,6 +544,22 @@ pub fn arith_inverse(vm: &mut VM, obj: Value) -> Option<Value> {
     None
 }
 
+fn norm_complex(_vm: &mut VM, real: Value, imag: Value) -> Value {
+    if imag.is_int32() && imag.get_int32() == 0 {
+        real
+    } else if imag.is_bignum() && imag.bignum().is_zero() {
+        real
+    } else if real.is_double() || imag.is_double() {
+        let real = cnvt_to_inexact(real).unwrap();
+        let imag = cnvt_to_inexact(imag).unwrap();
+
+        make_complex(real, imag)
+    } else {
+        make_complex(real, imag)
+    }
+}
+
+#[allow(dead_code)]
 fn reduce_fixnum_fixnum(numerator: Value, denominator: Value) -> Value {
     let mut nume = numerator.get_int32();
     let mut deno = denominator.get_int32();
@@ -1012,7 +1024,7 @@ pub fn arith_expt(vm: &mut VM, lhs: Value, rhs: Value) -> Result<Value, Value> {
     }
 }*/
 
-fn expt(vm: &mut VM, mut lhs: Value, rhs: Value) -> Option<Value> {
+pub fn arith_expt(vm: &mut VM, mut lhs: Value, rhs: Value) -> Option<Value> {
     let mut n = rhs.get_int32() as i64;
     if n == 0 {
         return Some(Value::encode_int32(1));
@@ -1143,7 +1155,7 @@ pub fn arith_add(vm: &mut VM, lhs: Value, rhs: Value) -> Option<Value> {
     if lhs.is_bignum() {
         if rhs.is_int32() {
             let rhs = BigInt::from_i64(vm.mutator(), rhs.get_int32() as _);
-          
+
             return Some(Value::encode_object_value(
                 lhs.bignum().plus(vm.mutator(), rhs),
             ));
@@ -1619,7 +1631,32 @@ pub fn arith_remainder(vm: &mut VM, lhs: Value, rhs: Value) -> Option<Value> {
     None
 }
 
-pub fn parse_number(mut s: &[u8], prefix: u8, mut radix: u8) -> Result<Value, Value> {
+fn parse_negate(vm: &mut VM, val: Value) -> Value {
+    if val.is_int32() {
+        let n = val.get_int32();
+
+        if n == i32::MIN {
+            return scm_int(-(n as i64));
+        } else {
+            return Value::encode_int32(-n);
+        }
+    } else if val.is_double() {
+        return Value::encode_f64_value(-val.get_double());
+    } else if val.is_bignum() {
+        return Value::encode_object_value(val.bignum().negate(vm.mutator()));
+    } else if val.is_rational() {
+        todo!()
+    } else if val.is_complex() {
+        let real = val.complex().r;
+        let imag = val.complex().i;
+
+        return make_complex(parse_negate(vm, real), parse_negate(vm, imag));
+    } else {
+        unreachable!()
+    }
+}
+#[allow(unused_assignments, unused_variables)]
+pub fn parse_number(vm: &mut VM, mut s: &[u8], prefix: u8, mut radix: u8) -> Result<Value, Value> {
     let mut negative = false;
     let mut nosign = true;
     let mut exact = false;
@@ -1655,10 +1692,7 @@ pub fn parse_number(mut s: &[u8], prefix: u8, mut radix: u8) -> Result<Value, Va
 
         _ => (),
     }
-    s = &s[2..];
-    if radix == 0 {
-        radix = 10;
-    }
+
 
     while s[0] == b'#' {
         match s[1] {
@@ -1760,11 +1794,121 @@ pub fn parse_number(mut s: &[u8], prefix: u8, mut radix: u8) -> Result<Value, Va
         nosign = false;
     }
 
-    let real = Value::encode_bool_value(false);
-    let _imag = real;
-    let _angle = real;
+    let mut real = Value::encode_bool_value(false);
+    let imag = real;
+    let angle = real;
 
-    todo!()
+    s = parse_ureal(vm, s, radix, exact, &mut real)?;
+   
+    if !real.is_false() {
+        if negative {
+            real = parse_negate(vm, real);
+        }
+
+        if s[0] == b'/' {
+            return Ok(Value::encode_bool_value(false)); // TODO: Rationals
+        }
+
+        if exact {
+            real = cnvt_to_exact(real).unwrap();
+        }
+
+        if inexact {
+            real = cnvt_to_inexact(real).unwrap();
+        }
+
+        let angle = match s[0] {
+            0 => return Ok(real),
+            b'@' => {
+                if s[1] == b'+' {
+                    s = &s[2..];
+                    negative = false;
+                    true
+                } else if s[1] == b'-' {
+                    s = &s[2..];
+                    negative = true;
+                    true
+                } else {
+                    s = &s[1..];
+                    true
+                }
+            }
+
+            b'i' | b'I' => {
+                if s[1] != 0 {
+                    return Ok(false.into());
+                }
+
+                if nosign {
+                    return Ok(false.into());
+                }
+
+                if exact {
+                    return Ok(norm_complex(vm, 0.into(), cnvt_to_exact(real).unwrap()));
+                }
+
+                if inexact {
+                    return Ok(norm_complex(vm, 0.into(), cnvt_to_inexact(real).unwrap()));
+                }
+
+                return Ok(norm_complex(vm, 0.into(), real));
+            }
+
+            b'+' => {
+                if s[1] == b'i' || s[1] == b'I' {
+                    if s[2] == 0 {
+                        if exact {
+                            return Ok(norm_complex(vm, cnvt_to_exact(real).unwrap(), 1.into()));
+                        } else if inexact {
+                            return Ok(norm_complex(vm, cnvt_to_inexact(real).unwrap(), 1.into()));
+                        } else {
+                            return Ok(norm_complex(vm, real, 1.into()));
+                        }
+                    }
+                }
+
+                s = &s[1..];
+                negative = false;
+                false
+            }
+
+            b'-' => {
+                if s[1] == b'i' || s[1] == b'I' {
+                    if s[2] == 0 {
+                        if exact {
+                            return Ok(norm_complex(
+                                vm,
+                                cnvt_to_exact(real).unwrap(),
+                                Value::encode_int32(-1),
+                            ));
+                        } else if inexact {
+                            return Ok(norm_complex(
+                                vm,
+                                cnvt_to_inexact(real).unwrap(),
+                                Value::encode_f64_value(-1.0),
+                            ));
+                        } else {
+                            return Ok(norm_complex(vm, real, Value::encode_int32(-1)));
+                        }
+                    }
+                }
+
+                s = &s[1..];
+                negative = true;
+                false
+            }
+
+            _ => return Ok(false.into()),
+        };
+
+        if angle {
+            todo!()
+        } else {
+            todo!()
+        }
+    } else {
+        Ok(false.into())
+    }
 }
 
 pub fn parse_uinteger<'a>(

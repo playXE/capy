@@ -858,6 +858,8 @@ fn r7rs_to_value_k(
                 .unwrap()
                 .into(),
         ),
+
+        Expr::Char(x) => cont(Value::encode_char(*x)),
         _ => unsafe { std::hint::unreachable_unchecked() },
     }
 }
@@ -925,6 +927,11 @@ pub fn ref_count_lvars(mut iform: Handle<IForm>) {
         }
 
         IForm::Let(x) => {
+            if x.scope == LetScope::Rec {
+                for lvar in x.lvars.iter_mut() {
+                    lvar.set_count += 1;
+                }
+            }
             for init in x.inits.iter().copied() {
                 ref_count_lvars(init);
             }

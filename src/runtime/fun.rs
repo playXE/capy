@@ -288,6 +288,10 @@ pub fn get_proc_name<'a>(val: Value) -> Option<&'a str> {
     }
 }
 
+extern "C" fn procedure_p(cfr: &mut CallFrame) -> ScmResult {
+    let v = cfr.argument(0);
+    ScmResult::ok(v.is_procedure())
+}
 
 pub(crate) fn init() {
     let module = scm_scheme_module().module();
@@ -298,4 +302,7 @@ pub(crate) fn init() {
 
     let subr = scm_make_subr("values", values, 0, MAX_ARITY);
     scm_define(module, "values".intern(), subr.into()).unwrap();
+
+    let subr = scm_make_subr("procedure?", procedure_p, 1, 1);
+    scm_define(module, "procedure?".intern(), subr.into()).unwrap();
 }

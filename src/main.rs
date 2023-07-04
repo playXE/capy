@@ -1,4 +1,12 @@
-use capy::{repl::repl, runtime::{load::scm_vm_load, arith::{parse_uinteger, parse_udecimal}}, runtime::{value::Value, arith::{decode_double, parse_ureal}, structure::{is_struct_instance, struct_ref}, error::{EXN_TABLE, Exception}}, vm::scm_vm};
+use capy::{
+    repl::repl,
+    runtime::load::scm_vm_load,
+    runtime::{
+        error::{Exception, EXN_TABLE},
+        structure::{is_struct_instance, struct_ref},
+        value::Value,
+    },
+};
 use rsgc::{prelude::HeapArguments, thread::main_thread};
 use std::path::PathBuf;
 use structopt::StructOpt;
@@ -16,7 +24,6 @@ fn main() {
         heap.add_core_root_set();
         capy::vm::scm_init_vm();
         capy::init();
-        
 
         let args = Args::from_args();
 
@@ -41,11 +48,6 @@ fn main() {
         } else {
             repl();
         }
-        /* 
-        let mut ans = Value::encode_bool_value(false);
-        let p = parse_ureal(scm_vm(), b"6213214.041242e-23\0", 10, false, &mut ans).unwrap();
-        println!("{}", ans);
-        println!("{}", 6213214.041242e-23);*/
         Ok(())
     });
 }

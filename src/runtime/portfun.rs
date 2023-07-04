@@ -6,6 +6,7 @@ use rsgc::sync::mutex::Mutex;
 use rsgc::thread::Thread;
 
 use crate::raise_exn;
+use crate::runtime::reader::Reader;
 use crate::vm::callframe::CallFrame;
 use crate::vm::scm_vm;
 
@@ -2194,18 +2195,23 @@ extern "C" fn read(cfr: &mut CallFrame) -> ScmResult {
             cfr.arguments().len() as _,
             cfr.arguments(),
         )
-        .into();
+        .into();    
     }
 
     let port = port.port();
-
     port.lock.lock(true);
 
     check_opened_input_textual_port!(port, "read", 0, cfr.arguments());
 
-    
+    let mut reader = Reader::new(scm_vm(), port, false);
 
-    todo!()
+    reader.read().and_then(|val| {
+        port.lock.unlock();
+        Ok(val)
+    }).map_err(|e| {
+        port.lock.unlock();
+        e
+    }).into()
 }
 
 
@@ -2299,6 +2305,7 @@ pub(crate) fn init_ports() {
         put_bytevector, "put-bytevector", 4, 4
         put_char, "put-char", 2, 2
         put_string, "put-string", 2, 4
+        read, "read", 0, 1
 
     }
 }
