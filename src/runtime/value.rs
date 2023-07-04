@@ -47,8 +47,7 @@ impl Eq for Value {}
 
 impl Value {
     /*
-     * On 64-bit platforms USE(JSVALUE64) should be defined, and we use a NaN-encoded
-     * form for immediates.
+     * On 64-bit platforms we use a NaN-encoded form for immediates.
      *
      * The encoding makes use of unused NaN space in the IEEE754 representation.  Any value
      * with the top 13 bits set represents a QNaN (with the sign bit set).  QNaN values
@@ -63,7 +62,7 @@ impl Value {
      * hex patterns 0xFFFC and 0xFFFE - we rely on the fact that no valid double-precision
      * numbers will fall in these ranges.
      *
-     * The top 15-bits denote the type of the encoded JSValue:
+     * The top 15-bits denote the type of the encoded Value:
      *
      *     Pointer {  0000:PPPP:PPPP:PPPP
      *              / 0002:****:****:****
@@ -93,8 +92,8 @@ impl Value {
      * - With bit 3 masked out (UndefinedTag), Undefined and Null share the
      *   same value, allowing null & undefined to be quickly detected.
      *
-     * No valid JSValue will have the bit pattern 0x0, this is used to represent array
-     * holes, and as a C++ 'no value' result (e.g. JSValue() has an internal value of 0).
+     * No valid Value will have the bit pattern 0x0, this is used to represent array
+     * holes, and as a C++ 'no value' result (e.g. Value() has an internal value of 0).
      *
      * When USE(BIGINT32), we have a special representation for BigInts that are small (32-bit at most):
      *      0000:XXXX:XXXX:0012

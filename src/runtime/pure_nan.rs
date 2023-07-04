@@ -1,5 +1,5 @@
-//! NaN (not-a-number) double values are central to how JavaScriptCore encodes JavaScript
-//! values (JSValues).  All values, including integers and non-numeric values, are always
+//! NaN (not-a-number) double values are central to how Capy encodes Scheme
+//! values (Values).  All values, including integers and non-numeric values, are always
 //! encoded using the IEEE 754 binary double format.  Non-double values are encoded using
 //! a NaN with the sign bit set.  The 51-bit payload is then used for encoding the actual
 //! value - be it an integer or a pointer to an object, or something else. But we only
@@ -14,7 +14,7 @@
 //! We can trust that on all of the hardware/OS combinations that we care about,
 //! NaN-producing math operations never produce a NaN that looks like a tagged value. But
 //! if we're ever in a situation where we worry about it, we can use purifyNaN() to get a
-//! NaN that doesn't look like a tagged non-double value. The JavaScript language doesn't
+//! NaN that doesn't look like a tagged non-double value. The Scheme language doesn't
 //! distinguish between different flavors of NaN and there is no way to detect what kind
 //! of NaN you have - hence so long as all double NaNs are purified then our tagging
 //! scheme remains sound.
@@ -38,7 +38,7 @@ pub fn pure_nan() -> f64 {
 
 #[inline]
 pub fn is_impure_nan(value: f64) -> bool {
-    // Tests if the double value would break JSVALUE64 encoding, which is the most
+    // Tests if the double value would break value encoding, which is the most
     // aggressive kind of encoding that we currently use.
     value.to_bits() >= 0xfffe000000000000
 }
