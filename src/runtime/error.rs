@@ -17,7 +17,7 @@ use crate::{
         structure::{force_struct_type_info, make_struct_names_from_array, make_struct_values},
         symbol::Intern,
     },
-    vm::{callframe::CallFrame, scm_vm},
+    vm::{callframe::CallFrame, scm_vm, stacktrace::get_stacktrace_str},
 };
 
 use super::{
@@ -25,7 +25,9 @@ use super::{
     fun::get_proc_name,
     module::scm_capy_module,
     object::{ScmResult, Type},
-    string::make_string,
+    port::{port_extract_string, port_open_bytevector, Port, SCM_PORT_DIRECTION_OUT},
+    print::Printer,
+    string::{do_format, make_string},
     structure::{
         make_simple_struct_instance_from_array, make_struct_instance_, STRUCT_EXPTIME,
         STRUCT_NO_MAKE_PREFIX, STRUCT_NO_SET,
@@ -439,7 +441,7 @@ pub fn finish_exn_impl<T>(
     }
 
     reargs[0] = make_string(Thread::current(), msg).into();
-    reargs[1] = Value::encode_null_value(); // cmark
+    reargs[1] = make_string(Thread::current(), &get_stacktrace_str(scm_vm())).into(); // cmark
 
     if let Some(errno) = errno_val {
         if id == Exception::FailFilesystem {
@@ -815,40 +817,51 @@ pub fn contract_error<'a, T>(name: &str, msg: &str, args: &'a [&'a dyn Any]) -> 
 }
 
 fn do_error(who: &str, mode: Exception, args: &[Value]) -> Result<(), Value> {
-    /*let mut newargs: [Value; 2] = [Value::make_null(); 2];
+    let mut newargs: [Value; 2] = [Value::encode_null_value(); 2];
 
-    if args[0].symbolp() {
+    if args[0].is_symbol() {
         if args.len() < 2 {
             let s = args[0].strsym();
             let __l = s.len();
 
-            newargs[0] = Str::new(Thread::current(), format!("error: {}", s)).into();
+            newargs[0] = make_string(Thread::current(), &format!("error: {}", s)).into()
         } else {
             let port = Port::new(Thread::current());
-            port_open_bytevector(port, intern("do_error"), SCM_PORT_DIRECTION_OUT, Value::encode_bool_value(false), Value::encode_bool_value(false));
-            if !args[1].strp() {
+            port_open_bytevector(
+                port,
+                "do_error".intern().into(),
+                SCM_PORT_DIRECTION_OUT,
+                Value::encode_bool_value(false),
+                Value::encode_bool_value(false),
+            );
+            if !args[1].is_string() {
                 return wrong_contract(who, "string?", 1, args.len() as _, args);
             }
 
             do_format(who, port, None, 1, 2, args.len(), args)?;
 
             let s = port_extract_string(port).unwrap();
-            newargs[0] = Str::new(
+            newargs[0] = make_string(
                 Thread::current(),
-                format!("{}: {}", args[0].strsym(), s.str()),
+                &format!("{}: {}", args[0].strsym(), s.strsym()),
             )
             .into();
         }
     } else {
-        if !args[0].strp() {
+        if !args[0].is_string() {
             return wrong_contract(who, "(or/c string? symbol?)", 0, args.len() as _, args);
         }
 
         let port = Port::new(Thread::current());
-        port_open_bytevector(port, intern("do_error"), SCM_PORT_DIRECTION_OUT, Value::encode_bool_value(false), Value::encode_bool_value(false));
-        let mut printer = Printer::new(crate::vm::vm(), port);
+        port_open_bytevector(
+            port,
+            "do_error".intern().into(),
+            SCM_PORT_DIRECTION_OUT,
+            Value::encode_bool_value(false),
+            Value::encode_bool_value(false),
+        );
+        let mut printer = Printer::new(crate::vm::scm_vm(), port);
         printer.write(args[0])?;
-
 
         for i in 1..args.len() {
             printer.puts(" ")?;
@@ -859,10 +872,9 @@ fn do_error(who: &str, mode: Exception, args: &[Value]) -> Result<(), Value> {
     }
 
     newargs[1] = Value::encode_undefined_value();
-    let instance = make_struct_instance_(crate::vm::vm(), EXN_TABLE[mode as usize].typ, &newargs)?;
+    let instance = make_struct_instance_(EXN_TABLE[mode as usize].typ, &newargs)?;
 
-    Err(instance)*/
-    Err(args[0])
+    Err(instance)
 }
 
 fn do_raise_type_error(name: &str, args: &[Value], mode: Exception) -> Result<(), Value> {

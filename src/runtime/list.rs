@@ -3,19 +3,20 @@ use std::intrinsics::unlikely;
 use crate::{
     compile::{make_iform, Asm, AsmOperand, IForm},
     op::Opcode,
+    raise_exn,
     runtime::object::{ExtendedPair, ObjectHeader, Pair, Type, Vector},
     runtime::value::Value,
     runtime::vector::make_vector,
-    vm::callframe::CallFrame,
+    vm::{callframe::CallFrame, scm_vm, VM},
 };
 use rsgc::{prelude::Handle, system::arraylist::ArrayList, thread::Thread};
 
 use super::{
     error::wrong_contract,
-    fun::scm_make_subr_inliner,
+    fun::{scm_make_subr_inliner, scm_make_subr},
     module::{scm_define, scm_scheme_module},
     object::{ScmResult, MAX_ARITY},
-    symbol::Intern,
+    symbol::Intern, value::scm_int,
 };
 
 pub fn scm_cons(t: &mut Thread, car: Value, cdr: Value) -> Value {
@@ -282,15 +283,61 @@ pub fn scm_fold(mut func: impl FnMut(Value, Value) -> Value, mut acc: Value, lis
     acc
 }
 
-pub fn scm_is_list(list: Value) -> bool {
-    let mut list = list;
+pub fn scm_is_circular_list(list: Value) -> bool {
+    /*let mut list = list;
     while !list.is_null() {
         if !list.is_xtype(Type::Pair) {
             return false;
         }
         list = list.cdr();
+    }*/
+    if list.is_null() {
+        return false;
     }
-    true
+
+    let mut fast = list;
+    let mut slow = fast;
+
+    while fast.is_pair() {
+        fast = fast.cdr();
+        if !fast.is_pair() {
+            return false;
+        }
+
+        fast = fast.cdr();
+        slow = slow.cdr();
+
+        if fast == slow {
+            return false;
+        }
+    }
+
+    false
+}
+
+pub fn scm_is_list(list: Value) -> bool {
+    if list.is_null() {
+        return true;
+    }
+
+    let mut fast = list;
+    let mut slow = fast;
+
+    while fast.is_pair() {
+        fast = fast.cdr();
+        if !fast.is_pair() {
+            return fast.is_null();
+        }
+
+        fast = fast.cdr();
+        slow = slow.cdr();
+
+        if fast == slow {
+            return false;
+        }
+    }
+
+    fast.is_null()
 }
 
 pub fn scm_length(list: Value) -> Option<usize> {
@@ -497,7 +544,6 @@ extern "C" fn car(cfr: &mut CallFrame) -> ScmResult {
     ScmResult::ok(cfr.argument(0).car())
 }
 
-
 extern "C" fn cdr(cfr: &mut CallFrame) -> ScmResult {
     if unlikely(!cfr.argument(0).is_pair()) {
         return ScmResult::err(
@@ -507,9 +553,6 @@ extern "C" fn cdr(cfr: &mut CallFrame) -> ScmResult {
 
     ScmResult::ok(cfr.argument(0).cdr())
 }
-
-
-
 
 extern "C" fn set_car(cfr: &mut CallFrame) -> ScmResult {
     if unlikely(!cfr.argument(0).is_pair()) {
@@ -565,8 +608,235 @@ extern "C" fn null_p(cfr: &mut CallFrame) -> ScmResult {
     ScmResult::ok(Value::encode_bool_value(cfr.argument(0).is_null()))
 }
 
+fn do_transpose(vm: &mut VM, each_len: usize, argc: usize, args: &mut [Value]) -> Value {
+    let mut ans = Value::encode_null_value();
+    let mut ans_tail = ans;
+
+    for _ in 0..each_len {
+        let elt = scm_cons(vm.mutator(), args[0].car(), Value::encode_null_value());
+        let mut elt_tail = elt;
+        args[0] = args[0].cdr();
+
+        for n in 1..argc {
+            vm.mutator().write_barrier(elt_tail.pair());
+            elt_tail.set_cdr(scm_cons(
+                vm.mutator(),
+                args[n].car(),
+                Value::encode_null_value(),
+            ));
+            elt_tail = elt_tail.cdr();
+            args[n] = args[n].cdr();
+        }
+
+        if ans.is_null() {
+            ans = scm_cons(vm.mutator(), elt, Value::encode_null_value());
+            ans_tail = ans;
+        } else {
+            vm.mutator().write_barrier(ans_tail.pair());
+            ans_tail.set_cdr(scm_cons(vm.mutator(), elt, Value::encode_null_value()));
+            ans_tail = ans_tail.cdr();
+        }
+    }
+
+    ans
+}
+
+extern "C" fn list_transpose(cfr: &mut CallFrame) -> ScmResult {
+    let mut args = cfr.arguments_mut();
+
+    if scm_is_list(args[0]) {
+        let each_len = scm_length(args[0]).unwrap();
+
+        for i in 1..args.len() {
+            if !scm_is_list(args[i]) {
+                return ScmResult::err(
+                    wrong_contract::<()>(
+                        "list-transpose",
+                        "list?",
+                        i as _,
+                        cfr.argument_count() as _,
+                        cfr.arguments(),
+                    )
+                    .unwrap_err(),
+                );
+            }
+
+            if scm_length(args[i]).unwrap() != each_len {
+                return raise_exn!(
+                    (),
+                    Fail,
+                    &[],
+                    "list-transpose: all lists must have the same length"
+                )
+                .into();
+            }
+        }
+
+        ScmResult::ok(do_transpose(scm_vm(), each_len, args.len(), &mut args))
+    } else {
+        wrong_contract::<()>(
+            "list-transpose",
+            "list?",
+            0,
+            cfr.argument_count() as _,
+            cfr.arguments(),
+        )
+        .into()
+    }
+}
+
+extern "C" fn list_transpose_plus(cfr: &mut CallFrame) -> ScmResult {
+    let args = cfr.arguments_mut();
+
+    if scm_is_list(args[0]) {
+        let each_len = scm_length(args[0]).unwrap();
+        for i in 1..args.len() {
+            if !scm_is_list(args[i]) {
+                return ScmResult::ok(false);
+            }
+
+            if scm_length(args[i]).unwrap() != each_len {
+                return ScmResult::ok(false);
+            }
+        }
+
+        ScmResult::ok(do_transpose(scm_vm(), each_len, args.len(), args))
+    } else {
+        ScmResult::ok(false)
+    }
+}
+
+extern "C" fn list_transpose_star(cfr: &mut CallFrame) -> ScmResult {
+    let mut finite = false;
+    let mut each_len = usize::MAX;
+
+    for i in 0..cfr.argument_count() {
+        if scm_is_list(cfr.argument(i)) {
+            let n = scm_length(cfr.argument(i)).unwrap();
+
+            if n < each_len {
+                each_len = n;
+            }
+
+            finite = true;
+            continue;
+        }
+
+        if scm_is_circular_list(cfr.argument(i)) {
+            continue;
+        }
+
+        return wrong_contract::<()>(
+            "list-transpose*",
+            "list?",
+            i as _,
+            cfr.argument_count() as _,
+            cfr.arguments(),
+        )
+        .into();
+    }
+
+    if finite {
+        let mut args = cfr.arguments_mut();
+        ScmResult::ok(do_transpose(scm_vm(), each_len, args.len(), &mut args))
+    } else {
+        raise_exn!((), Fail, &[], "list-transpose*: expected at least one finite list as argument\n  arguments...: {:?}" cfr.arguments()).into()
+    }
+}
+
+extern "C" fn cons_star(cfr: &mut CallFrame) -> ScmResult {
+    if cfr.argument_count() == 1 {
+        return ScmResult::ok(cfr.argument(0));
+    }
+    let thr = Thread::current();
+    let obj = scm_cons(thr, cfr.argument(0),Value::encode_null_value());
+    let mut tail = obj;
+    for i in 1..cfr.argument_count() - 1 {
+        let e = scm_cons(thr, cfr.argument(i), Value::encode_null_value());
+        thr.write_barrier(obj.pair());
+        tail.set_cdr(e);
+        tail = e;
+    }
+
+    thr.write_barrier(obj.pair());
+    tail.set_cdr(cfr.argument(cfr.argument_count() - 1));
+
+    ScmResult::ok(obj)
+}
+
+extern "C" fn length_proc(cfr: &mut CallFrame) -> ScmResult {
+    if let Some(len) = scm_length(cfr.argument(0)) {
+        return ScmResult::ok(scm_int(len as _));
+    } else {
+        return wrong_contract::<()>("length", "list?", 0, cfr.argument_count() as _, cfr.arguments()).into();
+    }
+}
+
+extern "C" fn append_proc(cfr: &mut CallFrame) -> ScmResult {
+    if cfr.argument_count() == 0 {
+        return ScmResult::ok(Value::encode_null_value());
+    }
+
+    for i in 0..cfr.argument_count() {
+        if !scm_is_list(cfr.argument(i)) {
+            return wrong_contract::<()>("append", "list?", i as _, cfr.argument_count() as _, cfr.arguments()).into();
+        }
+    }
+
+    let mut res = cfr.arguments()[cfr.argument_count() - 1];
+
+    for i in (0..cfr.argument_count() - 1).rev() {
+        res = scm_append(scm_vm().mutator(), cfr.argument(i), res);
+    }
+
+    ScmResult::ok(res)
+}
+
+extern "C" fn reverse(cfr: &mut CallFrame) -> ScmResult {
+    if cfr.argument_count() != 1 {
+        return wrong_contract::<()>("reverse", "list?", 0, cfr.argument_count() as _, cfr.arguments()).into();
+    }
+
+    let mut res = Value::encode_null_value();
+    let mut lst = cfr.argument(0);
+
+    if !scm_is_list(lst) {
+        return wrong_contract::<()>("reverse", "list?", 0, cfr.argument_count() as _, cfr.arguments()).into();
+    }
+
+    while !lst.is_null() {
+        res = scm_cons(scm_vm().mutator(), lst.car(), res);
+        lst = lst.cdr();
+    }
+
+    ScmResult::ok(res)
+}
+
+
+
 pub(crate) fn init_list() {
     let module = scm_scheme_module().module();
+
+    let subr = scm_make_subr("list-transpose", list_transpose, 1, MAX_ARITY);
+    scm_define(module, "list-transpose".intern(), subr).unwrap();
+
+    let subr = scm_make_subr("list-transpose*", list_transpose_star, 1, MAX_ARITY);
+    scm_define(module, "list-transpose*".intern(), subr).unwrap();
+
+    let subr = scm_make_subr("list-transpose+", list_transpose_plus, 1, MAX_ARITY);
+    scm_define(module, "list-transpose+".intern(), subr).unwrap();
+
+    let subr = scm_make_subr("cons*", cons_star, 1, MAX_ARITY);
+    scm_define(module, "cons*".intern(), subr).unwrap();
+
+    let subr = scm_make_subr("length", length_proc, 1, 1);
+    scm_define(module, "length".intern(), subr).unwrap();
+
+    let subr = scm_make_subr("append", append_proc, 0, MAX_ARITY);
+    scm_define(module, "append".intern(), subr).unwrap();
+
+    let subr = scm_make_subr("reverse", reverse, 1, 1);
+    scm_define(module, "reverse".intern(), subr).unwrap();
 
     let subr = scm_make_subr_inliner("car", car, 1, 1, |forms, _| {
         if forms.len() != 1 {
@@ -764,4 +1034,41 @@ pub fn scm_assoc_ref(
         Some(default) => default,
         None => false.into(),
     }
+}
+
+pub fn assoc_delete_x(elt: Value, mut alist: Value, cmp: impl Fn(Value, Value) -> bool) -> Value {
+    let mut cp = Value::encode_null_value();
+    let mut prev = cp;
+
+    scm_for_each!(declared cp, alist, {
+        let e = cp.car();
+
+        if e.is_pair() {
+            if cmp(e.car(), elt) {
+                if prev.is_null() {
+                    alist = cp.cdr();
+                    cp = cp.cdr();
+                    continue;
+                } else {
+                    prev.set_cdr(cp.cdr());
+                }
+            }
+        }
+        prev = cp;
+    });
+    alist
+}
+
+pub fn scm_member(mut list: Value, elt: Value, cmp: impl Fn(Value, Value) -> bool) -> Value {
+    while !list.is_null() {
+        let e = list.car();
+
+        if cmp(e, elt) {
+            return list;
+        }
+
+        list = list.cdr();
+    }
+
+    false.into()
 }

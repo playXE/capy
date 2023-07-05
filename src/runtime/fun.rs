@@ -7,14 +7,14 @@ use crate::{
         ClosedNativeProcedure, CodeBlock, NativeProcedure, ObjectHeader, Procedure, ScmResult, Type,
     },
     runtime::value::Value,
-    vm::{callframe::CallFrame, interpreter::apply},
+    vm::{callframe::CallFrame, interpreter::apply, scm_vm},
 };
 
 use super::{
     module::{scm_define, scm_scheme_module},
     object::MAX_ARITY,
     symbol::{make_symbol, Intern},
-    vector::make_values, error::wrong_contract,
+    vector::make_values, error::wrong_contract, list::scm_length,
 };
 
 pub fn make_procedure(t: &mut Thread, code_block: Handle<CodeBlock>) -> Handle<Procedure> {
@@ -293,6 +293,45 @@ extern "C" fn procedure_p(cfr: &mut CallFrame) -> ScmResult {
     ScmResult::ok(v.is_procedure())
 }
 
+extern "C" fn apply_proc(cfr: &mut CallFrame) -> ScmResult {
+    if !cfr.argument(0).is_procedure() {
+        return wrong_contract::<()>("apply", "procedure?", 0, cfr.argument_count() as i32, cfr.arguments()).into();
+    }
+
+    let mut rands = cfr.arguments()[cfr.argument_count() - 1];
+
+    let Some(mut num_rands) = scm_length(rands) else {
+        return wrong_contract::<()>("apply", "list?", cfr.argument_count() as i32 - 1, cfr.argument_count() as _,cfr.arguments()).into();
+    };
+
+    num_rands += cfr.argument_count() - 2;
+
+    let mut i = cfr.argument_count() - 2;
+    let vm = scm_vm();
+
+    if vm.tail_rands.len() < num_rands as usize {
+        vm.tail_rands.resize(Thread::current(), num_rands as usize, Value::encode_undefined_value());
+    }
+
+    while i != 0 {
+        i -= 1;
+        vm.tail_rands[i] = cfr.argument(i + 1);
+    }
+
+    let mut i = cfr.argument_count() - 2;
+
+    while rands.is_pair() {
+        vm.tail_rands[i] = rands.car();
+        rands = rands.cdr();
+        i += 1;
+    }
+
+    vm.tail_rator = cfr.argument(0);
+    ScmResult::tail_raw()
+
+    
+}
+
 pub(crate) fn init() {
     let module = scm_scheme_module().module();
 
@@ -305,4 +344,7 @@ pub(crate) fn init() {
 
     let subr = scm_make_subr("procedure?", procedure_p, 1, 1);
     scm_define(module, "procedure?".intern(), subr.into()).unwrap();
+
+    let subr = scm_make_subr("apply", apply_proc, 2, MAX_ARITY);
+    scm_define(module, "apply".intern(), subr.into()).unwrap();
 }

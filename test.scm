@@ -1,7 +1,3 @@
-(define (fac-cps x k)
-    (if (= x 0)
-        (k 1)
-        (fac-cps (- x 1)
-                 (lambda (v)
-                     (k (* x v))))))
-(fac-cps 10000 (lambda (v) v))
+(require "capy")
+
+(find (lambda (k) (eq? k 'xa)) '(x y z))

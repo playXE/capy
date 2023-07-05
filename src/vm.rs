@@ -2,12 +2,12 @@
 use std::mem::MaybeUninit;
 use std::ops::Index;
 use std::ptr::null_mut;
-use std::sync::atomic::{AtomicU64, Ordering, AtomicBool};
+use std::sync::atomic::{AtomicU64, Ordering, AtomicBool, AtomicI32};
 
 use once_cell::sync::Lazy;
 use rsgc::heap::heap::heap;
 use rsgc::heap::root_processor::SimpleRoot;
-use rsgc::prelude::{Handle, Object};
+use rsgc::prelude::{Handle, Object, Allocation};
 use rsgc::system::arraylist::ArrayList;
 use rsgc::thread::Thread;
 
@@ -40,19 +40,21 @@ pub struct VM {
     cond: Condvar,
     specific: Value,
     thunk: Value,
-    result: Value,
+    pub(crate) result: Value,
     result_exception: Value,
-    sp: *mut Value,
-    stack: Box<[Value]>,
+    pub(crate) sp: *mut Value,
+    pub(crate) stack: Box<[Value]>,
     pub(crate) module: Option<Handle<Module>>,
     pub(crate) entry: u64,
     /// Trampoline from native to Scheme support
-    tail_rator: Value,
-    tail_rands: ArrayList<Value>,
+    pub(crate) tail_rator: Value,
+    pub(crate) tail_rands: ArrayList<Value>,
     pub(crate) top_call_frame: *mut CallFrame,
     pub(crate) top_entry_frame: *mut CallFrame,
     pub(crate) prev_top_call_frame: *mut CallFrame,
     pub(crate) prev_top_entry_frame: *mut CallFrame,
+    pub(crate) winders: Option<Handle<Winder>>,
+    pub(crate) vmid: i32,
     
 }
 
@@ -70,7 +72,6 @@ impl VM {
         for rand in rands {
             self.tail_rands.push(t, *rand);
         }
-        self.entry = 0;
         ScmResult {
             tag: ScmResult::TAIL,
             value: Value::encode_undefined_value(),
@@ -79,6 +80,38 @@ impl VM {
 
     pub fn mutator(&mut self) -> &mut Thread {
         self.thread
+    }
+
+    pub unsafe fn wind_up(&mut self, before: Value, after: Value, handlers: Option<Value>) {
+        let winder = Winder {
+            before,
+            after,
+            handlers,
+            next: self.winders.take(),
+        };
+        self.winders = Some(self.mutator().allocate(winder));
+    }
+
+    pub unsafe fn wind_down(&mut self) -> Option<Handle<Winder>> {
+        let winder = self.winders.take();
+        if let Some(winder) = winder {
+            self.winders = (*winder).next;
+        }
+        winder
+    }
+
+    pub fn current_handlers(&self) -> Option<Value> {
+        let mut winders = self.winders;
+
+        while let Some(winder) = winders {
+            if let Some(handler) = winder.handlers {
+                return Some(handler);
+            }
+
+            winders = winder.next;
+        } 
+
+        None
     }
 }
 
@@ -91,7 +124,7 @@ impl Object for VM {
         self.module.trace(visitor);
         self.tail_rands.trace(visitor);
         self.tail_rator.trace(visitor);
-       
+        self.winders.trace(visitor);
         visitor.visit_conservative(self.stack.as_ptr().cast(), self.stack.len());
     }
 }
@@ -156,7 +189,9 @@ pub fn scm_init_vm() {
             top_call_frame: null_mut(),
             prev_top_entry_frame: null_mut(),
             prev_top_call_frame: null_mut(),
-            top_entry_frame: null_mut()
+            top_entry_frame: null_mut(),
+            winders: None,
+            vmid: THREAD_ID.fetch_add(1, Ordering::AcqRel),
         });
     }
 
@@ -197,6 +232,7 @@ pub mod setjmp;
 /// Used to protect call/cc from being called from a different VM
 /// or call/cc going through a Rust frame.
 static ENTRY: AtomicU64 = AtomicU64::new(0);
+static THREAD_ID: AtomicI32 = AtomicI32::new(i32::MIN);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(usize)]
@@ -256,4 +292,69 @@ pub fn inherent_symbols() -> &'static InherentSymbols {
     static SYMBOLS: Lazy<InherentSymbols> = Lazy::new(InherentSymbols::new);
 
     &SYMBOLS
+}
+
+pub struct Winder {
+    pub(crate) before: Value,
+    pub(crate) after: Value,
+    pub(crate) handlers: Option<Value>,
+    pub(crate) next: Option<Handle<Self>>
+}
+
+impl Object for Winder {  
+    fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
+        self.before.trace(visitor);
+        self.after.trace(visitor);
+        self.handlers.trace(visitor);
+        self.next.trace(visitor);
+    }
+}
+
+impl Allocation for Winder {}
+
+impl PartialEq for Winder {
+    fn eq(&self, other: &Self) -> bool {
+        self as *const _ == other as *const _
+    }
+}
+
+impl Eq for Winder {}
+
+impl Winder {
+
+    pub fn len(&self) -> usize {
+        let mut ws = Some(self);
+        let mut n = 0;
+        while let Some(w) = ws {
+            n += 1;
+            ws = w.next.as_ref().map(|w| &**w);
+        }
+
+        n
+    }
+
+    pub fn common_prefix(this: Handle<Self>, other: Handle<Self>) -> Option<Handle<Self>> {
+        let mut that = Some(other);
+        let mut this = Some(this);
+
+        let this_len = this.unwrap().len();
+        let that_len = that.unwrap().len();
+
+        if this_len > that_len {
+            for _ in that_len..this_len {
+                this = this.unwrap().next;
+            }
+        } else if that_len > this_len {
+            for _ in this_len..that_len {
+                that = that.unwrap().next;
+            }
+        }
+
+        while let Some((this_winder, that_winder)) = this.zip(that).filter(|(x, y)| x != y) {
+            this = this_winder.next;
+            that = that_winder.next;
+        }
+
+        this
+    }
 }

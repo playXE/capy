@@ -1,10 +1,15 @@
-use crate::runtime::{value::Value, object::ScmResult, module::{scm_null_module, scm_define}, fun::scm_make_subr, symbol::Intern};
+use crate::{runtime::{
+    fun::{scm_make_subr, get_proc_name},
+    module::{scm_define, scm_null_module},
+    object::ScmResult,
+    symbol::Intern,
+    value::Value,
+}, op::Opcode};
 
-use super::{VM, callframe::CallFrame, scm_vm};
-
+use super::{callframe::CallFrame, scm_vm, VM};
 
 pub struct StackTrace<'a> {
-    vm: &'a VM,   
+    vm: &'a VM,
     cfr: *mut CallFrame,
 }
 
@@ -15,8 +20,6 @@ impl<'a> StackTrace<'a> {
             cfr: vm.top_call_frame,
         }
     }
-
-
 }
 
 pub struct Context {
@@ -25,33 +28,23 @@ pub struct Context {
 
 impl Context {
     pub fn return_pc(&self) -> *const u8 {
-        unsafe {
-            (*self.cfr).return_pc()
-        }
+        unsafe { (*self.cfr).return_pc() }
     }
 
     pub fn callee(&self) -> Value {
-        unsafe {
-            (*self.cfr).callee()
-        }
+        unsafe { (*self.cfr).callee() }
     }
 
     pub fn argument_count(&self) -> usize {
-        unsafe {
-            (*self.cfr).argument_count()
-        }
+        unsafe { (*self.cfr).argument_count() }
     }
 
     pub fn arguments(&self) -> &[Value] {
-        unsafe {
-            (*self.cfr).arguments()
-        }
+        unsafe { (*self.cfr).arguments() }
     }
 
     pub fn code_block(&self) -> Value {
-        unsafe {
-            (*self.cfr).code_block()
-        }
+        unsafe { (*self.cfr).code_block() }
     }
 }
 
@@ -74,7 +67,35 @@ impl<'a> Iterator for StackTrace<'a> {
     }
 }
 
+pub fn get_stacktrace_str(vm: &mut VM) -> String {
+    let st = StackTrace::new(vm);
+    let mut s = String::new();
+    for frame in st {
+        let callee = frame.callee();
+        let ip = frame.return_pc();
+        let _code_block = frame.code_block();
 
+        let name = get_proc_name(callee);
+
+        if let Some(name) = name {
+            s.push_str(&format!("  at {}", name));
+        } else {
+            s.push_str("   at <unknown>");
+        }
+
+        if !ip.is_null() {
+            s.push_str(&format!(":{:p} {}", ip, unsafe {
+                std::mem::transmute::<_, Opcode>(ip.read())
+            }));
+        } else {
+            s.push_str(" <native>");
+        }
+
+        s.push('\n');
+    }
+
+    s
+}
 
 extern "C" fn print_stacktrace(_: &mut CallFrame) -> ScmResult {
     let vm = scm_vm();

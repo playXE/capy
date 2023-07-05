@@ -195,9 +195,11 @@ extern "C" fn plus(cfr: &mut CallFrame) -> ScmResult {
     }
 
     if cfr.argument_count() == 1 {
-        if unlikely(!scm_is_number(cfr.argument(1))) {
+        if unlikely(!scm_is_number(cfr.argument(0))) {
             return wrong_contract::<()>("+", "number?", 0, 1, cfr.arguments()).into();
         }
+
+        return ScmResult::ok(cfr.argument(0));
     }
 
     if cfr.argument_count() == 0 {

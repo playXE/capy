@@ -8,8 +8,8 @@ use crate::{
         identifier_to_symbol, scm_identifier_to_symbol, scm_make_identifier, scm_unwrap_syntax,
     },
     compile::{
-        cenv_extend, cenv_frames, cenv_make_bottom, cenv_module, global_call_type, Call, CallFlag,
-        Define, GRef, GSet, GlobalCall, If, LFlag, LRef, LSet, Lambda,
+        cenv_extend, cenv_frames, cenv_make_bottom, cenv_module, cenv_set_module, global_call_type,
+        Call, CallFlag, Define, GRef, GSet, GlobalCall, If, LFlag, LRef, LSet, Lambda,
     },
     raise_exn,
     runtime::list::{
@@ -21,15 +21,15 @@ use crate::{
         is_global_identifier_eq, scm_export_symbols, scm_find_module, scm_import_module,
         scm_insert_binding, scm_make_module,
     },
-    runtime::{string::make_string, module::scm_identifier_to_bound_gloc},
-    runtime::symbol::{gensym, make_symbol},
+    runtime::{symbol::{gensym, make_symbol, Intern}, module::{ scm_reqbase_module}, load::scm_require},
     runtime::value::Value,
     runtime::{
         macros::{get_make_er_transformer, get_make_er_transformer_toplevel},
         object::{Identifier, Module, ObjectHeader, Type},
     },
+    runtime::{module::scm_identifier_to_bound_gloc, string::make_string},
     scm_dolist,
-    vm::interpreter::apply,
+    vm::{interpreter::apply, scm_vm},
 };
 
 macro_rules! global_id {
@@ -719,7 +719,7 @@ pub fn define_syntax() {
         }
     });
 
-    define_syntax!("define-module", None, form, _cenv, {
+    define_syntax!("define-module", Some("capy"), form, _cenv, {
         if scm_length(form).filter(|&x| x >= 3).is_some() && scm_is_list(form) {
             let name = form.cadr();
             let body = form.cddr();
@@ -747,13 +747,71 @@ pub fn define_syntax() {
         }
     });
 
-    define_syntax!("export", None, form, cenv, {
+    define_syntax!("select-module", Some("capy"), form, cenv, {
+        if scm_length(form).filter(|&x| x == 2).is_some() {
+            let name = form.cadr();
+
+            let m = ensure_module(name, make_symbol("select-module", true), false)?;
+            scm_vm().module = Some(m);
+            cenv_set_module(cenv, m);
+
+            Ok(make_iform(IForm::Const(Value::encode_undefined_value())))
+        } else {
+            raise_exn!(Fail, &[], "select-module: invalid syntax")
+        }
+    });
+
+    define_syntax!("define-in-module", Some("capy"), form, cenv, {
+        if !scm_is_list(form) {
+            return raise_exn!(Fail, &[], "define-in-module: invalid syntax")
+        }
+
+        if scm_length(form).unwrap() < 2 {
+            return raise_exn!(Fail, &[], "define-in-module: invalid syntax")
+        }
+
+        let module = form.cadr();
+        let rest = form.cddr();
+
+        if !module.is_identifier() {
+            return raise_exn!(Fail, &[], "define-in-module: invalid syntax")
+        }
+
+        let module = ensure_module(module, make_symbol("define-in-module", true), false)?;
+
+        pass1_define(
+            scm_list_star(Thread::current(), &["define".intern().into(), rest]),
+            form,
+            false,
+            false,
+            module,
+            cenv
+        )
+    });
+
+    define_syntax!("require", Some("capy"), form, _cenv, {
+        if scm_length(form).filter(|&x| x == 2).is_some() {
+            let feature = form.cadr();
+            if !feature.is_string() {
+                return raise_exn!(Fail, &[], "require: invalid syntax: {}", feature)
+            }
+
+            scm_require(feature, 0, scm_reqbase_module().module())?;
+
+            Ok(make_iform(IForm::Const(Value::encode_undefined_value())))
+        } else {
+            raise_exn!(Fail, &[], "require: invalid syntax")
+        }
+    });
+    
+
+    define_syntax!("export", Some("capy"), form, cenv, {
         scm_export_symbols(cenv_module(cenv), form.cdr())?;
 
         Ok(make_iform(IForm::Const(Value::encode_undefined_value())))
     });
 
-    define_syntax!("import", None, form, cenv, {
+    define_syntax!("import", Some("capy"), form, cenv, {
         fn ensure(m: Value) -> Result<Handle<Module>, Value> {
             let o = m;
             let m = scm_find_module(m.symbol(), false, true).unwrap();
@@ -1192,7 +1250,8 @@ fn pass1_body_rec(
                     head if head.is_wrapped_identifier() => {
                         if let Some(gloc) = scm_identifier_to_bound_gloc(head.identifier()) {
                             if gloc.value.is_macro() {
-                                let expanded = apply(head.r#macro().transformer, &[exprs.car(), cenv])?;
+                                let expanded =
+                                    apply(gloc.value.r#macro().transformer, &[exprs.car(), cenv])?;
 
                                 return pass1_body_rec(
                                     scm_list_star(Thread::current(), &[expanded, rest]),
@@ -1209,8 +1268,9 @@ fn pass1_body_rec(
                         return Err(make_string(
                             Thread::current(),
                             &format!("[internal] pass1/body {}'", head),
-                        ).into())
-                    },
+                        )
+                        .into())
+                    }
                 }
             } else {
                 pass1_body_finish(exprs, mframe, vframe, cenv)

@@ -26,6 +26,7 @@ pub mod portfun;
 pub mod print;
 pub mod reader;
 pub mod base;
+pub mod cont;
 
 pub(crate) fn init() {
     base::init_base();
@@ -40,5 +41,6 @@ pub(crate) fn init() {
     macros::init_macros();
     portfun::init_ports();
     arithfun::init_arith();
+    cont::init_cont();
     crate::vm::stacktrace::init_stacktrace();
 }

@@ -94,4 +94,10 @@ impl CallFrame {
             std::slice::from_raw_parts(self.args.as_ptr(), self.argc.get_int32() as usize)
         }
     }
+
+    pub fn arguments_mut(&mut self) -> &mut [Value] {
+        unsafe {
+            std::slice::from_raw_parts_mut(self.args.as_mut_ptr(), self.argc.get_int32() as usize)
+        }
+    }
 }

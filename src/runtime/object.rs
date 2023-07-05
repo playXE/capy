@@ -1,12 +1,16 @@
 use std::{
+    convert::Infallible,
     fmt::{Debug, Display, Formatter},
     hash::Hash,
     mem::{offset_of, size_of},
-    ops::{Deref, DerefMut, FromResidual, Index, IndexMut, Try}, convert::Infallible,
+    ops::{Deref, DerefMut, FromResidual, Index, IndexMut, Try},
 };
 
 use once_cell::sync::Lazy;
-use rsgc::{utils::bitfield::BitField, heap::{heap, root_processor::SimpleRoot}};
+use rsgc::{
+    heap::{heap, root_processor::SimpleRoot},
+    utils::bitfield::BitField,
+};
 use rsgc::{
     prelude::{Allocation, Handle, Object},
     system::{array::Array, collections::hashmap::HashMap},
@@ -15,7 +19,6 @@ use rsgc::{
 
 use crate::{
     compile::IForm,
-    runtime::string::make_string,
     runtime::value::Value,
     vm::{callframe::CallFrame, scm_vm},
 };
@@ -91,7 +94,7 @@ pub enum Type {
     TextOutputPort,
     SyntaxLocation,
     Port,
-
+    Continuation,
     EofObject,
 }
 
@@ -268,7 +271,7 @@ impl Allocation for Rational {}
 #[repr(C)]
 pub struct Str {
     pub(crate) object: ObjectHeader,
-    pub(crate) string: rsgc::system::string::String
+    pub(crate) string: rsgc::system::string::String,
 }
 
 impl Str {
@@ -278,8 +281,7 @@ impl Str {
 }
 
 impl Object for Str {}
-impl Allocation for Str {
-}
+impl Allocation for Str {}
 
 impl Deref for Str {
     type Target = rsgc::system::string::String;
@@ -619,12 +621,11 @@ pub struct Procedure {
 }
 
 impl Object for Procedure {
-    fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {   
+    fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.code.trace(visitor);
     }
 
     fn trace_range(&self, from: usize, to: usize, visitor: &mut dyn rsgc::prelude::Visitor) {
-        
         for i in from..to {
             unsafe {
                 self.captures.get_unchecked(i).trace(visitor);
@@ -633,9 +634,7 @@ impl Object for Procedure {
     }
 }
 
-
 impl Allocation for Procedure {
-    
     const VARSIZE: bool = true;
     const VARSIZE_ITEM_SIZE: usize = size_of::<Value>();
     const VARSIZE_NO_HEAP_PTRS: bool = false;
@@ -643,7 +642,6 @@ impl Allocation for Procedure {
     const VARSIZE_OFFSETOF_LENGTH: usize = offset_of!(Procedure, env_size);
     const VARSIZE_OFFSETOF_VARPART: usize = offset_of!(Procedure, captures);
 }
-
 
 pub type ProcedureInliner = fn(&[Handle<IForm>], Value) -> Option<Handle<IForm>>;
 
@@ -685,7 +683,9 @@ impl AsRef<[Value]> for ClosedNativeProcedure {
 
 impl AsMut<[Value]> for ClosedNativeProcedure {
     fn as_mut(&mut self) -> &mut [Value] {
-        unsafe { std::slice::from_raw_parts_mut(self.captures.as_mut_ptr(), self.env_size as usize) }
+        unsafe {
+            std::slice::from_raw_parts_mut(self.captures.as_mut_ptr(), self.env_size as usize)
+        }
     }
 }
 
@@ -698,7 +698,9 @@ impl Deref for ClosedNativeProcedure {
 
 impl DerefMut for ClosedNativeProcedure {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { std::slice::from_raw_parts_mut(self.captures.as_mut_ptr(), self.env_size as usize) }
+        unsafe {
+            std::slice::from_raw_parts_mut(self.captures.as_mut_ptr(), self.env_size as usize)
+        }
     }
 }
 
@@ -764,6 +766,13 @@ impl ScmResult {
         vm.tail_call(rator.into(), rands)
     }
 
+    pub(crate) fn tail_raw() -> Self {
+        Self {
+            tag: Self::TAIL,
+            value: Value::encode_undefined_value(),
+        }
+    }
+
     pub fn err(value: impl Into<Value>) -> Self {
         Self {
             tag: Self::ERR,
@@ -798,34 +807,6 @@ pub fn check_arity(mina: u32, maxa: u32, argc: usize) -> bool {
     } else {
         true
     }
-}
-
-pub fn wrong_arity(name: Value, argc: u32, mina: u32, maxa: u32) -> Value {
-    let t = Thread::current();
-
-    (if mina == maxa {
-        make_string(
-            t,
-            &format!("{:?}: expected {} arguments, got {}", name, mina, argc),
-        )
-    } else if maxa == MAX_ARITY {
-        make_string(
-            t,
-            &format!(
-                "{:?}: expected at least {} arguments, got {}",
-                name, mina, argc
-            ),
-        )
-    } else {
-        make_string(
-            t,
-            &format!(
-                "{:?}: expected between {} and {} arguments, got {}",
-                name, mina, maxa, argc
-            ),
-        )
-    })
-    .into()
 }
 
 #[repr(C)]
@@ -976,7 +957,6 @@ impl<T: Object + ?Sized> From<Result<Handle<T>, Value>> for ScmResult {
         }
     }
 }
-
 
 #[repr(C)]
 pub struct SyntaxLocation {

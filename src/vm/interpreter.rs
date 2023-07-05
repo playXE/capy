@@ -12,15 +12,16 @@ use super::{scm_current_module, scm_vm, VM};
 use crate::compaux::{
     scm_identifier_global_ref, scm_identifier_global_set, scm_outermost_identifier,
 };
+use crate::compile::{compile, make_cenv};
 use crate::op::Opcode;
 use crate::runtime::arith::*;
 use crate::runtime::error::{wrong_contract, wrong_count};
 use crate::runtime::fun::{get_proc_name, make_closed_procedure};
 use crate::runtime::list::{scm_cons, scm_is_list};
-use crate::runtime::module::{scm_make_binding, SCM_BINDING_CONST};
+use crate::runtime::module::{scm_make_binding, scm_user_module, SCM_BINDING_CONST};
 use crate::runtime::object::{
-    check_arity, make_box, wrong_arity, ClosedNativeProcedure, CodeBlock, Module, NativeProcedure,
-    Procedure, Type, MAX_ARITY,
+    check_arity, make_box, ClosedNativeProcedure, CodeBlock, Module, NativeProcedure, Procedure,
+    Type, MAX_ARITY,
 };
 use crate::runtime::string::make_string;
 use crate::runtime::value::Value;
@@ -126,7 +127,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     proc.mina as _,
                     proc.maxa as _,
                     (*cfr).argc.get_int32() as _,
-                    (*cfr).arguments()
+                    (*cfr).arguments(),
                 );
             }
             vm.sp = sp;
@@ -349,7 +350,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
 
                 Opcode::PushDouble => {
                     let val = read8!();
-                    push!(Value::encode_untrusted_f64_value(val as f64));
+                    push!(Value::encode_untrusted_f64_value(f64::from_bits(val)));
                 }
 
                 Opcode::PushConstant | Opcode::PushProcedure => {
@@ -719,7 +720,6 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     let val = pop!();
                     let slot = cfr.cast::<Value>().sub(off as usize + 1);
 
-                    debug_assert!(slot < cfr.cast::<Value>());
                     slot.write(val);
                 }
 
@@ -920,6 +920,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                 Opcode::AssertArgCount => {
                     let argc = read2!();
                     if unlikely(argc != (*cfr).argc.get_int32() as u16) {
+                        vm.sp = sp;
                         return wrong_count(
                             &code_block!().name.to_string(),
                             code_block!().mina as _,
@@ -937,6 +938,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                 Opcode::AssertMinArgCount => {
                     let argc = read2!();
                     if unlikely(argc > (*cfr).argc.get_int32() as u16) {
+                        vm.sp = sp;
                         return wrong_count(
                             &code_block!().name.to_string(),
                             code_block!().mina as _,
@@ -952,6 +954,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                 }
 
                 Opcode::NoMatchingArgCount => {
+                    vm.sp = sp;
                     return Err(make_string(vm.thread, "wrong number of arguments").into());
                 }
 
@@ -1360,4 +1363,39 @@ pub fn apply_in(module: Handle<Module>, rator: Value, rands: &[Value]) -> Result
     let vm = scm_vm();
 
     unsafe { _vm_entry_trampoline(vm, Some(module), rator, rands) }
+}
+
+pub fn scm_eval(expr: Value, e: Value) -> Result<Value, Value> {
+    let restore_module = e.is_module();
+
+    let vm = scm_vm();
+
+    let v = scm_compile(expr, e)?;
+
+    let orig = vm.module;
+    if e.is_module() {
+        vm.module = Some(e.module());
+    }
+
+    let res = apply(v, &[]);
+
+    if restore_module {
+        vm.module = orig;
+    }
+
+    res
+}
+
+pub fn scm_compile(expr: Value, e: Value) -> Result<Value, Value> {
+    let module = if e.is_module() {
+        e.module()
+    } else {
+        scm_current_module().unwrap_or_else(|| scm_user_module().module())
+    };
+
+    let cenv = make_cenv(module, Value::encode_null_value());
+
+    let code = compile(expr, cenv)?;
+
+    Ok(code)
 }

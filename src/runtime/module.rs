@@ -640,7 +640,7 @@ pub fn scm_make_binding(
         };
 
         drop(mods);
-        if existing {
+        if existing && !true {
             eprintln!("warning: redefining global variable: {}", symbol);
         }
 

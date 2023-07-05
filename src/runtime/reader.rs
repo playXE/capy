@@ -257,7 +257,7 @@ impl<'a> Reader<'a> {
     }
 
     pub fn lexical_error<T>(&mut self, msg: &str) -> Result<T, Value> {
-        self.port.lock.lock(true);
+        //self.port.lock.lock(true);
         let c = self.port.column;
         let pos = if port_has_port_position_pred(self.port) {
             port_position(self.port)?
@@ -266,11 +266,11 @@ impl<'a> Reader<'a> {
         };
 
         while port_nonblock_byte_ready(self.port).map_err(|e| {
-            self.port.lock.unlock();
+            //self.port.lock.unlock();
             e
         })? {
             if port_get_byte(self.port).map_err(|e| {
-                self.port.lock.unlock();
+                //self.port.lock.unlock();
                 e
             })? == libc::EOF
             {

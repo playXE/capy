@@ -4,7 +4,8 @@
     min_specialization,
     thread_local,
     core_intrinsics,
-    try_trait_v2
+    try_trait_v2,
+    absolute_path
 )]
 #[macro_use]
 pub mod runtime;
