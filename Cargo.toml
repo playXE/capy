@@ -6,7 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-rsgc = { path = "rsgc", features = ["conditional-safepoint"] }
+rsgc = { git = "https://github.com/playxe/rsgc" }
 b3 = "0.1"
 macroassembler = "0.1"
 r7rs-parser = { git = "https://github.com/playxe/r7rs-parser" }

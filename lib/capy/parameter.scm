@@ -22,8 +22,7 @@
              (new ((p '<param-convert>) value)) ...)
         (dynamic-wind
           (lambda () (p '<param-set!> new) ...)
-          ;(lambda () . body) ; bug in husk, should surround with ()
-          (lambda () body ...) ; bug in husk, should surround with ()
+          (lambda () body ...)
           (lambda () (p '<param-set!> old) ...)))))
     ((parameterize ("step")
                    args
@@ -38,6 +37,7 @@
                    ()
                    ((param value) ...)
                    body ...))))
+                   
 (define (make-parameter init . o)
   (let* ((converter
            (if (pair? o) (car o) (lambda (x) x))))
