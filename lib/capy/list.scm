@@ -83,8 +83,72 @@
 (define memv #f)
 (define memq #f)
 (define memp #f)
-(define map #f)
 (define list-copy #f)
+
+(define (map f x . rest)
+
+  (define (lists-of-different-lengths . args)
+    (if (or (and (eq? 'r6rs (larceny:execution-mode))
+                 (not using-r7rs-semantics))
+            (not (every? (lambda (x) (or (null? x) (pair? x)))
+                         args)))
+        (assertion-violation 'map
+                             (errmsg 'msg:illegalargs)
+                             (cons f (cons x rest)))
+        '()))
+
+  (define (map1 f x)
+    (if (pair? x)
+        (let* ((a (f (car x)))
+               (b (map1 f (cdr x))))
+          (cons a b))
+        (if (null? x)
+            '()
+            (lists-of-different-lengths x))))
+
+  (define (map2 f x y)
+    (if (and (pair? x) (pair? y))
+        (let* ((a (f (car x) (car y)))
+               (b (map2 f (cdr x) (cdr y))))
+          (cons a b))
+        (if (and (null? x) (null? y))
+            '()
+            (lists-of-different-lengths x y))))
+
+  (define (map3 f x y z)
+    (if (and (pair? x) (pair? y) (pair? z))
+        (let* ((a (f (car x) (car y) (car z)))
+               (b (map3 f (cdr x) (cdr y) (cdr z))))
+          (cons a b))
+        (if (and (null? x) (null? y) (null? z))
+            '()
+            (lists-of-different-lengths x y z))))
+
+  (define (map4 f x y z w)
+    (if (and (pair? x) (pair? y) (pair? z) (pair? w))
+        (let* ((a (f (car x) (car y) (car z) (car w)))
+               (b (map4 f (cdr x) (cdr y) (cdr z) (cdr w))))
+          (cons a b))
+        (if (and (null? x) (null? y) (null? z) (null? w))
+            '()
+            (lists-of-different-lengths x y z w))))
+
+  (define (mapn f lists)
+    (cond ((every? pair? lists)
+           (let* ((a (apply f (map car lists)))
+                  (b (mapn f (map1 cdr lists))))
+             (cons a b)))
+          ((every? null? lists)
+           '())
+          (else
+           (apply lists-of-different-lengths lists))))
+
+  (case (length rest)
+    ((0)  (map1 f x))
+    ((1)  (map2 f x (car rest)))
+    ((2)  (map3 f x (car rest) (cadr rest)))
+    ((3)  (map4 f x (car rest) (cadr rest) (caddr rest)))
+    (else (mapn f (cons x rest)))))
 
 (let () 
     (define collect-cdr
@@ -155,39 +219,6 @@
                  (or (apply pred head)
                      (loop (car rest) (cdr rest))))))))
 
-  (define map-1 
-    (lambda (proc lst)
-      (if (null? lst)
-          '()
-          (cons (proc (car lst)) (map-1 proc (cdr lst))))))
-  (define map-n-quick
-    (lambda (proc lst)
-      (if (null? lst)
-          '()
-          (let loop ((head (car lst)) (rest (cdr lst)))
-            (if (null? rest)
-                (list (proc head))
-                (cons (proc head) (loop (car rest) (cdr rest))))))))
-
-
-  (define map-n 
-    (lambda (proc list-of-lists)
-      (let ((argc (length list-of-lists)))
-        (define collect-car
-          (lambda (lst)
-            (let loop ((lst lst))
-              (cond ((null? lst) '())
-                    ((pair? (car lst))
-                     (cons (caar lst) (loop (cdr lst))))
-                    (else
-                     (raise-argument-error 'map "list?" list-of-lists))))))
-
-        (let loop ((head (collect-car list-of-lists)) (rest (collect-cdr list-of-lists)))
-          (or (= (length head) argc)
-              (raise-argument-error 'map "expected same length chains of pairs" list-of-lists))
-          (if (null? rest)
-              (apply proc head)
-              (cons (apply proc head) (loop (collect-car rest) (collect-cdr rest))))))))
   (define for-all-1
     (lambda (pred lst)
       (cond ((null? lst) #t)
@@ -409,13 +440,4 @@
             (cond
             ((null? lst) '())
             ((pair? lst) (cons (car lst) (list-copy (cdr lst))))
-            (else lst))))
-
-    (set! map 
-        (lambda (proc lst1 . lst2)
-            (cond ((null? lst2)
-                    (map-1 proc lst1))
-                    ((apply list-transpose+ lst1 lst2)
-                    => (lambda (lst) (map-n-quick proc lst)))
-                    (else
-                    (map-n proc (cons lst1 lst2)))))))
+            (else lst)))))

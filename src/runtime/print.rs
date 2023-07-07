@@ -486,6 +486,7 @@ impl<'a> Printer<'a> {
             self._write(ht, obj.module.module().name)?;
             self.puts("@")?;
             self._write(ht, obj.name)?;
+            self.puts(&format!(".{:p}", obj.as_ptr()))?;
             self.puts(">")
         } else if obj.is_double() {
             self.puts(obj.get_double().to_string().as_str())

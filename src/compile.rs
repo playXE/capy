@@ -5,7 +5,7 @@ use crate::{
     runtime::list::{scm_acons, scm_cons, scm_econs},
     runtime::object::{Module, ObjectHeader, Syntax, Type},
     runtime::string::make_string,
-    runtime::vector::{make_bytevector_from_slice, make_vector},
+    runtime::{vector::{make_bytevector_from_slice, make_vector}, module::is_global_identifier_eq},
     runtime::{bigint::BigInt, value::Value},
     runtime::{error::make_srcloc, symbol::make_symbol},
     scm_dolist, scm_for_each,
@@ -972,4 +972,16 @@ pub fn compile_r7rs_expr(
     let expr = r7rs_to_value(thread, filename, expr);
 
     compile(expr, cenv)
+}
+
+pub fn is_global_eq(var: Value, id: Value, cenv: Value) -> bool {
+    if var.is_identifier() {
+        let v = cenv_lookup(cenv, var);
+
+        if v.is_wrapped_identifier() {
+            return is_global_identifier_eq(v, id);
+        }
+    }
+
+    false 
 }

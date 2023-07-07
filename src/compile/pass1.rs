@@ -1,7 +1,8 @@
 use rsgc::{prelude::Handle, system::arraylist::ArrayList, thread::Thread};
 
 use super::{
-    cenv_copy, cenv_lookup, cenv_toplevelp, make_iform, IForm, LVar, Let, LetScope, List, Seq,
+    cenv_copy, cenv_lookup, cenv_toplevelp, is_global_eq, make_iform, IForm, LVar, Let, LetScope,
+    List, Seq,
 };
 use crate::{
     compaux::{
@@ -21,8 +22,12 @@ use crate::{
         is_global_identifier_eq, scm_export_symbols, scm_find_module, scm_import_module,
         scm_insert_binding, scm_make_module,
     },
-    runtime::{symbol::{gensym, make_symbol, Intern}, module::{ scm_reqbase_module}, load::scm_require},
     runtime::value::Value,
+    runtime::{
+        load::scm_require,
+        module::scm_reqbase_module,
+        symbol::{gensym, make_symbol, Intern},
+    },
     runtime::{
         macros::{get_make_er_transformer, get_make_er_transformer_toplevel},
         object::{Identifier, Module, ObjectHeader, Type},
@@ -133,7 +138,9 @@ pub fn pass1(program: Value, cenv: Value) -> Result<Handle<IForm>, Value> {
             }
 
             GlobalCall::Macro(m) => {
-                let v = pass1(apply(m.r#macro().transformer, &[program, cenv])?, cenv)?;
+                let v = apply(m.r#macro().transformer, &[program, cenv])?;
+           
+                let v = pass1(v, cenv)?;
 
                 Ok(v)
             }
@@ -169,8 +176,9 @@ pub fn pass1(program: Value, cenv: Value) -> Result<Handle<IForm>, Value> {
 
             h if h.is_macro() => {
                 let transformer = h.r#macro().transformer;
-
-                pass1(apply(transformer, &[program, cenv])?, cenv)
+                let res = apply(transformer, &[program, cenv])?;
+          
+                pass1(res, cenv)
             }
 
             h if h.is_false() => {
@@ -719,6 +727,51 @@ pub fn define_syntax() {
         }
     });
 
+    define_syntax!("letrec-syntax", Some("capy"), form, cenv, {
+        if scm_length(form).filter(|&x| x >= 3).is_some() {
+            let bindings = form.cadr();
+            let body = form.cddr();
+
+            let newenv = cenv_extend(
+                cenv,
+                scm_map(
+                    Thread::current(),
+                    |nt| scm_cons(Thread::current(), nt.car(), nt.cadr()),
+                    bindings,
+                ),
+                "SYNTAX".intern().into(),
+            );
+
+            let mut trans = Value::encode_null_value();
+
+            scm_dolist!(kv, bindings, {
+                if scm_length(kv) != Some(2) {
+                    return Err(make_string(Thread::current(), "Invalid syntax: let-syntax").into());
+                }
+
+                let name = kv.car();
+                let trans_spec = kv.cdr().car();
+
+                if !name.is_identifier() {
+                    return Err(make_string(Thread::current(), "Invalid syntax: let-syntax").into());
+                }
+
+                let transformer = eval_macro_rhs("letrec-syntax", trans_spec, newenv)?;
+
+                trans = scm_cons(Thread::current(), transformer, trans);
+            });
+
+            scm_dolist!(name_transformer, cenv_frames(newenv).cdar(), {
+                name_transformer.set_cdr(trans.car());
+                trans = trans.cdr();
+            });
+           
+            pass1_body(body, newenv)
+        } else {
+            Err(make_string(Thread::current(), "Invalid syntax: letrec-syntax").into())
+        }
+    });
+
     define_syntax!("define-module", Some("capy"), form, _cenv, {
         if scm_length(form).filter(|&x| x >= 3).is_some() && scm_is_list(form) {
             let name = form.cadr();
@@ -763,18 +816,18 @@ pub fn define_syntax() {
 
     define_syntax!("define-in-module", Some("capy"), form, cenv, {
         if !scm_is_list(form) {
-            return raise_exn!(Fail, &[], "define-in-module: invalid syntax")
+            return raise_exn!(Fail, &[], "define-in-module: invalid syntax");
         }
 
         if scm_length(form).unwrap() < 2 {
-            return raise_exn!(Fail, &[], "define-in-module: invalid syntax")
+            return raise_exn!(Fail, &[], "define-in-module: invalid syntax");
         }
 
         let module = form.cadr();
         let rest = form.cddr();
 
         if !module.is_identifier() {
-            return raise_exn!(Fail, &[], "define-in-module: invalid syntax")
+            return raise_exn!(Fail, &[], "define-in-module: invalid syntax");
         }
 
         let module = ensure_module(module, make_symbol("define-in-module", true), false)?;
@@ -785,7 +838,7 @@ pub fn define_syntax() {
             false,
             false,
             module,
-            cenv
+            cenv,
         )
     });
 
@@ -793,7 +846,7 @@ pub fn define_syntax() {
         if scm_length(form).filter(|&x| x == 2).is_some() {
             let feature = form.cadr();
             if !feature.is_string() {
-                return raise_exn!(Fail, &[], "require: invalid syntax: {}", feature)
+                return raise_exn!(Fail, &[], "require: invalid syntax: {}", feature);
             }
 
             scm_require(feature, 0, scm_reqbase_module().module())?;
@@ -803,7 +856,6 @@ pub fn define_syntax() {
             raise_exn!(Fail, &[], "require: invalid syntax")
         }
     });
-    
 
     define_syntax!("export", Some("capy"), form, cenv, {
         scm_export_symbols(cenv_module(cenv), form.cdr())?;
@@ -1147,7 +1199,7 @@ fn pass1_body_rec(
                         )?;*/
 
                         let expanded = apply(head.r#macro().transformer, &[exprs.car(), cenv])?;
-
+                       
                         return pass1_body_rec(
                             scm_list_star(Thread::current(), &[expanded, rest]),
                             mframe,
@@ -1252,7 +1304,7 @@ fn pass1_body_rec(
                             if gloc.value.is_macro() {
                                 let expanded =
                                     apply(gloc.value.r#macro().transformer, &[exprs.car(), cenv])?;
-
+                                
                                 return pass1_body_rec(
                                     scm_list_star(Thread::current(), &[expanded, rest]),
                                     mframe,

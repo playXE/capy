@@ -37,13 +37,19 @@ use super::{
 
 #[macro_export]
 macro_rules! raise_exn {
-    ($id:ident, $eargs:expr, $msg:literal $(,)? $($arg:expr),*) => {
+    ($id:ident, $eargs:expr, $msg:literal $(,)? $($arg:expr),*) => {{
+        if $crate::runtime::error::Exception::$id == $crate::runtime::error::Exception::FailRead {
+            panic!($msg, $($arg),*);
+        }
         $crate::runtime::error::finish_exn_impl($crate::runtime::error::Exception::$id, $crate::runtime::error::EXN_TABLE[$crate::runtime::error::Exception::$id as usize].args, $eargs, format!($msg, $($arg),*), None, false)
-    };
+    }};
 
-    ($t: ty, $id:ident, $eargs:expr, $msg:literal $(,)? $($arg:expr),*) => {
+    ($t: ty, $id:ident, $eargs:expr, $msg:literal $(,)? $($arg:expr),*) => {{
+        if $crate::runtime::error::Exception::$id == $crate::runtime::error::Exception::FailRead {
+            panic!($msg, $($arg),*);
+        }
         $crate::runtime::error::finish_exn_impl::<$t>($crate::runtime::error::Exception::$id, $crate::runtime::error::EXN_TABLE[$crate::runtime::error::Exception::$id as usize].args, $eargs, format!($msg, $($arg),*), None, false)
-    };
+    }};
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -1041,7 +1047,7 @@ fn wrong_count_impl(
     if maxc > MAX_ARITY as i32 {
         maxc = -1;
     }
-
+    
     let s = make_arity_expect_string(Some(name), minc, maxc, args, "");
 
     raise_exn!(FailContractArity, &[], "{}", s)

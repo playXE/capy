@@ -222,11 +222,9 @@ impl ByteCompiler {
                 bindings: HashMap::new(),
                 parent: None,
             }),
-        };
-        closure_compiler.emit_simple(Opcode::Enter);
-
+        }; 
         let assert_argcount = lam.lvars.len() - lam.optarg as usize;
-
+        closure_compiler.emit_simple(Opcode::Enter);
         if lam.optarg {
             closure_compiler.emit_simple(Opcode::AssertMinArgCount);
             closure_compiler
@@ -238,6 +236,9 @@ impl ByteCompiler {
                 .code
                 .extend_from_slice(&(assert_argcount as u16).to_le_bytes());
         }
+       
+
+       
 
         for ix in 0..lam.lvars.len() - lam.optarg as usize {
             closure_compiler.emit_ldarg(ix as _);
@@ -261,7 +262,7 @@ impl ByteCompiler {
 
             closure_compiler.bind(lvar, ix);
         }
-
+        
         /*let patch_alloc_ip = self.code.len();
 
         closure_compiler.emit_simple(Opcode::NoOp);
@@ -316,6 +317,10 @@ impl ByteCompiler {
         self.code.extend_from_slice(&ix.to_le_bytes());
     }
 
+    pub fn emit_u16(&mut self, ix: u16) {
+        self.code.extend_from_slice(&ix.to_le_bytes());
+    }
+
     pub fn emit_lset(&mut self, ix: u16) {
         self.code.push(Opcode::StackSet as _);
         self.code.extend_from_slice(&ix.to_le_bytes());
@@ -338,7 +343,6 @@ impl ByteCompiler {
                     self.emit_lref(ix as _);
                     if !lvar.is_immutable() && unbox {
                         self.emit_simple(Opcode::BoxRef);
-                        
                     }
                     return;
                 } else {
@@ -347,7 +351,6 @@ impl ByteCompiler {
 
                     if !lvar.is_immutable() && unbox {
                         self.emit_simple(Opcode::BoxRef);
-                        
                     }
                     return;
                 }
@@ -502,7 +505,7 @@ impl ByteCompiler {
                         for (_, &lvar) in var.lvars.iter().enumerate() {
                             let index = self.next_local_index();
                             group.bindings.insert(lvar.as_ptr() as usize, index);
-                            
+
                             if !lvar.is_immutable() {
                                 self.emit_simple(Opcode::PushUndef);
                                 self.emit_simple(Opcode::StackBox);
@@ -681,11 +684,11 @@ impl ByteCompiler {
                                 make_string(thread, file).into(),
                                 loc.line as _,
                                 loc.col as _,
-                                0i32)
-                            ],
-                            "{}",
+                                0i32
+                            )],
+                            "message: {}",
                             err
-                        )
+                        );
                     }
 
                     ParseError::Syntax(loc, err) => {
@@ -695,9 +698,9 @@ impl ByteCompiler {
                                 make_string(thread, file).into(),
                                 loc.line as _,
                                 loc.col as _,
-                                0i32)
-                            ],
-                            "{}",
+                                0i32
+                            )],
+                            "message: {}",
                             err
                         )
                     }

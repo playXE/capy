@@ -56,10 +56,10 @@ use rsgc::{
 
 use super::{
     fun::scm_make_subr,
-    list::scm_assoc_ref,
+    list::{scm_assoc_ref, scm_list},
     module::{scm_capy_module, scm_define},
     symbol::Intern,
-    vector::scm_vector_copy,
+    vector::scm_vector_copy, error::wrong_contract,
 };
 
 // no need to trace these symbols, they are registered in the global symbol table
@@ -961,7 +961,40 @@ fn match_synrule(
     }
 
     if pattern.is_vector() {
-        todo!()
+        if !form.is_vector() {
+            return false;
+        }
+
+        let plen = pattern.vector_len();
+        let mut elli = form.vector_len();
+
+        let mut flen = elli;
+        let mut has_elli = false;
+
+        if plen == 0 {
+            return flen == 0;
+        }
+        for i in 0..plen {
+            if pattern.vector_ref(i).is_syntax_pattern() {
+                has_elli = true;
+                elli = i;
+                break;
+            }
+        }
+
+        if (!has_elli && plen != flen) || (has_elli && plen.wrapping_sub(1) > flen) {
+            return false;
+        }
+
+        if elli < flen {
+            let pat = pattern.vector_ref(elli).syntax_pattern();
+            let prest = scm_list(Thread::current(), &pattern.vector()[elli+1..plen]);
+            let frest = scm_list(Thread::current(), &form.vector()[elli..flen]);
+
+            return match_subpattern(t, frest, pat, prest, module, env, mvec);
+        } else {
+            return true;
+        }
     }
 
     scm_equal(pattern, form)
@@ -1030,7 +1063,7 @@ fn realize_template_rec(
                 return r;
             }
 
-            template_append(thread, &mut h, &mut t, template);
+            template_append(thread, &mut h, &mut t, r);
         }
 
         return h;
@@ -1141,8 +1174,8 @@ pub fn synrule_expand(
 
             println!();*/
             let expanded = realize_template(t, sr, &sr[i as usize], &mvec);
-
-            return Ok(expanded);
+            
+            return Ok(expanded);    
         }
     }
 
@@ -1462,12 +1495,25 @@ pub fn get_make_er_transformer() -> Value {
     })
 }
 
+extern "C" fn unwrap_syntax(cfr: &mut CallFrame) -> ScmResult {
+    let val = cfr.argument(0);
+    let immutable = cfr.argument(1).to_bool();
+
+    ScmResult::ok(scm_unwrap_syntax(val, immutable))
+} 
+
+
+
 pub(crate) fn init_macros() {
     let module = scm_capy_module().module();
 
     let subr = scm_make_subr("free-identifier=?", free_identifier_eq, 2, 2);
 
     scm_define(module, "free-identifier=?".intern(), subr).unwrap();
+
+    let subr = scm_make_subr("unwrap-syntax", unwrap_syntax, 2, 2);   
+    scm_define(module, "unwrap-syntax".intern(), subr).unwrap();
+
 
     heap::heap().add_root(SimpleRoot::new("macros", "mc", |proc| {
         MAKE_ER_TRANSFORMER.get().map(|x| x.trace(proc.visitor()));

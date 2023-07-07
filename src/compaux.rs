@@ -225,6 +225,7 @@ pub fn scm_unwrap_syntax(form: Value, immutable: bool) -> Value {
     form
 }
 
+
 pub fn scm_identifier_global_binding(id: Handle<Identifier>) -> Option<Handle<GLOC>> {
     let z = scm_outermost_identifier(id);
 

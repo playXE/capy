@@ -9,6 +9,7 @@
 )]
 #[macro_use]
 pub mod runtime;
+pub mod jit;
 pub mod compaux;
 pub mod compile;
 pub mod op;

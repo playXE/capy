@@ -11,10 +11,12 @@ use crate::{
 };
 
 use super::{
-    module::{scm_define, scm_scheme_module},
+    error::wrong_contract,
+    list::scm_length,
+    module::{scm_define, scm_scheme_module, scm_internal_module},
     object::MAX_ARITY,
     symbol::{make_symbol, Intern},
-    vector::make_values, error::wrong_contract, list::scm_length,
+    vector::{make_values, make_values_n},
 };
 
 pub fn make_procedure(t: &mut Thread, code_block: Handle<CodeBlock>) -> Handle<Procedure> {
@@ -42,7 +44,7 @@ pub fn make_closed_procedure(
 
         proc.code = code_block;
         proc.env_size = ncaptures as _;
-        
+
         for i in 0..ncaptures {
             proc.captures
                 .as_mut_ptr()
@@ -137,7 +139,6 @@ pub fn scm_make_subr_closed_inliner(
     proc.into()
 }
 
-
 pub fn check_arity(p: Value, a: i32, _inc_ok: bool) -> bool {
     let mina;
     let mut maxa;
@@ -162,7 +163,6 @@ pub fn check_arity(p: Value, a: i32, _inc_ok: bool) -> bool {
 
     true
 }
-
 
 pub fn check_proc_arity_2(
     where_: &str,
@@ -224,7 +224,6 @@ pub fn check_proc_arity(
     check_proc_arity_2(where_, a, which, argc, args, false)
 }
 
-
 pub const SCM_PRIM_STRUCT_TYPE_INDEXLESS_GETTER: i32 = 32 | 256;
 pub const SCM_PRIM_STRUCT_TYPE_CONSTR: i32 = 128;
 pub const SCM_PRIM_STRUCT_TYPE_SIMPLE_CONSTR: i32 = 32 | 64 | 128;
@@ -236,16 +235,19 @@ pub const SCM_PRIM_TYPE_STRUCT_PROP_GETTER: i32 = 64 | 128;
 pub const SCM_PRIM_STRUCT_TYPE_STRUCT_PROP_PRED: i32 = 64 | 128 | 256;
 pub const SCM_PRIM_STRUCT_TYPE_INDEXED_GETTER: i32 = 32;
 pub const SCM_PRIM_STRUCT_TYPE_PRED: i32 = 32 | 64;
+pub const SCM_PRIM_CONTINUATION: i32 = 32 | 64 | 128 | 256;
 
 extern "C" fn call_with_values(cfr: &mut CallFrame) -> ScmResult {
     let v = cfr.argument(0);
     let v1 = cfr.argument(1);
     if !v.is_procedure() {
-        todo!("error")
+        return wrong_contract::<()>("call-with-values", "procedure?", 0, 2, cfr.arguments())
+            .into();
     }
 
     if !v1.is_procedure() {
-        todo!("error")
+        return wrong_contract::<()>("call-with-values", "procedure?", 1, 2, cfr.arguments())
+            .into();
     }
 
     let v = match apply(v, &[]) {
@@ -260,8 +262,59 @@ extern "C" fn call_with_values(cfr: &mut CallFrame) -> ScmResult {
     }
 }
 
+extern "C" fn apply_with_values(cfr: &mut CallFrame) -> ScmResult {
+    if !cfr.argument(0).is_procedure() {
+        return wrong_contract::<()>("apply-with-values", "procedure?", 0, 2, cfr.arguments())
+            .into();
+    }
+
+    let x = cfr.argument(1);
+
+    if x.is_undefined() || x.is_null() {
+        return ScmResult::tail(cfr.argument(0), &[]);
+    }
+
+    if x.is_values() {
+        let values = x.values();
+        let vm = scm_vm();
+        let thr = Thread::current();
+        for val in values.iter() {
+            vm.tail_rands.push(thr, *val);
+        }
+
+        vm.tail_rator = cfr.argument(0);
+
+        return ScmResult::tail_raw();
+    } else {
+        return wrong_contract::<()>("apply-with-values", "values?", 1, 2, cfr.arguments()).into();
+    }
+}
+
 extern "C" fn values(cfr: &mut CallFrame) -> ScmResult {
     ScmResult::ok(make_values(Thread::current(), cfr.arguments()))
+}
+
+extern "C" fn make_values_proc(cfr: &mut CallFrame) -> ScmResult {
+    if cfr.argument(0).is_null() {
+        ScmResult::ok(Value::encode_undefined_value())
+    } else if cfr.argument(0).is_pair() {
+        let thr = Thread::current();
+        let mut values = make_values_n(thr, scm_length(cfr.argument(0)).unwrap());
+
+        let mut i = 0;
+        let mut p = cfr.argument(0);
+
+        while p.is_pair() {
+            thr.write_barrier(values);
+            values[i] = p.car();
+            p = p.cdr();
+            i += 1;
+        }
+
+        ScmResult::ok(values)
+    } else {
+        ScmResult::ok(cfr.argument(0))
+    }
 }
 
 pub fn get_proc_name<'a>(val: Value) -> Option<&'a str> {
@@ -295,13 +348,27 @@ extern "C" fn procedure_p(cfr: &mut CallFrame) -> ScmResult {
 
 extern "C" fn apply_proc(cfr: &mut CallFrame) -> ScmResult {
     if !cfr.argument(0).is_procedure() {
-        return wrong_contract::<()>("apply", "procedure?", 0, cfr.argument_count() as i32, cfr.arguments()).into();
+        return wrong_contract::<()>(
+            "apply",
+            "procedure?",
+            0,
+            cfr.argument_count() as i32,
+            cfr.arguments(),
+        )
+        .into();
     }
 
     let mut rands = cfr.arguments()[cfr.argument_count() - 1];
 
     let Some(mut num_rands) = scm_length(rands) else {
-        return wrong_contract::<()>("apply", "list?", cfr.argument_count() as i32 - 1, cfr.argument_count() as _,cfr.arguments()).into();
+        return wrong_contract::<()>(
+            "apply",
+            "list?",
+            cfr.argument_count() as i32 - 1,
+            cfr.argument_count() as _,
+            cfr.arguments(),
+        )
+        .into();
     };
 
     num_rands += cfr.argument_count() - 2;
@@ -310,7 +377,11 @@ extern "C" fn apply_proc(cfr: &mut CallFrame) -> ScmResult {
     let vm = scm_vm();
 
     if vm.tail_rands.len() < num_rands as usize {
-        vm.tail_rands.resize(Thread::current(), num_rands as usize, Value::encode_undefined_value());
+        vm.tail_rands.resize(
+            Thread::current(),
+            num_rands as usize,
+            Value::encode_undefined_value(),
+        );
     }
 
     while i != 0 {
@@ -328,16 +399,16 @@ extern "C" fn apply_proc(cfr: &mut CallFrame) -> ScmResult {
 
     vm.tail_rator = cfr.argument(0);
     ScmResult::tail_raw()
-
-    
 }
 
 pub(crate) fn init() {
     let module = scm_scheme_module().module();
 
     let subr = scm_make_subr("call-with-values", call_with_values, 2, 2);
-
     scm_define(module, "call-with-values".intern(), subr.into()).unwrap();
+
+    let subr = scm_make_subr("apply-with-values", apply_with_values, 2, 2);
+    scm_define(module, "apply-with-values".intern(), subr.into()).unwrap();
 
     let subr = scm_make_subr("values", values, 0, MAX_ARITY);
     scm_define(module, "values".intern(), subr.into()).unwrap();
@@ -347,4 +418,9 @@ pub(crate) fn init() {
 
     let subr = scm_make_subr("apply", apply_proc, 2, MAX_ARITY);
     scm_define(module, "apply".intern(), subr.into()).unwrap();
+
+    let module = scm_internal_module().module();
+
+    let subr = scm_make_subr("%make-values", make_values_proc, 1, 1);
+    scm_define(module, "%make-values".intern(), subr.into()).unwrap();
 }

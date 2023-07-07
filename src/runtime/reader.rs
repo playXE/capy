@@ -299,7 +299,7 @@ impl<'a> Reader<'a> {
                 c,
                 pos as _
             )],
-            "{}",
+            "message: {}",
             message
         )
     }
@@ -1362,14 +1362,14 @@ impl<'a> Reader<'a> {
                         let expr = self.read_expr()?;
                         return Ok(scm_list(
                             self.vm.mutator(),
-                            &[inherent_symbols()[InherentSymbol::UnsyntaxSplicing], expr],
+                            &[inherent_symbols()[InherentSymbol::UnquoteSplicing], expr],
                         ));
                     } else {
                         self.unget_char();
                         let expr = self.read_expr()?;
                         return Ok(scm_list(
                             self.vm.mutator(),
-                            &[inherent_symbols()[InherentSymbol::Unsyntax], expr],
+                            &[inherent_symbols()[InherentSymbol::Unquote], expr],
                         ));
                     }
                 }

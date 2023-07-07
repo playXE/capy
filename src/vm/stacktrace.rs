@@ -1,3 +1,4 @@
+
 use crate::{runtime::{
     fun::{scm_make_subr, get_proc_name},
     module::{scm_define, scm_null_module},
@@ -54,13 +55,13 @@ impl<'a> Iterator for StackTrace<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         if self.cfr.is_null() {
             self.cfr = self.vm.prev_top_call_frame;
-
             if self.cfr.is_null() {
                 return None;
             }
         }
         unsafe {
             let cfr = self.cfr;
+          
             self.cfr = (*cfr).caller();
             Some(Context { cfr })
         }
@@ -74,7 +75,7 @@ pub fn get_stacktrace_str(vm: &mut VM) -> String {
         let callee = frame.callee();
         let ip = frame.return_pc();
         let _code_block = frame.code_block();
-
+        println!("{:p}->{:p}", frame.cfr, unsafe { (*frame.cfr).caller() });
         let name = get_proc_name(callee);
 
         if let Some(name) = name {

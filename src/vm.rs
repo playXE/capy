@@ -83,7 +83,9 @@ impl VM {
     }
 
     pub unsafe fn wind_up(&mut self, before: Value, after: Value, handlers: Option<Value>) {
+        static ID: AtomicI32 = AtomicI32::new(1);
         let winder = Winder {
+            id: ID.fetch_add(1, Ordering::AcqRel),
             before,
             after,
             handlers,
@@ -295,6 +297,7 @@ pub fn inherent_symbols() -> &'static InherentSymbols {
 }
 
 pub struct Winder {
+    pub(crate) id: i32,
     pub(crate) before: Value,
     pub(crate) after: Value,
     pub(crate) handlers: Option<Value>,

@@ -1,17 +1,20 @@
 use std::hint::black_box;
 
-use crate::{vm::{
-    callframe::CallFrame,
-    scm_vm,
-    setjmp::{longjmp, setjmp, JmpBuf},
-    Winder, VM,
-}, runtime::fun::scm_make_closed_native_procedure};
+use crate::{
+    runtime::fun::scm_make_closed_native_procedure,
+    vm::{
+        callframe::CallFrame,
+        scm_vm,
+        setjmp::{longjmp, setjmp, JmpBuf},
+        Winder, VM,
+    },
+};
 
 use super::{
     error::wrong_contract,
-    fun::scm_make_subr,
+    fun::{scm_make_subr, SCM_PRIM_CONTINUATION},
     list::scm_cons,
-    module::{scm_define, scm_capy_module},
+    module::{scm_capy_module, scm_define, scm_internal_module},
     object::{ObjectHeader, ScmResult, Type},
     symbol::Intern,
     value::Value,
@@ -116,10 +119,94 @@ extern "C" fn wind_up_raise(cfr: &mut CallFrame) -> ScmResult {
     }
 }
 
+extern "C" fn dynamic_wind_base(cfr: &mut CallFrame) -> ScmResult {
+    let cont = cfr.argument(0);
 
+    if !cont.is_closed_native_procedure() {
+        return wrong_contract::<()>(
+            "%dynamic-wind-base",
+            "continuation?",
+            0,
+            cfr.argument_count() as i32,
+            cfr.arguments(),
+        )
+        .into();
+    }
 
+    let cont = cont.closed_native_procedure();
 
-use rsgc::{heap::stack::approximate_stack_pointer, prelude::Allocation};
+    if cont.len() != 1 && cont[0].is_xtype(Type::Continuation) {
+        return wrong_contract::<()>(
+            "%dynamic-wind-base",
+            "continuation?",
+            0,
+            cfr.argument_count() as i32,
+            cfr.arguments(),
+        )
+        .into();
+    }
+
+    let cont = unsafe { std::mem::transmute::<_, Handle<Cont>>(cont[0]) };
+
+    let base = scm_vm()
+        .winders
+        .zip(cont.vmcont.winders)
+        .and_then(|(x, y)| Winder::common_prefix(x, y));
+
+    ScmResult::ok(base.map(|x| x.id).unwrap_or(0))
+}
+
+extern "C" fn dynamic_wind_current(_cfr: &mut CallFrame) -> ScmResult {
+    ScmResult::ok(scm_vm().winders.map(|x| x.id).unwrap_or(0))
+}
+
+extern "C" fn dynamic_winders(cfr: &mut CallFrame) -> ScmResult {
+    let cont = cfr.argument(0);
+
+    if !cont.is_closed_native_procedure() {
+        return wrong_contract::<()>(
+            "%dynamic-wind-base",
+            "continuation?",
+            0,
+            cfr.argument_count() as i32,
+            cfr.arguments(),
+        )
+        .into();
+    }
+
+    let cont = cont.closed_native_procedure();
+
+    if cont.len() != 1 && cont[0].is_xtype(Type::Continuation) {
+        return wrong_contract::<()>(
+            "%dynamic-wind-base",
+            "continuation?",
+            0,
+            cfr.argument_count() as i32,
+            cfr.arguments(),
+        )
+        .into();
+    }
+
+    let cont = unsafe { std::mem::transmute::<_, Handle<Cont>>(cont[0]) };
+
+    let base = scm_vm().winders;
+
+    let mut res = Value::encode_null_value();
+    let mut next = cont.vmcont.winders;
+
+    loop {
+        if let Some(winder) = next.filter(|&x| base.is_none() || x != base.unwrap()) {
+            res = scm_cons(Thread::current(), scm_cons(Thread::current(), winder.before, winder.after), res);
+            next = winder.next;
+        } else {
+            break;
+        }
+    }
+
+    ScmResult::ok(res)
+}
+
+use rsgc::{heap::stack::approximate_stack_pointer, prelude::Allocation, thread::Thread};
 use rsgc::{
     heap::stack::StackBounds,
     prelude::{Handle, Object},
@@ -323,7 +410,7 @@ extern "C" fn restore_callback(cfr: &mut CallFrame) -> ScmResult {
 
         vm.sp = cont.vmcont.sp;
 
-        let offset = &vm.stack[vm.stack.len() - 1] as *const Value as usize  - vm.sp as usize;
+        let offset = &vm.stack[vm.stack.len() - 1] as *const Value as usize - vm.sp as usize;
         let offset_in_value = offset / std::mem::size_of::<Value>();
 
         std::ptr::copy_nonoverlapping(
@@ -346,7 +433,8 @@ extern "C" fn restore_callback(cfr: &mut CallFrame) -> ScmResult {
 extern "C" fn unprotected_call_cc(cfr: &mut CallFrame) -> ScmResult {
     let callback = cfr.argument(0);
     if !callback.is_procedure() {
-        return wrong_contract::<()>("%unprotected-call/cc", "procedure?", 0, 1, &[callback]).into();
+        return wrong_contract::<()>("%unprotected-call/cc", "procedure?", 0, 1, &[callback])
+            .into();
     }
     unsafe {
         let cont = make_continuation(scm_vm());
@@ -355,14 +443,21 @@ extern "C" fn unprotected_call_cc(cfr: &mut CallFrame) -> ScmResult {
             return ScmResult::ok(cont.value.value);
         }
         let vm = scm_vm();
-        let subr = scm_make_closed_native_procedure(vm.mutator(), "%continuation".intern().into(), restore_callback, 1, 1, &[cont.value.cont.into()]);
-
+        let mut subr = scm_make_closed_native_procedure(
+            vm.mutator(),
+            "%continuation".intern().into(),
+            restore_callback,
+            1,
+            1,
+            &[cont.value.cont.into()],
+        );
+        subr.header.flags |= SCM_PRIM_CONTINUATION as u32;
         ScmResult::tail(callback, &[subr.into()])
     }
 }
 
 pub(crate) fn init_cont() {
-    let module = scm_capy_module().module();
+    let module = scm_internal_module().module();
 
     let subr = scm_make_subr("%wind-down", wind_down, 0, 0);
     scm_define(module, "%wind-down".intern(), subr).unwrap();
@@ -372,6 +467,15 @@ pub(crate) fn init_cont() {
 
     let subr = scm_make_subr("%wind-up-raise", wind_up_raise, 2, 2);
     scm_define(module, "%wind-up-raise".intern(), subr).unwrap();
+
+    let subr = scm_make_subr("%dynamic-wind-base", dynamic_wind_base, 1, 1);
+    scm_define(module, "%dynamic-wind-base".intern(), subr).unwrap();
+
+    let subr = scm_make_subr("%dynamic-wind-current", dynamic_wind_current, 0, 0);
+    scm_define(module, "%dynamic-wind-current".intern(), subr).unwrap();
+
+    let subr = scm_make_subr("%dynamic-winders", dynamic_winders, 1, 1);
+    scm_define(module, "%dynamic-winders".intern(), subr).unwrap();
 
     let subr = scm_make_subr("%unprotected-call/cc", unprotected_call_cc, 1, 1);
     scm_define(module, "%unprotected-call/cc".intern(), subr).unwrap();

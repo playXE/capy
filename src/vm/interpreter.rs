@@ -227,7 +227,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
 
         // `pc` is initialized here
         debug_assert!(!pc.is_null(), "pc should be initialized at vm_eval entry");
-
+        debug_assert!(sp <= cfr.cast::<Value>());
         'interp: loop {
             macro_rules! read1 {
                 () => {{
@@ -270,7 +270,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
             }
 
             let op = readt!(Opcode);
-
+            
             match op {
                 Opcode::NoOp => {}
                 Opcode::Enter
@@ -635,6 +635,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                 Opcode::Call => {
                     let argc = read2!();
                     let callee = pop!();
+
                     push!(cfr CallFrame {
                         return_pc: pc,
                         caller: cfr,
@@ -643,13 +644,17 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                         callee,
                         args: []
                     });
+
                     cfr = sp.cast();
+                    sp = cfr.cast();
+                  
                     if callee.is_vm_procedure() {
                         (*cfr).code_block = callee.procedure().code.into();
                         pc = callee.procedure().code.start_ip();
 
                         continue 'interp;
                     }
+                    
                     continue 'eval;
                 }
 
@@ -691,27 +696,39 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     });
 
                     cfr = sp.cast();
-
+                    
                     if callee.is_vm_procedure() {
                         (*cfr).code_block = callee.procedure().code.into();
                         pc = callee.procedure().code.start_ip();
                         continue 'interp;
                     }
 
+                    
+
                     continue 'eval;
                 }
 
                 Opcode::Return => {
+                    
                     let val = pop!();
 
-                    leave_frame!(val);
+                    if (*cfr).caller.is_null() {
+                        return Ok(val);
+                    } else {
+                        pc = (*cfr).return_pc;
+                        sp = cfr.add(1).cast::<Value>().add((*cfr).argc.get_int32() as _);
+                        
+                        cfr = (*cfr).caller;
+        
+                        push!(val);
+                    }
                 }
 
                 Opcode::StackGet => {
                     let off = read2!();
 
                     let val = cfr.cast::<Value>().sub(off as usize + 1).read();
-
+                    debug_assert!(cfr.cast::<Value>().sub(off as usize + 1) < cfr.cast::<Value>());
                     push!(val);
                 }
 
@@ -719,7 +736,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     let off = read2!();
                     let val = pop!();
                     let slot = cfr.cast::<Value>().sub(off as usize + 1);
-
+                    debug_assert!(slot < cfr.cast::<Value>());
                     slot.write(val);
                 }
 
@@ -770,6 +787,8 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     for _ in 0..ncaptures {
                         sp = sp.add(1);
                     }
+
+                    debug_assert!(sp < cfr.cast::<Value>());
                     push!(Value::encode_object_value(closure));
                 }
 
@@ -921,6 +940,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     let argc = read2!();
                     if unlikely(argc != (*cfr).argc.get_int32() as u16) {
                         vm.sp = sp;
+                        vm.top_call_frame = cfr;
                         return wrong_count(
                             &code_block!().name.to_string(),
                             code_block!().mina as _,
@@ -939,6 +959,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     let argc = read2!();
                     if unlikely(argc > (*cfr).argc.get_int32() as u16) {
                         vm.sp = sp;
+                        vm.top_call_frame = cfr;
                         return wrong_count(
                             &code_block!().name.to_string(),
                             code_block!().mina as _,
@@ -955,6 +976,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
 
                 Opcode::NoMatchingArgCount => {
                     vm.sp = sp;
+                    vm.top_call_frame = cfr;
                     return Err(make_string(vm.thread, "wrong number of arguments").into());
                 }
 
@@ -1089,6 +1111,8 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     if let Some(x) = scm_is_exact(val) {
                         push!(Value::encode_bool_value(x));
                     } else {
+                        vm.top_call_frame = cfr;
+                        vm.sp = sp;
                         return Err(make_string(vm.thread, "exact?: expected number").into());
                     }
                 }
@@ -1097,6 +1121,8 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     let val = pop!();
 
                     if unlikely(!val.is_pair()) {
+                        vm.top_call_frame = cfr;
+                        vm.sp = sp;
                         return wrong_contract("car", "pair?", 0, 1, &[val]);
                     }
 
@@ -1107,6 +1133,8 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     let val = pop!();
 
                     if unlikely(!val.is_pair()) {
+                        vm.top_call_frame = cfr;
+                        vm.sp = sp;
                         return wrong_contract("cdr", "pair?", 0, 1, &[val]);
                     }
 
@@ -1117,6 +1145,8 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     let val = pop!();
                     let cell = pop!();
                     if unlikely(!cell.is_pair()) {
+                        vm.top_call_frame = cfr;
+                        vm.sp = sp;
                         return wrong_contract("set-car!", "pair?", 0, 2, &[cell, val]);
                     }
 
@@ -1128,6 +1158,8 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     let val = pop!();
                     let cell = pop!();
                     if unlikely(!cell.is_pair()) {
+                        vm.top_call_frame = cfr;
+                        vm.sp = sp;
                         return wrong_contract("set-cdr!", "pair?", 0, 2, &[cell, val]);
                     }
 
