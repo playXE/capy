@@ -403,9 +403,11 @@ impl Value {
             return Type::Double;
         }
 
-        
+        if self.is_char() {
+            return Type::Char;
+        }
 
-        unreachable!()
+        unreachable!("{}", self)
     }
 
     pub fn gloc(self) -> Handle<GLOC> {

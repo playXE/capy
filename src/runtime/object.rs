@@ -56,6 +56,7 @@ pub enum Type {
     Undefined,
     True,
     False,
+    Char,
     Int32,
     Double,
     BigNum,
