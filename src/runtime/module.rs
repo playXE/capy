@@ -47,7 +47,7 @@ use crate::{
     vm::callframe::CallFrame,
 };
 
-use super::{object::ScmResult, error::wrong_contract};
+use super::{object::ScmResult, error::{wrong_contract, scm_raise_proc}};
 type Modules = Mutex<HashMap<Handle<Symbol>, Value>>;
 
 pub const SCM_BINDING_STAY_IN_MODULE: i32 = 1 << 0;
@@ -1072,7 +1072,7 @@ extern "C" fn module_name_to_path(cfr: &mut CallFrame) -> ScmResult {
     let name = cfr.argument(0);
     let path = match scm_module_name_to_path(name) {
         Ok(path) => path,
-        Err(e) => return ScmResult::err(e),
+        Err(e) => return ScmResult::tail(scm_raise_proc(), &[e]),
     };
 
     ScmResult::ok(make_string(Thread::current(), path.display().to_string()))

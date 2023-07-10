@@ -10,9 +10,8 @@ use super::{
     fun::scm_make_subr_inliner,
     module::{scm_define, scm_scheme_module},
     object::{ScmResult},
-    string::make_string,
     symbol::Intern,
-    value::Value, arith::{scm_is_zero, scm_is_exact},
+    value::Value, arith::{scm_is_zero, scm_is_exact}, error::wrong_contract,
 };
 
 extern "C" fn number_p(cfr: &mut CallFrame) -> ScmResult {
@@ -105,10 +104,7 @@ extern "C" fn exact_p(cfr: &mut CallFrame) -> ScmResult {
     if let Some(x) = scm_is_exact(cfr.argument(0)) {
         ScmResult::ok(x)
     } else {
-        ScmResult::err(make_string(
-            Thread::current(),
-            &format!("not a number: {:?}", cfr.argument(0)),
-        ))
+        wrong_contract::<()>("exact?", "number?", 0, 1, cfr.arguments()).into()
     }
 }
 

@@ -440,4 +440,14 @@
             (cond
             ((null? lst) '())
             ((pair? lst) (cons (car lst) (list-copy (cdr lst))))
-            (else lst)))))
+            (else lst))))
+            
+            
+    (set! assq 
+        (lambda (obj alist)
+            (cond
+            ((null? alist) #f)
+            ((eq? obj (caar alist)) (car alist))
+            (else
+                (assq obj (cdr alist)))))))
+

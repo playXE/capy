@@ -23,6 +23,8 @@ use crate::{
     vm::{callframe::CallFrame, scm_vm},
 };
 
+use super::error::scm_raise_proc;
+
 pub const EXTENDED_PAIR_BIT: usize = 0;
 pub const EXTENDED_PAIR_BIT_SIZE: usize = 1;
 pub type ExtendedPairBitfield = BitField<EXTENDED_PAIR_BIT_SIZE, EXTENDED_PAIR_BIT, false>;
@@ -97,6 +99,7 @@ pub enum Type {
     Port,
     Continuation,
     EofObject,
+    Package,
 }
 
 #[repr(C)]
@@ -564,6 +567,8 @@ impl Allocation for ReaderReference {}
 #[repr(C)]
 pub struct CodeBlock {
     pub(crate) header: ObjectHeader,
+    /// Machine code address, or NULL if not compiled yet.
+    pub(crate) mcode: *const u8,
     pub name: Value,
     /// vector of constants
     pub literals: Value,
@@ -754,6 +759,7 @@ impl ScmResult {
     pub const OK: u8 = 0;
     pub const TAIL: u8 = 1;
     pub const ERR: u8 = 2;
+    pub const JIT_ERR: u8 = 3;
 
     pub fn ok(value: impl Into<Value>) -> Self {
         Self {
@@ -777,6 +783,13 @@ impl ScmResult {
     pub fn err(value: impl Into<Value>) -> Self {
         Self {
             tag: Self::ERR,
+            value: value.into(),
+        }
+    }
+
+    pub(crate) fn jit_err(value: impl Into<Value>) -> Self {
+        Self {
+            tag: Self::JIT_ERR,
             value: value.into(),
         }
     }
@@ -867,6 +880,7 @@ impl Try for ScmResult {
             value: output,
         }
     }
+
 }
 
 impl FromResidual<Value> for ScmResult {
@@ -998,7 +1012,7 @@ impl Into<ScmResult> for Result<Value, Value> {
     fn into(self) -> ScmResult {
         match self {
             Ok(val) => ScmResult::ok(val),
-            Err(err) => ScmResult::err(err),
+            Err(err) => ScmResult::tail(scm_raise_proc(), &[err]),
         }
     }
 }
@@ -1007,7 +1021,7 @@ impl Into<ScmResult> for Result<(), Value> {
     fn into(self) -> ScmResult {
         match self {
             Ok(()) => ScmResult::ok(Value::encode_undefined_value()),
-            Err(err) => ScmResult::err(err),
+            Err(err) => ScmResult::tail(scm_raise_proc(), &[err]),
         }
     }
 }
@@ -1016,7 +1030,7 @@ impl Into<ScmResult> for Result<bool, Value> {
     fn into(self) -> ScmResult {
         match self {
             Ok(val) => ScmResult::ok(Value::encode_bool_value(val)),
-            Err(err) => ScmResult::err(err),
+            Err(err) => ScmResult::tail(scm_raise_proc(), &[err]),
         }
     }
 }
@@ -1025,10 +1039,7 @@ impl FromResidual<Result<Infallible, Value>> for ScmResult {
     fn from_residual(residual: Result<Infallible, Value>) -> Self {
         match residual {
             Ok(_) => ScmResult::ok(Value::encode_undefined_value()),
-            Err(value) => Self {
-                tag: ScmResult::ERR,
-                value,
-            },
+            Err(value) => Self::tail(scm_raise_proc(), &[value]),
         }
     }
 }

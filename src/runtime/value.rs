@@ -11,7 +11,7 @@ use crate::{
         NativeProcedure, ObjectHeader, Pair, Procedure, ReaderReference, Str, Symbol, Syntax, Type,
         Vector, GLOC,
     },
-    vm::scm_vm,
+    vm::scm_vm, 
 };
 
 use super::{
@@ -130,34 +130,34 @@ impl Value {
 
     pub const UNDEFINED: Value = Self::encode_undefined_value();
 
-    #[inline]
+    #[inline(always)]
     pub fn encode_empty_value() -> Self {
         Self(EncodedValueDescriptor {
             as_int64: Self::VALUE_EMPTY,
         })
     }
-    #[inline]
+    #[inline(always)]
     pub fn encode_object_value<T: Object + ?Sized>(gc: Handle<T>) -> Self {
         Self(EncodedValueDescriptor {
             ptr: unsafe { std::mem::transmute(gc) },
         })
     }
 
-    #[inline]
+    #[inline(always)]
     pub const fn encode_undefined_value() -> Self {
         Self(EncodedValueDescriptor {
             as_int64: Self::VALUE_UNDEFINED as _,
         })
     }
 
-    #[inline]
+    #[inline(always)]
     pub const fn encode_null_value() -> Self {
         Self(EncodedValueDescriptor {
             as_int64: Self::VALUE_NULL as _,
         })
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn encode_bool_value(x: bool) -> Self {
         if x {
             Self(EncodedValueDescriptor {
@@ -169,134 +169,133 @@ impl Value {
             })
         }
     }
-    #[inline]
+    #[inline(always)]
     pub fn is_empty(self) -> bool {
         unsafe { self.0.as_int64 == Self::VALUE_EMPTY }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn is_undefined(self) -> bool {
         self == Self::encode_undefined_value()
     }
-    #[inline]
+    #[inline(always)]
     pub fn is_null(self) -> bool {
         self == Self::encode_null_value()
     }
-
-    #[inline]
+    #[inline(always)]
     pub fn is_true(self) -> bool {
         self == Self::encode_bool_value(true)
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn is_false(self) -> bool {
         self == Self::encode_bool_value(false)
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn is_boolean(self) -> bool {
         unsafe { (self.0.as_int64 & !1) == Self::VALUE_FALSE as i64 }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn is_pointer(self) -> bool {
         unsafe { (self.0.as_int64 & Self::NOT_CELL_MASK) == 0 }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn is_int32(self) -> bool {
         unsafe { (self.0.as_int64 & Self::NUMBER_TAG) == Self::NUMBER_TAG }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn is_inline_number(self) -> bool {
         unsafe { (self.0.as_int64 & Self::NUMBER_TAG) != 0 }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn get_object(self) -> Handle<dyn Object> {
-        assert!(self.is_object());
+        debug_assert!(self.is_object());
 
         unsafe { std::mem::transmute(self.0.ptr) }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn is_object(self) -> bool {
         self.is_pointer() && !self.is_empty()
     }
-    #[inline]
+    #[inline(always)]
     pub fn get_int32(self) -> i32 {
         unsafe { self.0.as_int64 as i32 }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn get_number(self) -> f64 {
         if self.is_int32() {
             return self.get_int32() as _;
         }
         self.get_double()
     }
-    #[inline]
+    #[inline(always)]
     pub fn get_double(self) -> f64 {
         assert!(self.is_double());
         f64::from_bits((unsafe { self.0.as_int64 - Self::DOUBLE_ENCODE_OFFSET }) as u64)
     }
-    #[inline]
+    #[inline(always)]
     pub fn is_double(self) -> bool {
         self.is_inline_number() && !self.is_int32()
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn is_bool(self) -> bool {
         unsafe { (self.0.as_int64 & !1) == Self::VALUE_FALSE as i64 }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn encode_f64_value(x: f64) -> Self {
         Self(EncodedValueDescriptor {
             as_int64: x.to_bits() as i64 + Self::DOUBLE_ENCODE_OFFSET,
         })
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn encode_untrusted_f64_value(x: f64) -> Self {
         Self::encode_f64_value(purify_nan(x))
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn encode_nan_value() -> Self {
         Self::encode_f64_value(pure_nan())
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn encode_int32(x: i32) -> Self {
         Self(EncodedValueDescriptor {
             as_int64: Self::NUMBER_TAG | x as u32 as u64 as i64,
         })
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn get_raw(self) -> i64 {
         unsafe { self.0.as_int64 }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn get_char(self) -> char {
         unsafe { char::from_u32_unchecked((self.0.as_int64 >> 16) as u32) }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn encode_char(x: char) -> Self {
         Self(EncodedValueDescriptor {
             as_int64: (((x as u32 as u64) << 16) | Self::NATIVE32_TAG as u64) as i64,
         })
     }
-    #[inline]
+    #[inline(always)]
     pub fn is_char(self) -> bool {
         unsafe { (self.0.as_int64 & Self::NATIVE32_MASK) == Self::NATIVE32_TAG as i64 }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn get_bool(self) -> bool {
         assert!(self.is_bool());
         self == Self::encode_bool_value(true)
@@ -409,61 +408,61 @@ impl Value {
 
         unreachable!("{}", self)
     }
-
+    #[inline(always)]
     pub fn gloc(self) -> Handle<GLOC> {
         debug_assert!(self.is_xtype(Type::GLOC));
         unsafe { std::mem::transmute(self.0.ptr) }
     }
-
+    #[inline(always)]
     pub fn module(self) -> Handle<Module> {
         debug_assert!(self.is_xtype(Type::Module));
         unsafe { std::mem::transmute(self.0.ptr) }
     }
-
+    #[inline(always)]
     pub fn pair(self) -> Handle<Pair> {
         debug_assert!(self.is_xtype(Type::Pair));
         unsafe { std::mem::transmute(self.0.ptr) }
     }
-
+    #[inline(always)]
     pub fn vector(self) -> Handle<Vector> {
         debug_assert!(self.is_xtype(Type::Vector) || self.is_xtype(Type::Values));
         unsafe { std::mem::transmute(self.0.ptr) }
     }
-
+    #[inline(always)]
     pub fn bytevector(self) -> Handle<Bytevector> {
         debug_assert!(self.is_xtype(Type::Bytevector));
         unsafe { std::mem::transmute(self.0.ptr) }
-    }
-
+    }   
+    #[inline(always)]
     pub fn string(self) -> Handle<Str> {
         debug_assert!(self.is_xtype(Type::Str));
         unsafe { std::mem::transmute(self.0.ptr) }
     }
-
+    #[inline(always)]
     pub fn symbol(self) -> Handle<Symbol> {
         debug_assert!(self.is_xtype(Type::Symbol));
         unsafe { std::mem::transmute(self.0.ptr) }
     }
-
+    #[inline(always)]
     pub fn identifier(self) -> Handle<Identifier> {
         debug_assert!(self.is_xtype(Type::Identifier));
         unsafe { std::mem::transmute(self.0.ptr) }
     }
-
+    #[inline(always)]
     pub fn car(self) -> Value {
         debug_assert!(self.is_xtype(Type::Pair));
         {
             (*self.pair()).car
         }
     }
-
+    #[inline(always)]
     pub fn cdr(self) -> Value {
         debug_assert!(self.is_xtype(Type::Pair));
         {
             (*self.pair()).cdr
         }
-    }
-
+    }   
+    #[inline(always)]
     pub fn extended_pair_attr(self) -> Value {
         debug_assert!(self.is_extended_pair());
         unsafe {
@@ -471,7 +470,7 @@ impl Value {
             pair.attr
         }
     }
-
+    #[inline(always)]
     pub fn set_extended_pair_attr(self, attr: Value) {
         debug_assert!(self.is_extended_pair());
         unsafe {
@@ -519,144 +518,144 @@ impl Value {
     pub fn cdadr(self) -> Value {
         self.cdr().car().cdr()
     }
-
+    #[inline(always)]
     pub fn set_cdr(self, val: Value) {
         debug_assert!(self.is_xtype(Type::Pair));
         {
             (*self.pair()).cdr = val;
         }
     }
-
+    #[inline(always)]
     pub fn set_car(self, val: Value) {
         debug_assert!(self.is_xtype(Type::Pair));
         {
             (*self.pair()).car = val;
         }
     }
-
+    #[inline(always)]
     pub fn vector_ref(self, idx: usize) -> Value {
         debug_assert!(self.is_xtype(Type::Vector));
         {
             self.vector()[idx]
         }
     }
-
+    #[inline(always)]
     pub fn vector_set(self, idx: usize, val: Value) {
         debug_assert!(self.is_xtype(Type::Vector));
         {
             self.vector()[idx] = val;
         }
     }
-
+    #[inline(always)]
     pub fn values_ref(self, idx: usize) -> Value {
         debug_assert!(self.is_xtype(Type::Values));
         {
             self.vector()[idx]
         }
     }
-
+    #[inline(always)]
     pub fn values(self) -> Handle<Vector> {
         debug_assert!(self.is_xtype(Type::Values));
         unsafe { std::mem::transmute(self.0.ptr) }
     }
-
+    #[inline(always)]
     pub fn is_values(self) -> bool {
         self.is_xtype(Type::Values)
     }
-
+    #[inline(always)]
     pub fn is_eof_object(self) -> bool {
         self.is_xtype(Type::EofObject)
     }
-
+    #[inline(always)]
     pub fn eof_object() -> Self {
         *super::object::EOF_OBJECT
     }
-
+    #[inline(always)]
     pub fn is_bytevector(self) -> bool {
         self.is_xtype(Type::Bytevector)
     }
-
+    #[inline(always)]
     pub fn bytevector_ref(self, idx: usize) -> u8 {
         debug_assert!(self.is_xtype(Type::Bytevector));
         {
             self.bytevector()[idx]
         }
     }
-
+    #[inline(always)]
     pub fn bytevector_set(self, idx: usize, val: u8) {
         debug_assert!(self.is_xtype(Type::Bytevector));
         {
             self.bytevector()[idx] = val;
         }
     }
-
+    #[inline(always)]
     pub fn vector_len(self) -> usize {
         debug_assert!(self.is_xtype(Type::Vector) || self.is_xtype(Type::Values));
         {
             self.vector().len()
         }
     }
-
+    #[inline(always)]
     pub fn bytevector_len(self) -> usize {
         debug_assert!(self.is_xtype(Type::Bytevector));
         {
             self.bytevector().len()
         }
     }
-
+    #[inline(always)]
     pub fn is_identifier(self) -> bool {
         self.is_xtype(Type::Identifier) || self.is_xtype(Type::Symbol)
     }
-
+    #[inline(always)]
     pub fn is_wrapped_identifier(self) -> bool {
         self.is_xtype(Type::Identifier)
     }
-
+    #[inline(always)]
     pub fn is_pair(self) -> bool {
         self.is_xtype(Type::Pair)
     }
-
+    #[inline(always)]
     pub fn is_extended_pair(self) -> bool {
         self.is_xtype(Type::Pair) && self.object_header().is_extended_pair()
     }
-
+    #[inline(always)]
     pub fn is_vector(self) -> bool {
         self.is_xtype(Type::Vector)
     }
-
+    #[inline(always)]
     pub fn is_syntax(self) -> bool {
         self.is_xtype(Type::Syntax)
     }
-
+    #[inline(always)]
     pub fn is_synrules(self) -> bool {
         self.is_xtype(Type::Synrules)
     }
-
+    #[inline(always)]
     pub fn syntax_rules(self) -> Handle<SyntaxRules> {
         assert!(self.is_xtype(Type::Synrules));
         unsafe { std::mem::transmute(self.0.ptr) }
     }
-
+    #[inline(always)]
     pub fn is_module(self) -> bool {
         self.is_xtype(Type::Module)
     }
-
+    #[inline(always)]
     pub fn is_macro(self) -> bool {
         self.is_xtype(Type::Macro)
     }
-
+    #[inline(always)]
     pub fn is_string(self) -> bool {
         self.is_xtype(Type::Str)
     }
-
+    #[inline(always)]
     pub fn is_symbol(self) -> bool {
         self.is_xtype(Type::Symbol)
     }
-
+    #[inline(always)]
     pub fn is_lvar(self) -> bool {
         self.is_xtype(Type::LVar)
     }
-
+    #[inline(always)]
     pub fn object_header(self) -> ObjectHeader {
         debug_assert!(self.is_object());
         unsafe {
@@ -664,17 +663,17 @@ impl Value {
             (ptr as *const ObjectHeader).read()
         }
     }
-
+    #[inline(always)]
     pub fn lvar(self) -> Handle<LVar> {
         debug_assert!(self.is_xtype(Type::LVar));
         unsafe { std::mem::transmute(self.0.ptr) }
     }
-
+    #[inline(always)]
     pub fn syntax(self) -> Handle<Syntax> {
         debug_assert!(self.is_xtype(Type::Syntax));
         unsafe { std::mem::transmute(self.0.ptr) }
     }
-
+    #[inline(always)]
     pub fn strsym<'a>(&self) -> &'a str {
         debug_assert!(self.is_xtype(Type::Str) || self.is_xtype(Type::Symbol));
         if self.is_string() {
@@ -737,66 +736,66 @@ impl Value {
             .cdr()
             .car()
     }
-
+    #[inline(always)]
     pub fn is_reader_reference(self) -> bool {
         self.is_xtype(Type::ReaderReference)
     }
-
+    #[inline(always)]
     pub fn is_reader_reference_realized(self) -> bool {
         self.is_xtype(Type::ReaderReference) && !self.reader_reference().value.is_undefined()
     }
-
+    #[inline(always)]
     pub fn reader_reference(self) -> Handle<ReaderReference> {
         debug_assert!(self.is_xtype(Type::ReaderReference));
         unsafe { std::mem::transmute(self) }
     }
-
+    #[inline(always)]
     pub fn to_bool(self) -> bool {
         !self.is_false() && !self.is_empty()
     }
-
+    #[inline(always)]
     pub fn is_procedure(self) -> bool {
         self.is_xtype(Type::Procedure)
             || self.is_xtype(Type::NativeProcedure)
             || self.is_xtype(Type::ClosedNativeProcedure)
     }
-
+    #[inline(always)]
     pub fn is_native_procedure(self) -> bool {
         self.is_xtype(Type::NativeProcedure) || self.is_xtype(Type::ClosedNativeProcedure)
     }
-
+    #[inline(always)]
     pub fn is_closed_native_procedure(self) -> bool {
         self.is_xtype(Type::ClosedNativeProcedure)
     }
-
+    #[inline(always)]
     pub fn is_vm_procedure(self) -> bool {
         self.is_xtype(Type::Procedure)
     }
-
+    #[inline(always)]
     pub fn procedure(self) -> Handle<Procedure> {
         debug_assert!(self.is_procedure());
         unsafe { std::mem::transmute(self) }
     }
-
+    #[inline(always)]
     pub fn closed_native_procedure(self) -> Handle<ClosedNativeProcedure> {
         debug_assert!(self.is_closed_native_procedure());
         unsafe { std::mem::transmute(self) }
     }
-
+    #[inline(always)]
     pub fn native_procedure(self) -> Handle<NativeProcedure> {
         debug_assert!(self.is_native_procedure());
         unsafe { std::mem::transmute(self) }
     }
-
+    #[inline(always)]
     pub fn is_box(self) -> bool {
         self.is_xtype(Type::Box)
     }
-
+    #[inline(always)]
     pub fn r#box(self) -> Handle<Box> {
         debug_assert!(self.is_box());
         unsafe { std::mem::transmute(self) }
     }
-
+    #[inline(always)]
     pub fn box_ref(self) -> Value {
         debug_assert!(self.is_box());
         unsafe {
@@ -804,7 +803,7 @@ impl Value {
             b.value
         }
     }
-
+    #[inline(always)]
     pub fn box_set(self, value: Value) {
         debug_assert!(self.is_box());
         unsafe {
@@ -812,22 +811,22 @@ impl Value {
             b.value = value;
         }
     }
-
+    #[inline(always)]
     pub fn r#macro(self) -> Handle<Macro> {
         debug_assert!(self.is_macro());
         unsafe { std::mem::transmute(self) }
     }
-
+    #[inline(always)]
     pub fn is_number(self) -> bool {
         self.is_int32()
             || self.is_double()
             || (self.get_type() >= Type::BigNum && self.get_type() <= Type::Complex)
     }
-
+    #[inline(always)]
     pub fn is_bignum(self) -> bool {
         self.is_xtype(Type::BigNum)
     }
-
+    #[inline(always)]
     pub fn is_rational(self) -> bool {
         self.is_xtype(Type::Rational)
     }
@@ -843,7 +842,7 @@ impl Value {
     pub fn is_exact_real(self) -> bool {
         self.is_exact_integer() || self.is_rational()
     }
-
+    #[inline(always)]
     pub fn is_real(self) -> bool {
         self.is_exact_real() || self.is_double()
     }

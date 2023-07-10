@@ -1,10 +1,9 @@
-
 use std::ffi::CString;
 use std::mem::MaybeUninit;
 use std::ptr::*;
 
 use r7rs_parser::expr::NoIntern;
-use r7rs_parser::parser::{Parser, ParseError};
+use r7rs_parser::parser::{ParseError, Parser};
 use rsgc::prelude::Handle;
 use rsgc::thread::Thread;
 use rsgc::{
@@ -17,8 +16,8 @@ use crate::raise_exn;
 use crate::runtime::error::make_srcloc;
 use crate::vm::interpreter::apply;
 
-use super::list::{scm_reverse, scm_cons};
-use super::object::{Type, Str};
+use super::list::{scm_cons, scm_reverse};
+use super::object::Type;
 use super::string::make_string;
 use super::vector::make_bytevector;
 use super::{object::ObjectHeader, value::Value};
@@ -108,7 +107,6 @@ impl Object for Port {
 }
 
 impl Allocation for Port {}
-
 
 pub const SCM_PORT_TYPE_NAMED_FILE: u8 = 1;
 pub const SCM_PORT_TYPE_BYTEVECTOR: u8 = 2;
@@ -304,13 +302,16 @@ fn device_read(port: Handle<Port>, buf: &mut [u8], mark: i64) -> Result<isize, V
         return Ok(n);
     }
 
-
     let vect = port.handlers;
     let bv = port.bytes;
 
     let result = apply(
         vect.vector_ref(SCM_PORT_HANDLER_READ),
-        &[bv, Value::encode_int32(0), Value::encode_int32(buf.len() as i32)],
+        &[
+            bv,
+            Value::encode_int32(0),
+            Value::encode_int32(buf.len() as i32),
+        ],
     )?;
 
     if result.is_int32() {
@@ -359,7 +360,6 @@ fn device_write(port: Handle<Port>, mut buf: &[u8], mark: i64) -> Result<(), Val
         return Ok(());
     }
 
-
     let vect = port.handlers;
     let bv = port.bytes;
 
@@ -406,7 +406,6 @@ fn device_write(port: Handle<Port>, mut buf: &[u8], mark: i64) -> Result<(), Val
 
     Ok(())
 }
-
 
 fn device_set_mark(mut port: Handle<Port>, mark: i64) -> Result<(), Value> {
     if port.typ == SCM_PORT_TYPE_NAMED_FILE {
@@ -593,7 +592,6 @@ pub fn port_sync_port_position(port: Handle<Port>) -> Result<(), Value> {
 
     Ok(())
 }
-
 
 pub fn port_open_file(
     mut port: Handle<Port>,
@@ -868,7 +866,6 @@ pub fn port_flush_output(mut port: Handle<Port>) -> Result<(), Value> {
 
     Ok(())
 }
-
 
 pub fn port_discard_buffer(mut port: Handle<Port>) {
     if !port.buf.is_null() {
@@ -1287,19 +1284,14 @@ pub fn port_lookahead_utf8(mut port: Handle<Port>) -> Result<Value, Value> {
                 if code_length > 1 {
                     match port.typ {
                         SCM_PORT_TYPE_BYTEVECTOR => {
-                            if port.bytes.bytevector_len() as i64 - port.mark < code_length as i64
-                            {
+                            if port.bytes.bytevector_len() as i64 - port.mark < code_length as i64 {
                                 return hit_eof(port);
                             }
 
                             unsafe {
                                 libc::memcpy(
                                     utf8.as_mut_ptr().cast(),
-                                    port.bytes
-                                        .bytevector()
-                                        .as_ptr()
-                                        .add(port.mark as _)
-                                        .cast(),
+                                    port.bytes.bytevector().as_ptr().add(port.mark as _).cast(),
                                     code_length,
                                 );
                             }
@@ -1452,9 +1444,7 @@ pub fn port_get_utf8(port: Handle<Port>) -> Result<Value, Value> {
                         match port.error_handling_mode {
                             SCM_PORT_ERROR_HANDLING_MODE_IGNORE => return Ok(Value::eof_object()),
                             SCM_PORT_ERROR_HANDLING_MODE_REPLACE => {
-                                return Ok(Value::encode_char(
-                                    char::from_u32(0xFFFD).unwrap(),
-                                ));
+                                return Ok(Value::encode_char(char::from_u32(0xFFFD).unwrap()));
                             }
                             _ => {
                                 let srcloc =
@@ -1796,11 +1786,7 @@ pub fn port_get_bytevector(port: Handle<Port>) -> Value {
         let mut bv = make_bytevector(Thread::current(), n as _);
 
         unsafe {
-            libc::memcpy(
-                bv.as_mut_ptr().cast(),
-                port.buf_head.cast(),
-                n,
-            );
+            libc::memcpy(bv.as_mut_ptr().cast(), port.buf_head.cast(), n);
         }
 
         bv.into()
@@ -1816,11 +1802,7 @@ pub fn port_extract_bytevector(mut port: Handle<Port>) -> Value {
         let mut bv = make_bytevector(Thread::current(), n as _);
 
         unsafe {
-            libc::memcpy(
-                bv.as_mut_ptr().cast(),
-                port.buf_head.cast(),
-                n,
-            );
+            libc::memcpy(bv.as_mut_ptr().cast(), port.buf_head.cast(), n);
             libc::free(port.buf.cast());
         }
 
@@ -1901,9 +1883,7 @@ pub fn port_lookahead_char(port: Handle<Port>) -> Result<Value, Value> {
     }
 
     match ch.get_char() as u32 {
-        SCM_PORT_UCS4_CR | SCM_PORT_UCS4_LS | SCM_PORT_UCS4_NEL => {
-            Ok(Value::encode_char('\n'))
-        }
+        SCM_PORT_UCS4_CR | SCM_PORT_UCS4_LS | SCM_PORT_UCS4_NEL => Ok(Value::encode_char('\n')),
         _ => Ok(ch),
     }
 }
@@ -1938,9 +1918,7 @@ pub fn port_get_char(port: Handle<Port>) -> Result<Value, Value> {
     }
 
     match ch.get_char() as u32 {
-        SCM_PORT_UCS4_CR | SCM_PORT_UCS4_LS | SCM_PORT_UCS4_NEL => {
-            Ok(Value::encode_char('\n'))
-        }
+        SCM_PORT_UCS4_CR | SCM_PORT_UCS4_LS | SCM_PORT_UCS4_NEL => Ok(Value::encode_char('\n')),
         _ => Ok(ch),
     }
 }
@@ -1986,7 +1964,6 @@ pub fn port_position(port: Handle<Port>) -> Result<i64, Value> {
         let vect = port.handlers;
 
         if vect.vector_ref(SCM_PORT_HANDLER_TEXTUAL).is_true() {
-            
             let token = Value::encode_int32(port.mark as _);
 
             let _ = apply(vect.vector_ref(SCM_PORT_HANDLER_GET_POS), &[token])?;
@@ -2117,7 +2094,7 @@ pub fn port_puts(port: Handle<Port>, s: &str) -> Result<(), Value> {
     Ok(())
 }
 
-pub fn port_put_string(port: Handle<Port>, s: Handle<Str>) -> Result<(), Value> {
+pub fn port_put_string(port: Handle<Port>, s: &str) -> Result<(), Value> {
     if port.transcoder.is_true() || port.transcoder.is_false() {
         return port_puts(port, &s);
     } else {
@@ -2184,35 +2161,34 @@ pub fn port_read(mut port: Handle<Port>) -> Result<Value, Value> {
                 Ok(expr) => expr,
                 Err(e) => match e {
                     ParseError::Syntax(pos, err) => {
-                        let srcloc = make_srcloc(port.name, pos.line as _, pos.col as _, port_position(port)? as _);
+                        let srcloc = make_srcloc(
+                            port.name,
+                            pos.line as _,
+                            pos.col as _,
+                            port_position(port)? as _,
+                        );
 
-                        return raise_exn!(
-                            FailRead,
-                            &[srcloc],
-                            "syntax error: {}",
-                            err 
-                        )
+                        return raise_exn!(FailRead, &[srcloc], "syntax error: {}", err);
                     }
                     ParseError::Lexical(pos, err) => {
-                        let srcloc = make_srcloc(port.name, pos.line as _, pos.col as _, port_position(port)? as _);
+                        let srcloc = make_srcloc(
+                            port.name,
+                            pos.line as _,
+                            pos.col as _,
+                            port_position(port)? as _,
+                        );
 
-                        return raise_exn!(
-                            FailRead,
-                            &[srcloc],
-                            "lexical error: {}",
-                            err 
-                        )
+                        return raise_exn!(FailRead, &[srcloc], "lexical error: {}", err);
                     }
-                }
+                },
             };
 
-           
             let val = r7rs_to_value(Thread::current(), port.name, &expr);
             toplevel = scm_cons(Thread::current(), val, toplevel);
         }
 
         let toplevel = scm_reverse(Thread::current(), toplevel);
-        
+
         port.parsed = toplevel;
     }
 
@@ -2225,7 +2201,6 @@ pub fn port_read(mut port: Handle<Port>) -> Result<Value, Value> {
         Ok(ret)
     }
 }
-
 
 pub fn cnvt_ucs4_to_utf8(ucs4: u32, utf8: &mut [u8]) -> usize {
     if ucs4 < 0x80 {
@@ -2359,4 +2334,3 @@ pub fn cnvt_utf8_to_ucs4(utf8: &[u8], ucs4: &mut u32) -> i32 {
     }
     return -1;
 }
-

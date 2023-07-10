@@ -1,8 +1,7 @@
 use rsgc::{prelude::Handle, system::arraylist::ArrayList, thread::Thread};
 
 use super::{
-    cenv_copy, cenv_lookup, cenv_toplevelp, is_global_eq, make_iform, IForm, LVar, Let, LetScope,
-    List, Seq,
+    cenv_copy, cenv_lookup, cenv_toplevelp, make_iform, IForm, LVar, Let, LetScope, List, Seq,
 };
 use crate::{
     compaux::{
@@ -139,7 +138,7 @@ pub fn pass1(program: Value, cenv: Value) -> Result<Handle<IForm>, Value> {
 
             GlobalCall::Macro(m) => {
                 let v = apply(m.r#macro().transformer, &[program, cenv])?;
-           
+
                 let v = pass1(v, cenv)?;
 
                 Ok(v)
@@ -177,7 +176,7 @@ pub fn pass1(program: Value, cenv: Value) -> Result<Handle<IForm>, Value> {
             h if h.is_macro() => {
                 let transformer = h.r#macro().transformer;
                 let res = apply(transformer, &[program, cenv])?;
-          
+
                 pass1(res, cenv)
             }
 
@@ -765,7 +764,7 @@ pub fn define_syntax() {
                 name_transformer.set_cdr(trans.car());
                 trans = trans.cdr();
             });
-           
+
             pass1_body(body, newenv)
         } else {
             Err(make_string(Thread::current(), "Invalid syntax: letrec-syntax").into())
@@ -936,7 +935,6 @@ pub fn define_syntax() {
         if scm_length(form) == Some(3) {
             let name = form.cadr();
             let expr = form.caddr();
-
             let transformer = eval_macro_rhs("define-syntax", expr, cenv)?; // apply(super::compile(expr, cenv)?, &[])?;
 
             let id = if name.is_wrapped_identifier() {
@@ -945,13 +943,14 @@ pub fn define_syntax() {
                 scm_make_identifier(name, Some(cenv_module(cenv)), Value::encode_null_value())
             };
 
-            /* if !transformer.is_macro() {
-                return Err(make_string(
-                    Thread::current(),
-                    &format!("define-syntax expects syntax transformer"),
-                )
-                .into());
-            }*/
+            if !transformer.is_macro() {
+                return raise_exn!(
+                    Fail,
+                    &[],
+                    "define-syntax: transformer must be a macro, got: {}",
+                    transformer
+                );
+            }
 
             scm_insert_binding(
                 id.module.module(),
@@ -970,33 +969,6 @@ pub fn define_syntax() {
             .into())
         }
     });
-
-    /*define_syntax!("define-syntax-rules", None, form, cenv, {
-        let name = form.cadr();
-        let literals = form.caddr();
-        let rules = form.cdddr();
-        let sr = scm_compile_syntax_rules(
-            name,
-            form,
-            Value::encode_bool_value(true),
-            literals,
-            rules,
-            cenv_module(cenv),
-            cenv,
-        )?;
-        let id = if name.is_wrapped_identifier() {
-            rename_toplevel_identifier(name.identifier())
-        } else {
-            scm_make_identifier(name, Some(cenv_module(cenv)), Value::encode_null_value())
-        };
-        scm_insert_syntax_rule_binding(
-            id.module.module(),
-            scm_unwrap_syntax(id.into(), false).symbol(),
-            sr.syntax_rules(),
-        )?;
-
-        Ok(make_iform(IForm::Const(Value::encode_undefined_value())))
-    });*/
 }
 
 pub fn ensure_module(thing: Value, name: Value, _create: bool) -> Result<Handle<Module>, Value> {
@@ -1199,7 +1171,7 @@ fn pass1_body_rec(
                         )?;*/
 
                         let expanded = apply(head.r#macro().transformer, &[exprs.car(), cenv])?;
-                       
+
                         return pass1_body_rec(
                             scm_list_star(Thread::current(), &[expanded, rest]),
                             mframe,
@@ -1304,7 +1276,7 @@ fn pass1_body_rec(
                             if gloc.value.is_macro() {
                                 let expanded =
                                     apply(gloc.value.r#macro().transformer, &[exprs.car(), cenv])?;
-                                
+
                                 return pass1_body_rec(
                                     scm_list_star(Thread::current(), &[expanded, rest]),
                                     mframe,

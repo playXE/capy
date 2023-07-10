@@ -2,12 +2,12 @@
 use std::mem::MaybeUninit;
 use std::ops::Index;
 use std::ptr::null_mut;
-use std::sync::atomic::{AtomicU64, Ordering, AtomicBool, AtomicI32};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 
 use once_cell::sync::Lazy;
 use rsgc::heap::heap::heap;
 use rsgc::heap::root_processor::SimpleRoot;
-use rsgc::prelude::{Handle, Object, Allocation};
+use rsgc::prelude::{Allocation, Handle, Object};
 use rsgc::system::arraylist::ArrayList;
 use rsgc::thread::Thread;
 
@@ -34,6 +34,15 @@ use crate::runtime::value::Value;
 use self::callframe::CallFrame;
 #[repr(C)]
 pub struct VM {
+    pub(crate) sp: *mut Value,
+    pub(crate) ip: *const u8,
+    /// Trampoline from native to Scheme support
+    pub(crate) tail_rator: Value,
+    pub(crate) tail_rands: ArrayList<Value>,
+    pub(crate) top_call_frame: *mut CallFrame,
+    pub(crate) top_entry_frame: *mut CallFrame,
+    pub(crate) prev_top_call_frame: *mut CallFrame,
+    pub(crate) prev_top_entry_frame: *mut CallFrame,
     thread: &'static mut Thread,
     state: i32,
     vmlock: RawMutex,
@@ -42,20 +51,13 @@ pub struct VM {
     thunk: Value,
     pub(crate) result: Value,
     result_exception: Value,
-    pub(crate) sp: *mut Value,
+
     pub(crate) stack: Box<[Value]>,
     pub(crate) module: Option<Handle<Module>>,
     pub(crate) entry: u64,
-    /// Trampoline from native to Scheme support
-    pub(crate) tail_rator: Value,
-    pub(crate) tail_rands: ArrayList<Value>,
-    pub(crate) top_call_frame: *mut CallFrame,
-    pub(crate) top_entry_frame: *mut CallFrame,
-    pub(crate) prev_top_call_frame: *mut CallFrame,
-    pub(crate) prev_top_entry_frame: *mut CallFrame,
+
     pub(crate) winders: Option<Handle<Winder>>,
     pub(crate) vmid: i32,
-    
 }
 
 impl VM {
@@ -111,7 +113,7 @@ impl VM {
             }
 
             winders = winder.next;
-        } 
+        }
 
         None
     }
@@ -127,12 +129,19 @@ impl Object for VM {
         self.tail_rands.trace(visitor);
         self.tail_rator.trace(visitor);
         self.winders.trace(visitor);
-        visitor.visit_conservative(self.stack.as_ptr().cast(), self.stack.len());
+        let offset = self.sp as usize - self.stack.as_ptr() as usize;
+
+        visitor.visit_conservative(
+            unsafe { self.stack.as_ptr().add(offset / 8).cast() },
+            self.stack.len() - offset / 8,
+        );
     }
 }
 
 #[thread_local]
 static mut VM: MaybeUninit<VM> = MaybeUninit::uninit();
+
+pub type VMType = VM;
 
 pub struct Runtime {
     threads: Vec<*mut VM>,
@@ -193,6 +202,7 @@ pub fn scm_init_vm() {
             prev_top_call_frame: null_mut(),
             top_entry_frame: null_mut(),
             winders: None,
+            ip: null_mut(),
             vmid: THREAD_ID.fetch_add(1, Ordering::AcqRel),
         });
     }
@@ -203,8 +213,6 @@ pub fn scm_init_vm() {
         rt.rlock.lock(true);
         rt.threads.push(VM.assume_init_mut());
         rt.rlock.unlock();
-
-
     }
 }
 
@@ -225,8 +233,10 @@ pub fn scm_set_current_module(module: Option<Handle<Module>>) {
 
 pub mod callframe;
 pub mod interpreter;
-pub mod stacktrace;
+pub mod jit;
 pub mod setjmp;
+pub mod stacktrace;
+//#[cfg(llint)]
 //pub mod llint;
 
 /// A simple counter used to identify different VM entrypoints.
@@ -253,12 +263,12 @@ pub enum InherentSymbol {
     RBrack,
     Dot,
 
-    Count
+    Count,
 }
 
 pub struct InherentSymbols {
     symbols: [Value; InherentSymbol::Count as usize],
-}   
+}
 
 impl Index<InherentSymbol> for InherentSymbols {
     type Output = Value;
@@ -284,9 +294,7 @@ impl InherentSymbols {
         symbols[InherentSymbol::LBrack as usize] = "[".intern().into();
         symbols[InherentSymbol::RBrack as usize] = "]".intern().into();
         symbols[InherentSymbol::Dot as usize] = ".".intern().into();
-        InherentSymbols {
-            symbols
-        }
+        InherentSymbols { symbols }
     }
 }
 
@@ -301,10 +309,10 @@ pub struct Winder {
     pub(crate) before: Value,
     pub(crate) after: Value,
     pub(crate) handlers: Option<Value>,
-    pub(crate) next: Option<Handle<Self>>
+    pub(crate) next: Option<Handle<Self>>,
 }
 
-impl Object for Winder {  
+impl Object for Winder {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.before.trace(visitor);
         self.after.trace(visitor);
@@ -324,7 +332,6 @@ impl PartialEq for Winder {
 impl Eq for Winder {}
 
 impl Winder {
-
     pub fn len(&self) -> usize {
         let mut ws = Some(self);
         let mut n = 0;

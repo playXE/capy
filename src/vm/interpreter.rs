@@ -1,4 +1,5 @@
 #![allow(unused_variables, unused_assignments, unused_labels)]
+use once_cell::sync::Lazy;
 use rsgc::prelude::Handle;
 use rsgc::system::arraylist::ArrayList;
 use std::cmp::Ordering;
@@ -6,6 +7,7 @@ use std::intrinsics::{likely, unlikely};
 use std::mem::{size_of, transmute};
 use std::panic::AssertUnwindSafe;
 use std::ptr::{null, null_mut};
+use std::sync::atomic::AtomicBool;
 
 use super::callframe::CallFrame;
 use super::{scm_current_module, scm_vm, VM};
@@ -15,18 +17,61 @@ use crate::compaux::{
 use crate::compile::{compile, make_cenv};
 use crate::op::Opcode;
 use crate::runtime::arith::*;
-use crate::runtime::error::{wrong_contract, wrong_count};
+use crate::runtime::error::{out_of_range, scm_raise_proc, wrong_contract, wrong_count};
 use crate::runtime::fun::{get_proc_name, make_closed_procedure};
-use crate::runtime::list::{scm_cons, scm_is_list};
-use crate::runtime::module::{scm_make_binding, scm_user_module, SCM_BINDING_CONST};
+use crate::runtime::list::{scm_cons, scm_is_list, scm_list};
+use crate::runtime::module::{
+    scm_find_binding, scm_internal_module, scm_make_binding, scm_user_module, SCM_BINDING_CONST,
+};
 use crate::runtime::object::{
     check_arity, make_box, ClosedNativeProcedure, CodeBlock, Module, NativeProcedure, Procedure,
     Type, MAX_ARITY,
 };
 use crate::runtime::string::make_string;
+use crate::runtime::symbol::Intern;
 use crate::runtime::value::Value;
 use crate::runtime::vector::{make_vector, make_vector_from_slice};
 use crate::vm::stacktrace::StackTrace;
+
+#[cfg(feature = "profile-opcodes")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct OpcodeProfile {
+    count: u64,
+    time: u64,
+}
+
+#[cfg(feature = "profile-opcodes")]
+static mut PROFILE: [OpcodeProfile; Opcode::Count as usize] =
+    [OpcodeProfile { count: 0, time: 0 }; Opcode::Count as usize];
+
+#[cfg(feature = "profile-opcodes")]
+pub fn print_profiles() {
+    let mut fmt = vec![];
+
+    let mut profiles = unsafe { PROFILE };
+
+    for (i, profile) in profiles.iter_mut().enumerate() {
+        if profile.count == 0 {
+            continue;
+        }
+
+        let opcode = unsafe { std::mem::transmute::<_, Opcode>(i as u8) };
+
+        let time = profile.time;
+        let count = profile.count;
+        let avg = time as f64 / count as f64;
+
+        fmt.push((opcode, avg, count));
+    }
+
+    fmt.sort_by(|a, b| b.2.cmp(&a.2));
+
+    for (opcode, avg, count) in fmt {
+        if count != 0 {
+            println!("{:?}: avg {} ns, {} times", opcode, avg, count);
+        }
+    }
+}
 
 /// Virtual machine interpreter loop.
 ///
@@ -36,26 +81,23 @@ use crate::vm::stacktrace::StackTrace;
 /// - `vm` is the virtual machine.
 /// - `sp` is the current stack pointer.
 /// - stack grows from high address to low address.
-pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Result<Value, Value> {
+pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
     // actual stack pointer.
-    let mut sp = cfr.cast::<Value>();
-    let mut cfr = cfr.cast::<CallFrame>();
-    let mut pc;
+    let mut sp = vm.sp;
+    let mut cfr = vm.top_entry_frame;
+    let mut pc = std::ptr::null();
 
     macro_rules! pop {
         () => {{
             debug_assert!(sp < cfr.cast::<Value>());
             let val = sp.read();
-            sp.write(Value::encode_empty_value());
             sp = sp.add(1);
 
             val
         }};
 
         (times $n: expr) => {{
-            for _ in $n {
-                pop!();
-            }
+            sp = sp.add($n);
         }};
     }
 
@@ -106,13 +148,57 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
     }
 
     'eval: loop {
+        vm.sp = sp;
+        vm.top_call_frame = cfr;
         vm.thread.safepoint();
+        macro_rules! throw {
+            ($err: expr) => {
+
+                match $err {
+                    Ok(_) => unreachable!(),
+                    Err(err) => {
+                        let caller = (*cfr).caller;
+                        let return_pc = (*cfr).return_pc;
+                        let arg_start = (*cfr)
+                            .args
+                            .as_mut_ptr()
+                            .add((*cfr).argc.get_int32() as usize);
+
+                        let mut cursor = arg_start;
+                        cursor = cursor.sub(1);
+                        cursor.write(err);
+                        sp = cursor;
+                        push!(cfr CallFrame {
+                            return_pc,
+                            caller,
+                            code_block: Value::encode_undefined_value(),
+                            argc: Value::encode_int32(1),
+                            callee: scm_raise_proc(),
+                            args: []
+                        });
+
+                        cfr = sp.cast();
+                        continue 'eval;
+                    }
+                }
+            };
+        }
+
+        macro_rules! catch {
+            ($val: expr) => {
+                match $val {
+                    Ok(val) => val,
+                    Err(err) => throw!(Err::<(), Value>(err)),
+                }
+            };
+        }
+
         let callee = (*cfr).callee;
 
         if callee.is_xtype(Type::Procedure) {
             let proc: Handle<Procedure> = transmute(callee);
             (*cfr).code_block = Value::encode_object_value(proc.code);
-            pc = proc.code.start_ip().add(entry_pc);
+            pc = proc.code.start_ip().add(0);
         } else if callee.is_native_procedure() {
             // safety of transmute: NativeProcedure and ClosedProcedure have the same internal layout
             let proc: Handle<NativeProcedure> = transmute(callee);
@@ -122,13 +208,14 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                 proc.maxa,
                 (*cfr).argc.get_int32() as _,
             )) {
-                return wrong_count(
+                println!("{}", get_proc_name(proc.into()).unwrap_or("()"));
+                throw!(wrong_count::<()>(
                     get_proc_name(proc.into()).unwrap_or("()"),
                     proc.mina as _,
                     proc.maxa as _,
                     (*cfr).argc.get_int32() as _,
                     (*cfr).arguments(),
-                );
+                ));
             }
             vm.sp = sp;
             vm.top_call_frame = cfr;
@@ -145,11 +232,6 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                 leave_frame!(=> Err(result.value()))
             } else {
                 pc = null();
-                // TODO: tail-call
-                // 1) rator and rands are in special VM vector
-                // 2) build a new call-frame
-                // 3) again enter the loop
-                //
                 let caller = (*cfr).caller;
                 let return_pc = (*cfr).return_pc;
 
@@ -222,7 +304,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                 Err(Value::encode_int32(0))
             }
 
-            return not_a_function(vm, callee);
+            throw!(not_a_function(vm, callee));
         }
 
         // `pc` is initialized here
@@ -270,13 +352,28 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
             }
 
             let op = readt!(Opcode);
-            
+            let opcode = op;
+            #[cfg(feature = "profile-opcodes")]
+            {
+                PROFILE[op as usize].count += 1;
+            }
+
+            #[cfg(feature = "profile-opcodes")]
+            let start = std::time::Instant::now();
             match op {
                 Opcode::NoOp => {}
+                Opcode::NoOp3 => {
+                    read2!();
+                }
+                Opcode::NoOp5 => {
+                    read4!();
+                }
                 Opcode::Enter
                 | Opcode::EnterCompiling
                 | Opcode::EnterBlacklisted
                 | Opcode::EnterJit => {
+                    vm.sp = sp;
+                    vm.top_call_frame = cfr;
                     vm.mutator().safepoint();
                     // TODO: Check for JIT trampoline
                 }
@@ -286,18 +383,6 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                 Opcode::Popn => {
                     let n = read2!();
                     sp = sp.add(n as usize);
-                }
-                Opcode::Dup => {
-                    let val = pop!();
-                    push!(val);
-                    push!(val);
-                }
-
-                Opcode::Swap => {
-                    let val1 = pop!();
-                    let val2 = pop!();
-                    push!(val1);
-                    push!(val2);
                 }
 
                 Opcode::LdArg => {
@@ -354,308 +439,31 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                 }
 
                 Opcode::PushConstant | Opcode::PushProcedure => {
-                    let ix = read2!();
+                    let ix = read4!();
 
-                    let val = code_block!().literals.vector_ref(ix as _);
+                    let val = code_block!()
+                        .literals
+                        .vector()
+                        .data
+                        .as_ptr()
+                        .add(ix as usize)
+                        .read();
+                    push!(val);
+                }
+                Opcode::StackGet => {
+                    let off = read2!();
+
+                    let val = cfr.cast::<Value>().sub(off as usize + 1).read();
+                    debug_assert!(cfr.cast::<Value>().sub(off as usize + 1) < cfr.cast::<Value>());
                     push!(val);
                 }
 
-                Opcode::Add => {
-                    let y = pop!();
-                    let x = pop!();
-
-                    if x.is_int32() && y.is_int32() {
-                        if let Some(res) = x.get_int32().checked_add(y.get_int32()) {
-                            push!(Value::encode_int32(res));
-                            continue 'interp;
-                        }
-                    }
-
-                    if x.is_double() && y.is_double() {
-                        push!(Value::encode_untrusted_f64_value(
-                            x.get_double() + y.get_double()
-                        ));
-                        continue 'interp;
-                    }
-
-                    if unlikely(!scm_is_number(x)) {
-                        return wrong_contract("+", "number?", 0, 2, &[x, y]);
-                    }
-
-                    if unlikely(!scm_is_number(y)) {
-                        return wrong_contract("+", "number?", 1, 2, &[x, y]);
-                    }
-
-                    let res = arith_add(vm, x, y).unwrap();
-
-                    push!(res);
-                }
-
-                Opcode::Sub => {
-                    let y = pop!();
-                    let x = pop!();
-
-                    if x.is_int32() && y.is_int32() {
-                        if let Some(res) = x.get_int32().checked_sub(y.get_int32()) {
-                            push!(Value::encode_int32(res));
-                            continue 'interp;
-                        }
-                    }
-
-                    if x.is_double() && y.is_double() {
-                        push!(Value::encode_untrusted_f64_value(
-                            x.get_double() - y.get_double()
-                        ));
-                        continue 'interp;
-                    }
-
-                    if unlikely(!scm_is_number(x)) {
-                        return wrong_contract("-", "number?", 0, 2, &[x, y]);
-                    }
-
-                    if unlikely(!scm_is_number(y)) {
-                        return wrong_contract("-", "number?", 1, 2, &[x, y]);
-                    }
-
-                    let res = arith_sub(vm, x, y).unwrap();
-
-                    push!(res);
-                }
-
-                Opcode::Div => {
-                    let y = pop!();
-                    let x = pop!();
-
-                    if x.is_int32() && y.is_int32() {
-                        if let Some(res) = x.get_int32().checked_div(y.get_int32()) {
-                            push!(Value::encode_int32(res));
-                            continue 'interp;
-                        }
-                    }
-
-                    if x.is_double() && y.is_double() {
-                        push!(Value::encode_untrusted_f64_value(
-                            x.get_double() / y.get_double()
-                        ));
-                        continue 'interp;
-                    }
-
-                    if unlikely(!scm_is_number(x)) {
-                        return wrong_contract("/", "number?", 0, 2, &[x, y]);
-                    }
-
-                    if unlikely(!scm_is_number(y)) {
-                        return wrong_contract("/", "number?", 1, 2, &[x, y]);
-                    }
-                    let res = arith_div(vm, x, y).unwrap();
-
-                    push!(res);
-                }
-
-                Opcode::Mul => {
-                    let y = pop!();
-                    let x = pop!();
-
-                    if x.is_int32() && y.is_int32() {
-                        if let Some(res) = x.get_int32().checked_mul(y.get_int32()) {
-                            push!(Value::encode_int32(res));
-                            continue 'interp;
-                        }
-                    }
-
-                    if x.is_double() && y.is_double() {
-                        push!(Value::encode_untrusted_f64_value(
-                            x.get_double() * y.get_double()
-                        ));
-                        continue 'interp;
-                    }
-
-                    if unlikely(!scm_is_number(x)) {
-                        return wrong_contract("*", "number?", 0, 2, &[x, y]);
-                    }
-
-                    if unlikely(!scm_is_number(y)) {
-                        return wrong_contract("*", "number?", 1, 2, &[x, y]);
-                    }
-
-                    let res = arith_mul(vm, x, y).unwrap();
-
-                    push!(res);
-                }
-
-                Opcode::NumberEqual => {
-                    let y = pop!();
-                    let x = pop!();
-
-                    if x.is_int32() && y.is_int32() {
-                        push!(Value::encode_bool_value(x.get_int32() == y.get_int32()));
-                        continue 'interp;
-                    }
-
-                    if x.is_double() && y.is_double() {
-                        push!(Value::encode_bool_value(x.get_double() == y.get_double()));
-                        continue 'interp;
-                    }
-
-                    if unlikely(!scm_is_real(x)) {
-                        return wrong_contract("=", "number?", 0, 2, &[x, y]);
-                    }
-
-                    if unlikely(!scm_is_real(y)) {
-                        return wrong_contract("=", "number?", 1, 2, &[x, y]);
-                    }
-
-                    let res = scm_is_number_equal(x, y).unwrap();
-
-                    push!(res.into());
-                }
-
-                Opcode::Less => {
-                    let y = pop!();
-                    let x = pop!();
-
-                    if x.is_int32() && y.is_int32() {
-                        push!(Value::encode_bool_value(x.get_int32() < y.get_int32()));
-                        continue 'interp;
-                    }
-
-                    if x.is_double() && y.is_double() {
-                        push!(Value::encode_bool_value(x.get_double() < y.get_double()));
-                        continue 'interp;
-                    }
-
-                    if unlikely(!scm_is_number(x)) {
-                        return wrong_contract("<", "number?", 0, 2, &[x, y]);
-                    }
-
-                    if unlikely(!scm_is_number(y)) {
-                        return wrong_contract("<", "number?", 1, 2, &[x, y]);
-                    }
-
-                    let cmp = scm_n_compare(x, y).unwrap();
-
-                    match cmp {
-                        Ordering::Less => push!(Value::encode_bool_value(true)),
-                        _ => push!(Value::encode_bool_value(false)),
-                    }
-                }
-
-                Opcode::LessEqual => {
-                    let y = pop!();
-                    let x = pop!();
-
-                    if x.is_int32() && y.is_int32() {
-                        push!(Value::encode_bool_value(x.get_int32() <= y.get_int32()));
-                        continue 'interp;
-                    }
-
-                    if x.is_double() && y.is_double() {
-                        push!(Value::encode_bool_value(x.get_double() <= y.get_double()));
-                        continue 'interp;
-                    }
-
-                    if unlikely(!scm_is_number(x)) {
-                        return wrong_contract("<=", "number?", 0, 2, &[x, y]);
-                    }
-
-                    if unlikely(!scm_is_number(y)) {
-                        return wrong_contract("<=", "number?", 1, 2, &[x, y]);
-                    }
-
-                    let cmp = scm_n_compare(x, y).unwrap();
-
-                    match cmp {
-                        Ordering::Less | Ordering::Equal => push!(Value::encode_bool_value(true)),
-                        _ => push!(Value::encode_bool_value(false)),
-                    }
-                }
-
-                Opcode::Greater => {
-                    let y = pop!();
-                    let x = pop!();
-
-                    if x.is_int32() && y.is_int32() {
-                        push!(Value::encode_bool_value(x.get_int32() > y.get_int32()));
-                        continue 'interp;
-                    }
-
-                    if x.is_double() && y.is_double() {
-                        push!(Value::encode_bool_value(x.get_double() > y.get_double()));
-                        continue 'interp;
-                    }
-
-                    if unlikely(!scm_is_number(x)) {
-                        return wrong_contract(">", "number?", 0, 2, &[x, y]);
-                    }
-
-                    if unlikely(!scm_is_number(y)) {
-                        return wrong_contract(">", "number?", 1, 2, &[x, y]);
-                    }
-
-                    let cmp = scm_n_compare(x, y).unwrap();
-
-                    match cmp {
-                        Ordering::Greater => push!(Value::encode_bool_value(true)),
-                        _ => push!(Value::encode_bool_value(false)),
-                    }
-                }
-
-                Opcode::GreaterEqual => {
-                    let y = pop!();
-                    let x = pop!();
-
-                    if x.is_int32() && y.is_int32() {
-                        push!(Value::encode_bool_value(x.get_int32() >= y.get_int32()));
-                        continue 'interp;
-                    }
-
-                    if x.is_double() && y.is_double() {
-                        push!(Value::encode_bool_value(x.get_double() >= y.get_double()));
-                        continue 'interp;
-                    }
-
-                    if unlikely(!scm_is_number(x)) {
-                        return wrong_contract(">=", "number?", 0, 2, &[x, y]);
-                    }
-
-                    if unlikely(!scm_is_number(y)) {
-                        return wrong_contract(">=", "number?", 1, 2, &[x, y]);
-                    }
-
-                    let cmp = scm_n_compare(x, y).unwrap();
-
-                    match cmp {
-                        Ordering::Greater | Ordering::Equal => {
-                            push!(Value::encode_bool_value(true))
-                        }
-                        _ => push!(Value::encode_bool_value(false)),
-                    }
-                }
-
-                Opcode::Call => {
-                    let argc = read2!();
-                    let callee = pop!();
-
-                    push!(cfr CallFrame {
-                        return_pc: pc,
-                        caller: cfr,
-                        code_block: Value::encode_undefined_value(),
-                        argc: Value::encode_int32(argc as _),
-                        callee,
-                        args: []
-                    });
-
-                    cfr = sp.cast();
-                    sp = cfr.cast();
-                  
-                    if callee.is_vm_procedure() {
-                        (*cfr).code_block = callee.procedure().code.into();
-                        pc = callee.procedure().code.start_ip();
-
-                        continue 'interp;
-                    }
-                    
-                    continue 'eval;
+                Opcode::StackSet => {
+                    let off = read2!();
+                    let val = pop!();
+                    let slot = cfr.cast::<Value>().sub(off as usize + 1);
+                    debug_assert!(slot < cfr.cast::<Value>());
+                    slot.write(val);
                 }
 
                 Opcode::TailCall => {
@@ -696,48 +504,481 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     });
 
                     cfr = sp.cast();
-                    
+                    #[cfg(feature = "profile-opcodes")]
+                    {
+                        PROFILE[opcode as usize].time += start.elapsed().as_nanos() as u64;
+                    }
                     if callee.is_vm_procedure() {
                         (*cfr).code_block = callee.procedure().code.into();
                         pc = callee.procedure().code.start_ip();
                         continue 'interp;
                     }
 
-                    
+                    continue 'eval;
+                }
+
+                Opcode::Add => {
+                    let y = pop!();
+                    let x = pop!();
+
+                    if likely(x.is_int32() && y.is_int32()) {
+                        if let Some(res) = x.get_int32().checked_add(y.get_int32()) {
+                            push!(Value::encode_int32(res));
+                            #[cfg(feature = "profile-opcodes")]
+                            {
+                                PROFILE[opcode as usize].time += start.elapsed().as_nanos() as u64;
+                            }
+                            continue 'interp;
+                        }
+                    }
+
+                    if x.is_double() && y.is_double() {
+                        push!(Value::encode_untrusted_f64_value(
+                            x.get_double() + y.get_double()
+                        ));
+                        #[cfg(feature = "profile-opcodes")]
+                        {
+                            PROFILE[opcode as usize].time += start.elapsed().as_nanos() as u64;
+                        }
+                        continue 'interp;
+                    }
+
+                    if unlikely(!scm_is_number(x)) {
+                        #[cfg(feature = "profile-opcodes")]
+                        {
+                            PROFILE[opcode as usize].time += start.elapsed().as_nanos() as u64;
+                        }
+                        throw!(wrong_contract::<()>("+", "number?", 0, 2, &[x, y]));
+                    }
+
+                    if unlikely(!scm_is_number(y)) {
+                        #[cfg(feature = "profile-opcodes")]
+                        {
+                            PROFILE[opcode as usize].time += start.elapsed().as_nanos() as u64;
+                        }
+                        throw!(wrong_contract::<()>("+", "number?", 1, 2, &[x, y]));
+                    }
+
+                    let res = arith_add(vm, x, y).unwrap_unchecked();
+
+                    push!(res);
+                }
+
+                Opcode::Sub => {
+                    let y = pop!();
+                    let x = pop!();
+
+                    if likely(x.is_int32() && y.is_int32()) {
+                        if let Some(res) = x.get_int32().checked_sub(y.get_int32()) {
+                            push!(Value::encode_int32(res));
+                            #[cfg(feature = "profile-opcodes")]
+                            {
+                                PROFILE[opcode as usize].time += start.elapsed().as_nanos() as u64;
+                            }
+                            continue 'interp;
+                        }
+                    }
+
+                    if x.is_double() && y.is_double() {
+                        push!(Value::encode_untrusted_f64_value(
+                            x.get_double() - y.get_double()
+                        ));
+                        #[cfg(feature = "profile-opcodes")]
+                        {
+                            PROFILE[opcode as usize].time += start.elapsed().as_nanos() as u64;
+                        }
+                        continue 'interp;
+                    }
+
+                    if unlikely(!scm_is_number(x)) {
+                        #[cfg(feature = "profile-opcodes")]
+                        {
+                            PROFILE[opcode as usize].time += start.elapsed().as_nanos() as u64;
+                        }
+                        throw!(wrong_contract::<()>("-", "number?", 0, 2, &[x, y]))
+                    }
+
+                    if unlikely(!scm_is_number(y)) {
+                        #[cfg(feature = "profile-opcodes")]
+                        {
+                            PROFILE[opcode as usize].time += start.elapsed().as_nanos() as u64;
+                        }
+                        throw!(wrong_contract::<()>("-", "number?", 1, 2, &[x, y]))
+                    }
+
+                    let res = arith_sub(vm, x, y).unwrap_unchecked();
+
+                    push!(res);
+                }
+
+                Opcode::Div => {
+                    let y = pop!();
+                    let x = pop!();
+
+                    if likely(x.is_int32() && y.is_int32()) {
+                        if let Some(res) = x.get_int32().checked_div(y.get_int32()) {
+                            push!(Value::encode_int32(res));
+                            #[cfg(feature = "profile-opcodes")]
+                            {
+                                PROFILE[opcode as usize].time += start.elapsed().as_nanos() as u64;
+                            }
+                            continue 'interp;
+                        }
+                    }
+
+                    if x.is_double() && y.is_double() {
+                        push!(Value::encode_untrusted_f64_value(
+                            x.get_double() / y.get_double()
+                        ));
+                        #[cfg(feature = "profile-opcodes")]
+                        {
+                            PROFILE[opcode as usize].time += start.elapsed().as_nanos() as u64;
+                        }
+                        continue 'interp;
+                    }
+
+                    if unlikely(!scm_is_number(x)) {
+                        #[cfg(feature = "profile-opcodes")]
+                        {
+                            PROFILE[opcode as usize].time += start.elapsed().as_nanos() as u64;
+                        }
+                        throw!(wrong_contract::<()>("/", "number?", 0, 2, &[x, y]))
+                    }
+
+                    if unlikely(!scm_is_number(y)) {
+                        #[cfg(feature = "profile-opcodes")]
+                        {
+                            PROFILE[opcode as usize].time += start.elapsed().as_nanos() as u64;
+                        }
+                        throw!(wrong_contract::<()>("/", "number?", 1, 2, &[x, y]));
+                    }
+                    let res = arith_div(vm, x, y).unwrap_unchecked();
+
+                    push!(res);
+                }
+
+                Opcode::Mul => {
+                    let y = pop!();
+                    let x = pop!();
+
+                    if likely(x.is_int32() && y.is_int32()) {
+                        if let Some(res) = x.get_int32().checked_mul(y.get_int32()) {
+                            push!(Value::encode_int32(res));
+                            #[cfg(feature = "profile-opcodes")]
+                            {
+                                PROFILE[opcode as usize].time += start.elapsed().as_nanos() as u64;
+                            }
+                            continue 'interp;
+                        }
+                    }
+
+                    if x.is_double() && y.is_double() {
+                        push!(Value::encode_untrusted_f64_value(
+                            x.get_double() * y.get_double()
+                        ));
+                        #[cfg(feature = "profile-opcodes")]
+                        {
+                            PROFILE[opcode as usize].time += start.elapsed().as_nanos() as u64;
+                        }
+                        continue 'interp;
+                    }
+
+                    if unlikely(!scm_is_number(x)) {
+                        #[cfg(feature = "profile-opcodes")]
+                        {
+                            PROFILE[opcode as usize].time += start.elapsed().as_nanos() as u64;
+                        }
+                        throw!(wrong_contract::<()>("*", "number?", 0, 2, &[x, y]))
+                    }
+
+                    if unlikely(!scm_is_number(y)) {
+                        #[cfg(feature = "profile-opcodes")]
+                        {
+                            PROFILE[opcode as usize].time += start.elapsed().as_nanos() as u64;
+                        }
+                        throw!(wrong_contract::<()>("*", "number?", 1, 2, &[x, y]))
+                    }
+
+                    let res = arith_mul(vm, x, y).unwrap_unchecked();
+
+                    push!(res);
+                }
+
+                Opcode::NumberEqual => {
+                    let y = pop!();
+                    let x = pop!();
+
+                    if likely(x.is_int32() && y.is_int32()) {
+                        push!(Value::encode_bool_value(x.get_int32() == y.get_int32()));
+                        #[cfg(feature = "profile-opcodes")]
+                        {
+                            PROFILE[opcode as usize].time += start.elapsed().as_nanos() as u64;
+                        }
+                        continue 'interp;
+                    }
+
+                    if x.is_double() && y.is_double() {
+                        push!(Value::encode_bool_value(x.get_double() == y.get_double()));
+                        #[cfg(feature = "profile-opcodes")]
+                        {
+                            PROFILE[opcode as usize].time += start.elapsed().as_nanos() as u64;
+                        }
+                        continue 'interp;
+                    }
+
+                    if unlikely(!scm_is_real(x)) {
+                        #[cfg(feature = "profile-opcodes")]
+                        {
+                            PROFILE[opcode as usize].time += start.elapsed().as_nanos() as u64;
+                        }
+                        throw!(wrong_contract::<()>("=", "number?", 0, 2, &[x, y]))
+                    }
+
+                    if unlikely(!scm_is_real(y)) {
+                        #[cfg(feature = "profile-opcodes")]
+                        {
+                            PROFILE[opcode as usize].time += start.elapsed().as_nanos() as u64;
+                        }
+                        throw!(wrong_contract::<()>("=", "number?", 1, 2, &[x, y]))
+                    }
+
+                    let res = scm_is_number_equal(x, y).unwrap_unchecked();
+
+                    push!(res.into());
+                }
+
+                Opcode::Less => {
+                    let y = pop!();
+                    let x = pop!();
+
+                    if likely(x.is_int32() && y.is_int32()) {
+                        push!(Value::encode_bool_value(x.get_int32() < y.get_int32()));
+                        #[cfg(feature = "profile-opcodes")]
+                        {
+                            PROFILE[opcode as usize].time += start.elapsed().as_nanos() as u64;
+                        }
+                        continue 'interp;
+                    }
+
+                    if x.is_double() && y.is_double() {
+                        push!(Value::encode_bool_value(x.get_double() < y.get_double()));
+                        #[cfg(feature = "profile-opcodes")]
+                        {
+                            PROFILE[opcode as usize].time += start.elapsed().as_nanos() as u64;
+                        }
+                        continue 'interp;
+                    }
+
+                    if unlikely(!scm_is_number(x)) {
+                        #[cfg(feature = "profile-opcodes")]
+                        {
+                            PROFILE[opcode as usize].time += start.elapsed().as_nanos() as u64;
+                        }
+                        throw!(wrong_contract::<()>("<", "number?", 0, 2, &[x, y]));
+                    }
+
+                    if unlikely(!scm_is_number(y)) {
+                        #[cfg(feature = "profile-opcodes")]
+                        {
+                            PROFILE[opcode as usize].time += start.elapsed().as_nanos() as u64;
+                        }
+                        throw!(wrong_contract::<()>("<", "number?", 1, 2, &[x, y]));
+                    }
+
+                    let cmp = scm_n_compare(x, y).unwrap_unchecked();
+
+                    match cmp {
+                        Ordering::Less => push!(Value::encode_bool_value(true)),
+                        _ => push!(Value::encode_bool_value(false)),
+                    }
+                }
+
+                Opcode::LessEqual => {
+                    let y = pop!();
+                    let x = pop!();
+
+                    if likely(x.is_int32() && y.is_int32()) {
+                        #[cfg(feature = "profile-opcodes")]
+                        {
+                            PROFILE[opcode as usize].time += start.elapsed().as_nanos() as u64;
+                        }
+                        push!(Value::encode_bool_value(x.get_int32() <= y.get_int32()));
+                        continue 'interp;
+                    }
+
+                    if x.is_double() && y.is_double() {
+                        #[cfg(feature = "profile-opcodes")]
+                        {
+                            PROFILE[opcode as usize].time += start.elapsed().as_nanos() as u64;
+                        }
+                        push!(Value::encode_bool_value(x.get_double() <= y.get_double()));
+                        continue 'interp;
+                    }
+
+                    if unlikely(!scm_is_number(x)) {
+                        #[cfg(feature = "profile-opcodes")]
+                        {
+                            PROFILE[opcode as usize].time += start.elapsed().as_nanos() as u64;
+                        }
+                        throw!(wrong_contract::<()>("<=", "number?", 0, 2, &[x, y]));
+                    }
+
+                    if unlikely(!scm_is_number(y)) {
+                        #[cfg(feature = "profile-opcodes")]
+                        {
+                            PROFILE[opcode as usize].time += start.elapsed().as_nanos() as u64;
+                        }
+                        throw!(wrong_contract::<()>("<=", "number?", 1, 2, &[x, y]));
+                    }
+
+                    let cmp = scm_n_compare(x, y).unwrap_unchecked();
+
+                    match cmp {
+                        Ordering::Less | Ordering::Equal => push!(Value::encode_bool_value(true)),
+                        _ => push!(Value::encode_bool_value(false)),
+                    }
+                }
+
+                Opcode::Greater => {
+                    let y = pop!();
+                    let x = pop!();
+
+                    if likely(x.is_int32() && y.is_int32()) {
+                        #[cfg(feature = "profile-opcodes")]
+                        {
+                            PROFILE[opcode as usize].time += start.elapsed().as_nanos() as u64;
+                        }
+                        push!(Value::encode_bool_value(x.get_int32() > y.get_int32()));
+                        continue 'interp;
+                    }
+
+                    if x.is_double() && y.is_double() {
+                        #[cfg(feature = "profile-opcodes")]
+                        {
+                            PROFILE[opcode as usize].time += start.elapsed().as_nanos() as u64;
+                        }
+                        push!(Value::encode_bool_value(x.get_double() > y.get_double()));
+                        continue 'interp;
+                    }
+
+                    if unlikely(!scm_is_number(x)) {
+                        #[cfg(feature = "profile-opcodes")]
+                        {
+                            PROFILE[opcode as usize].time += start.elapsed().as_nanos() as u64;
+                        }
+                        throw!(wrong_contract::<()>(">", "number?", 0, 2, &[x, y]));
+                    }
+
+                    if unlikely(!scm_is_number(y)) {
+                        #[cfg(feature = "profile-opcodes")]
+                        {
+                            PROFILE[opcode as usize].time += start.elapsed().as_nanos() as u64;
+                        }
+                        throw!(wrong_contract::<()>(">", "number?", 1, 2, &[x, y]));
+                    }
+
+                    let cmp = scm_n_compare(x, y).unwrap_unchecked();
+
+                    match cmp {
+                        Ordering::Greater => push!(Value::encode_bool_value(true)),
+                        _ => push!(Value::encode_bool_value(false)),
+                    }
+                }
+
+                Opcode::GreaterEqual => {
+                    let y = pop!();
+                    let x = pop!();
+
+                    if likely(x.is_int32() && y.is_int32()) {
+                        push!(Value::encode_bool_value(x.get_int32() >= y.get_int32()));
+                        #[cfg(feature = "profile-opcodes")]
+                        {
+                            PROFILE[opcode as usize].time += start.elapsed().as_nanos() as u64;
+                        }
+                        continue 'interp;
+                    }
+
+                    if x.is_double() && y.is_double() {
+                        push!(Value::encode_bool_value(x.get_double() >= y.get_double()));
+                        #[cfg(feature = "profile-opcodes")]
+                        {
+                            PROFILE[opcode as usize].time += start.elapsed().as_nanos() as u64;
+                        }
+                        continue 'interp;
+                    }
+
+                    if unlikely(!scm_is_number(x)) {
+                        #[cfg(feature = "profile-opcodes")]
+                        {
+                            PROFILE[opcode as usize].time += start.elapsed().as_nanos() as u64;
+                        }
+                        throw!(wrong_contract::<()>(">=", "number?", 0, 2, &[x, y]));
+                    }
+
+                    if unlikely(!scm_is_number(y)) {
+                        #[cfg(feature = "profile-opcodes")]
+                        {
+                            PROFILE[opcode as usize].time += start.elapsed().as_nanos() as u64;
+                        }
+                        throw!(wrong_contract::<()>(">=", "number?", 1, 2, &[x, y]))
+                    }
+
+                    let cmp = scm_n_compare(x, y).unwrap_unchecked();
+
+                    match cmp {
+                        Ordering::Greater | Ordering::Equal => {
+                            push!(Value::encode_bool_value(true))
+                        }
+                        _ => push!(Value::encode_bool_value(false)),
+                    }
+                }
+
+                Opcode::Call => {
+                    let argc = read2!();
+                    let callee = pop!();
+
+                    push!(cfr CallFrame {
+                        return_pc: pc,
+                        caller: cfr,
+                        code_block: Value::encode_undefined_value(),
+                        argc: Value::encode_int32(argc as _),
+                        callee,
+                        args: []
+                    });
+
+                    cfr = sp.cast();
+                    sp = cfr.cast();
+                    #[cfg(feature = "profile-opcodes")]
+                    {
+                        PROFILE[opcode as usize].time += start.elapsed().as_nanos() as u64;
+                    }
+                    if callee.is_vm_procedure() {
+                        (*cfr).code_block = callee.procedure().code.into();
+                        pc = callee.procedure().code.start_ip();
+
+                        continue 'interp;
+                    }
 
                     continue 'eval;
                 }
 
                 Opcode::Return => {
-                    
                     let val = pop!();
 
                     if (*cfr).caller.is_null() {
+                        #[cfg(feature = "profile-opcodes")]
+                        {
+                            PROFILE[opcode as usize].time += start.elapsed().as_nanos() as u64;
+                        }
                         return Ok(val);
                     } else {
                         pc = (*cfr).return_pc;
                         sp = cfr.add(1).cast::<Value>().add((*cfr).argc.get_int32() as _);
-                        
+
                         cfr = (*cfr).caller;
-        
+
                         push!(val);
                     }
-                }
-
-                Opcode::StackGet => {
-                    let off = read2!();
-
-                    let val = cfr.cast::<Value>().sub(off as usize + 1).read();
-                    debug_assert!(cfr.cast::<Value>().sub(off as usize + 1) < cfr.cast::<Value>());
-                    push!(val);
-                }
-
-                Opcode::StackSet => {
-                    let off = read2!();
-                    let val = pop!();
-                    let slot = cfr.cast::<Value>().sub(off as usize + 1);
-                    debug_assert!(slot < cfr.cast::<Value>());
-                    slot.write(val);
                 }
 
                 Opcode::StackBox => {
@@ -792,26 +1033,6 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     push!(Value::encode_object_value(closure));
                 }
 
-                Opcode::Define => {
-                    let value = pop!();
-                    let ix = read2!();
-                    let constant = read1!();
-
-                    let id = code_block!().literals.vector_ref(ix as _).identifier();
-                    let id = scm_outermost_identifier(id);
-                    let module = id.module.module();
-                    let name = id.name.symbol();
-
-                    scm_make_binding(
-                        module,
-                        name,
-                        value,
-                        if constant != 0 { SCM_BINDING_CONST } else { 0 },
-                    )?;
-
-                    push!(Value::encode_object_value(name));
-                }
-
                 Opcode::GlobalRef => {
                     let ix = read2!() as usize;
 
@@ -820,7 +1041,8 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     if likely(constant.is_xtype(Type::GLOC)) {
                         push!(constant.gloc().value);
                     } else {
-                        let (value, gloc) = scm_identifier_global_ref(constant.identifier())?;
+                        let (value, gloc) =
+                            catch!(scm_identifier_global_ref(constant.identifier()));
 
                         push!(value);
                         vm.thread.write_barrier(code_block!().literals.vector());
@@ -828,6 +1050,16 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                             .literals
                             .vector_set(ix as _, Value::encode_object_value(gloc));
                     }
+                }
+
+                Opcode::ClosureRefUnbox => {
+                    let ix = read2!();
+
+                    let callee = (*cfr).callee.procedure();
+
+                    let val = callee.captures.as_ptr().add(ix as _).read();
+                    let val = val.box_ref();
+                    push!(val);
                 }
 
                 Opcode::ClosureRef => {
@@ -859,7 +1091,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     } else {
                         // try to resolve the GLOC first and then set the value.
                         // also caches the resolved GLOC in the literal vector.
-                        let gloc = scm_identifier_global_set(constant.identifier(), value)?;
+                        let gloc = catch!(scm_identifier_global_set(constant.identifier(), value));
                         vm.thread.write_barrier(code_block!().literals.vector());
                         code_block!()
                             .literals
@@ -867,53 +1099,17 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     }
                 }
 
-                Opcode::Flatpack => {
-                    let n = read2!();
-                    let mut list = ArrayList::with_capacity(vm.thread, n as _);
-
-                    for i in 0..n {
-                        let e = pop!();
-
-                        if e.is_values() {
-                            for &e in e.values().iter() {
-                                list.push(vm.thread, e);
-                            }
-                        } else {
-                            list.push(vm.thread, e);
-                        }
-                    }
-
-                    let mut x = make_vector_from_slice(vm.thread, &list);
-                    x.object.typ = Type::Values;
-
-                    push!(Value::encode_object_value(x));
-                }
-
-                Opcode::Pack => {
-                    let n = read2!();
-
-                    let mut list = make_vector(vm.thread, n as _);
-
-                    for i in 0..n {
-                        let e = pop!();
-                        vm.thread.write_barrier(list);
-                        list[i as usize] = e;
-                    }
-
-                    push!(Value::encode_object_value(list));
-                }
-
-                Opcode::Unpack => {
-                    let _n = read2!();
-                    let _ovf = read1!() != 0;
-                    todo!()
-                }
-
                 Opcode::Apply => {
                     let rator = pop!();
                     let rands = pop!();
                     if unlikely(!scm_is_list(rands)) {
-                        return Err(make_string(vm.thread, "apply: expected list").into());
+                        throw!(wrong_contract::<()>(
+                            "apply",
+                            "list?",
+                            1,
+                            2,
+                            &[rator, rands]
+                        ));
                     }
 
                     let mut argc = 0;
@@ -933,6 +1129,10 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                         args: []
                     });
                     cfr = sp.cast();
+                    #[cfg(feature = "profile-opcodes")]
+                    {
+                        PROFILE[opcode as usize].time += start.elapsed().as_nanos() as u64;
+                    }
                     continue 'eval;
                 }
 
@@ -941,7 +1141,11 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     if unlikely(argc != (*cfr).argc.get_int32() as u16) {
                         vm.sp = sp;
                         vm.top_call_frame = cfr;
-                        return wrong_count(
+                        #[cfg(feature = "profile-opcodes")]
+                        {
+                            PROFILE[opcode as usize].time += start.elapsed().as_nanos() as u64;
+                        }
+                        throw!(wrong_count::<()>(
                             &code_block!().name.to_string(),
                             code_block!().mina as _,
                             if code_block!().maxa >= MAX_ARITY {
@@ -951,7 +1155,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                             },
                             (*cfr).argc.get_int32() as _,
                             (*cfr).arguments(),
-                        );
+                        ));
                     }
                 }
 
@@ -960,7 +1164,11 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     if unlikely(argc > (*cfr).argc.get_int32() as u16) {
                         vm.sp = sp;
                         vm.top_call_frame = cfr;
-                        return wrong_count(
+                        #[cfg(feature = "profile-opcodes")]
+                        {
+                            PROFILE[opcode as usize].time += start.elapsed().as_nanos() as u64;
+                        }
+                        throw!(wrong_count::<()>(
                             &code_block!().name.to_string(),
                             code_block!().mina as _,
                             if code_block!().maxa >= MAX_ARITY {
@@ -970,27 +1178,8 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                             },
                             (*cfr).argc.get_int32() as _,
                             (*cfr).arguments(),
-                        );
+                        ));
                     }
-                }
-
-                Opcode::NoMatchingArgCount => {
-                    vm.sp = sp;
-                    vm.top_call_frame = cfr;
-                    return Err(make_string(vm.thread, "wrong number of arguments").into());
-                }
-
-                Opcode::CollectRest => {
-                    let n = read2!();
-                    let rest = (*cfr).args.as_mut_ptr().add(n as _);
-                    let mut list = Value::encode_null_value();
-
-                    for i in (0..(*cfr).argc.get_int32() as usize - n as usize).rev() {
-                        let e = rest.add(i as _).read();
-                        list = scm_cons(vm.thread, e, list);
-                    }
-
-                    push!(list);
                 }
 
                 Opcode::ClosureSet => {
@@ -1004,7 +1193,6 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
 
                 Opcode::Branch => {
                     let offset = read4!();
-                    vm.mutator().safepoint();
                     pc = pc.offset(offset as _);
                 }
 
@@ -1025,11 +1213,6 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                         pc = pc.offset(offset as _);
                     }
                 }
-
-                Opcode::BranchIfArgMismatch | Opcode::BranchIfMinArgMismatch => {
-                    todo!()
-                }
-
                 Opcode::KeepBranchIfNot => {
                     let val = sp.read();
 
@@ -1113,7 +1296,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     } else {
                         vm.top_call_frame = cfr;
                         vm.sp = sp;
-                        return Err(make_string(vm.thread, "exact?: expected number").into());
+                        throw!(wrong_contract::<()>("exact?", "number?", 0, 1, &[val]));
                     }
                 }
 
@@ -1123,7 +1306,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     if unlikely(!val.is_pair()) {
                         vm.top_call_frame = cfr;
                         vm.sp = sp;
-                        return wrong_contract("car", "pair?", 0, 1, &[val]);
+                        throw!(wrong_contract::<()>("car", "pair?", 0, 1, &[val]));
                     }
 
                     push!(val.pair().car);
@@ -1135,7 +1318,7 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     if unlikely(!val.is_pair()) {
                         vm.top_call_frame = cfr;
                         vm.sp = sp;
-                        return wrong_contract("cdr", "pair?", 0, 1, &[val]);
+                        throw!(wrong_contract::<()>("cdr", "pair?", 0, 1, &[val]));
                     }
 
                     push!(val.pair().cdr);
@@ -1147,7 +1330,13 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     if unlikely(!cell.is_pair()) {
                         vm.top_call_frame = cfr;
                         vm.sp = sp;
-                        return wrong_contract("set-car!", "pair?", 0, 2, &[cell, val]);
+                        throw!(wrong_contract::<()>(
+                            "set-car!",
+                            "pair?",
+                            0,
+                            2,
+                            &[cell, val]
+                        ));
                     }
 
                     vm.thread.write_barrier(cell.pair());
@@ -1160,7 +1349,13 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     if unlikely(!cell.is_pair()) {
                         vm.top_call_frame = cfr;
                         vm.sp = sp;
-                        return wrong_contract("set-cdr!", "pair?", 0, 2, &[cell, val]);
+                        throw!(wrong_contract::<()>(
+                            "set-cdr!",
+                            "pair?",
+                            0,
+                            2,
+                            &[cell, val]
+                        ));
                     }
 
                     vm.thread.write_barrier(cell.pair());
@@ -1205,138 +1400,311 @@ pub unsafe fn vm_eval(vm: &mut VM, cfr: *mut CallFrame, entry_pc: usize) -> Resu
                     push!(Value::encode_bool_value(val.is_undefined()));
                 }
 
-                /*Opcode::Tuple => {
+                Opcode::Vector => {
                     let n = read2!();
 
-                    let mut tuple = scm_make_tuple(vm.thread, n as _);
+                    let mut vector = make_vector(vm.thread, n as _);
 
                     for i in (0..n).rev() {
-                        vm.thread.write_barrier(tuple);
-                        tuple[i as usize] = pop!();
+                        vm.thread.write_barrier(vector);
+                        vector[i as usize] = pop!();
                     }
 
-                    push!(tuple.into());
+                    push!(vector.into());
                 }
 
-                Opcode::TupleRefI => {
+                Opcode::MakeVector => {
                     let n = read2!();
-                    let tuple = pop!();
+                    let fill = pop!();
+                    let mut vector = make_vector(vm.thread, n as _);
+                    vm.thread.write_barrier(vector);
+                    vector.fill(fill);
+                    push!(vector.into());
+                }
 
-                    if unlikely(!tuple.is_tuple()) {
-                        return Err();
+                Opcode::VectorRefI => {
+                    let n = read2!() as i32;
+                    let vector = pop!();
+
+                    if unlikely(!vector.is_vector()) {
+                        throw!(wrong_contract::<()>(
+                            "vector-ref",
+                            "vector?",
+                            0,
+                            2,
+                            &[vector, Value::encode_int32(n as _)],
+                        ));
                     }
-
-                    if unlikely((n as usize) >= tuple.tuple().len()) {
-                        return Err(raise_out_of_bounds_error(
-                            "tuple-ref",
-                            n as _,
-                            tuple.tuple().len() as _,
+                    let index = n as usize;
+                    if unlikely(n < 0 || index >= vector.vector().len()) {
+                        throw!(out_of_range::<()>(
+                            "vector-ref",
+                            Some("vector"),
+                            "",
+                            Value::encode_int32(n as _),
+                            Value::encode_int32(vector.vector().len() as i32),
+                            0,
+                            vector.vector().len() as _,
                         ));
                     }
 
-                    push!(tuple.tuple()[n as usize]);
+                    push!(vector.vector()[index]);
                 }
 
-                Opcode::TupleSetI => {
+                Opcode::VectorSetI => {
+                    let n = read2!() as i32;
+                    let vector = pop!();
+
+                    if unlikely(!vector.is_vector()) {
+                        throw!(wrong_contract::<()>(
+                            "vector-set!",
+                            "vector?",
+                            0,
+                            3,
+                            &[
+                                vector,
+                                Value::encode_int32(n as _),
+                                Value::encode_int32(n as _),
+                            ],
+                        ));
+                    }
+
+                    let index = n as usize;
+                    if unlikely(n < 0 || index >= vector.vector().len()) {
+                        throw!(out_of_range::<()>(
+                            "vector-set!",
+                            Some("vector"),
+                            "",
+                            Value::encode_int32(n as _),
+                            Value::encode_int32(vector.vector().len() as i32),
+                            0,
+                            vector.vector().len() as _,
+                        ));
+                    }
+
+                    vm.thread.write_barrier(vector.vector());
+                    vector.vector()[index] = pop!();
+                }
+
+                Opcode::VectorRef => {
+                    let index = pop!();
+                    let vector = pop!();
+
+                    if unlikely(!vector.is_vector()) {
+                        throw!(wrong_contract::<()>(
+                            "vector-ref",
+                            "vector?",
+                            0,
+                            2,
+                            &[vector, index]
+                        ));
+                    }
+
+                    if unlikely(!(scm_is_exact_non_negative_integer(index) && index.is_int32())) {
+                        throw!(wrong_contract::<()>(
+                            "vector-ref",
+                            "exact-nonnegative-integer?",
+                            1,
+                            2,
+                            &[vector, index],
+                        ));
+                    }
+
+                    let index = index.get_int32() as usize;
+                    if unlikely(index >= vector.vector().len()) {
+                        throw!(out_of_range::<()>(
+                            "vector-ref",
+                            Some("vector"),
+                            "",
+                            Value::encode_int32(index as _),
+                            Value::encode_int32(vector.vector().len() as _),
+                            0,
+                            vector.vector().len() as _,
+                        ));
+                    }
+
+                    push!(vector.vector()[index]);
+                }
+
+                Opcode::VectorSet => {
+                    let index = pop!();
+                    let vector = pop!();
+
+                    if unlikely(!vector.is_vector()) {
+                        throw!(wrong_contract::<()>(
+                            "vector-set!",
+                            "vector?",
+                            0,
+                            3,
+                            &[vector, index, index],
+                        ));
+                    }
+
+                    if unlikely(!(scm_is_exact_non_negative_integer(index) && index.is_int32())) {
+                        throw!(wrong_contract::<()>(
+                            "vector-set!",
+                            "exact-nonnegative-integer?",
+                            1,
+                            3,
+                            &[vector, index, index],
+                        ));
+                    }
+
+                    let index = index.get_int32() as usize;
+                    if unlikely(index >= vector.vector().len()) {
+                        throw!(out_of_range::<()>(
+                            "vector-set!",
+                            Some("vector"),
+                            "",
+                            Value::encode_int32(index as _),
+                            Value::encode_int32(vector.vector().len() as _),
+                            0,
+                            vector.vector().len() as _,
+                        ));
+                    }
+
+                    vm.thread.write_barrier(vector.vector());
+                    vector.vector()[index] = pop!();
+                }
+
+                Opcode::VectorLength => {
+                    let vector = pop!();
+
+                    if unlikely(!vector.is_vector()) {
+                        throw!(wrong_contract::<()>(
+                            "vector-length",
+                            "vector?",
+                            0,
+                            1,
+                            &[vector]
+                        ));
+                    }
+
+                    push!(Value::encode_int32(vector.vector().len() as _));
+                }
+
+                Opcode::Define => {
+                    let value = pop!();
+                    let ix = read2!();
+                    let constant = read1!();
+
+                    let id = code_block!().literals.vector_ref(ix as _).identifier();
+                    let id = scm_outermost_identifier(id);
+                    let module = id.module.module();
+                    let name = id.name.symbol();
+
+                    catch!(scm_make_binding(
+                        module,
+                        name,
+                        value,
+                        if constant != 0 { SCM_BINDING_CONST } else { 0 },
+                    ));
+
+                    push!(Value::encode_object_value(name));
+                }
+                Opcode::Dup => {
+                    let val = pop!();
+                    push!(val);
+                    push!(val);
+                }
+
+                Opcode::Swap => {
+                    let val1 = pop!();
+                    let val2 = pop!();
+                    push!(val1);
+                    push!(val2);
+                }
+
+                Opcode::CollectRest => {
                     let n = read2!();
-                    let tuple = pop!();
+                    let rest = (*cfr).args.as_mut_ptr().add(n as _);
+                    let mut list = Value::encode_null_value();
 
-                    if unlikely(!tuple.is_tuple()) {
-                        return Err(raise_argument_error("tuple-set!", "tuple?", tuple));
+                    for i in (0..(*cfr).argc.get_int32() as usize - n as usize).rev() {
+                        let e = rest.add(i as _).read();
+                        list = scm_cons(vm.thread, e, list);
                     }
 
-                    if unlikely((n as usize) >= tuple.tuple().len()) {
-                        return Err(raise_out_of_bounds_error(
-                            "tuple-set!",
-                            n as _,
-                            tuple.tuple().len() as _,
-                        ));
-                    }
-
-                    vm.thread.write_barrier(tuple.tuple());
-                    tuple.tuple()[n as usize] = pop!();
+                    push!(list);
                 }
 
-                Opcode::TupleRef => {
-                    let tuple = pop!();
-                    let n = pop!();
+                Opcode::Flatpack => {
+                    let n = read2!();
+                    let mut list = ArrayList::with_capacity(vm.thread, n as _);
 
-                    if unlikely(!tuple.is_tuple()) {
-                        return Err(raise_argument_error("tuple-ref", "tuple?", tuple));
-                    }
+                    for i in 0..n {
+                        let e = pop!();
 
-                    if unlikely(!n.is_int32()) {
-                        return Err(raise_argument_error("tuple-ref", "exact integer?", n));
-                    }
-
-                    let n = n.get_int32();
-
-                    if unlikely((n as usize) >= tuple.tuple().len()) || n < 0 {
-                        return Err(raise_out_of_bounds_error(
-                            "tuple-ref",
-                            n as _,
-                            tuple.tuple().len() as _,
-                        ));
-                    }
-
-                    push!(tuple.tuple()[n as usize]);
-                }
-
-                Opcode::TupleSet => {
-                    let tuple = pop!();
-                    let n = pop!();
-
-                    if unlikely(!tuple.is_tuple()) {
-                        return Err(raise_argument_error("tuple-set!", "tuple?", tuple));
-                    }
-
-                    if unlikely(!n.is_int32()) {
-                        return Err(raise_argument_error("tuple-set!", "exact integer?", n));
-                    }
-
-                    let n = n.get_int32();
-
-                    if unlikely((n as usize) >= tuple.tuple().len()) || n < 0 {
-                        return Err(raise_out_of_bounds_error(
-                            "tuple-set!",
-                            n as _,
-                            tuple.tuple().len() as _,
-                        ));
-                    }
-
-                    vm.thread.write_barrier(tuple.tuple());
-                    tuple.tuple()[n as usize] = pop!();
-                }*/
-
-                /*Opcode::IsProperty => {
-                    let v = pop!();
-                    let c = read2!();
-
-                    let prop = code_block!().literals.vector_ref(c as _);
-
-                    let stype = if v.is_structure() {
-                        v.structure().type_
-                    } else if v.is_struct_type() {
-                        v.structure_type()
-                    } else {
-                        push!(Value::encode_bool_value(false));
-                        continue;
-                    };
-
-                    for i in 0..stype.props.len() {
-                        if prop == stype.props[i].0 {
-                            push!(Value::encode_bool_value(true));
-                            continue 'interp;
+                        if e.is_values() {
+                            for &e in e.values().iter() {
+                                list.push(vm.thread, e);
+                            }
+                        } else {
+                            list.push(vm.thread, e);
                         }
                     }
 
-                    push!(Value::encode_bool_value(false));
-                }*/
-                _ => todo!(),
+                    let mut x = make_vector_from_slice(vm.thread, &list);
+                    x.object.typ = Type::Values;
+
+                    push!(Value::encode_object_value(x));
+                }
+
+                Opcode::Pack => {
+                    let n = read2!();
+
+                    let mut list = make_vector(vm.thread, n as _);
+
+                    for i in 0..n {
+                        let e = pop!();
+                        vm.thread.write_barrier(list);
+                        list[i as usize] = e;
+                    }
+
+                    push!(Value::encode_object_value(list));
+                }
+
+                Opcode::NoMatchingArgCount => {
+                    vm.sp = sp;
+                    vm.top_call_frame = cfr;
+                    throw!(Err::<(), _>(
+                        make_string(vm.thread, "wrong number of arguments").into()
+                    ));
+                }
+
+                opcode => {
+                    #[cfg(debug_assertions)]
+                    {
+                        todo!("opcode {:?}", opcode);
+                    }
+                    #[cfg(not(debug_assertions))]
+                    {
+                        std::hint::unreachable_unchecked();
+                    }
+                }
+            }
+
+            #[cfg(feature = "profile-opcodes")]
+            {
+                PROFILE[opcode as usize].time += start.elapsed().as_nanos() as u64;
             }
         }
     }
 }
+
+pub(crate) static TRAMPOLINE_INSTALLED: AtomicBool = AtomicBool::new(false);
+
+static TRAMPOLINE: Lazy<Value> = Lazy::new(|| {
+    let module = scm_internal_module().module();
+
+    let k = "%rust->scheme-trampoline".intern();
+
+    let binding = scm_find_binding(module, k.into(), 0);
+
+    binding
+        .map(|x| x.value)
+        .unwrap_or(Value::encode_bool_value(false))
+});
 
 pub unsafe fn _vm_entry_trampoline(
     vm: &mut VM,
@@ -1369,7 +1737,64 @@ pub unsafe fn _vm_entry_trampoline(
         (*cfr).callee = callee;
         (*cfr).argc = Value::encode_int32(args.len() as _);
         vm.top_entry_frame = cfr;
-        vm_eval(vm, cfr, 0)
+        vm.top_call_frame = cfr;
+        vm.sp = sp;
+        vm_eval(vm)
+    });
+
+    let result = std::panic::catch_unwind(|| cb());
+
+    vm.top_call_frame = vm.prev_top_call_frame;
+    vm.top_entry_frame = vm.prev_top_entry_frame;
+    vm.module = saved_module;
+    vm.entry = saved;
+    vm.sp = sp;
+    match result {
+        Ok(val) => val,
+        Err(err) => std::panic::resume_unwind(err),
+    }
+}
+
+pub unsafe fn _vm_entry_trampoline2(
+    vm: &mut VM,
+    module: Option<Handle<Module>>,
+    callee: Value,
+    args: Value,
+) -> Result<Value, Value> {
+    let saved = vm.next_entry();
+    let sp = vm.sp;
+    let saved_module = vm.module;
+    let mut t4 = vm.top_call_frame;
+    vm.prev_top_call_frame = t4;
+    t4 = vm.top_entry_frame;
+    vm.prev_top_entry_frame = t4;
+
+    vm.module = module;
+
+    let cb = AssertUnwindSafe(|| {
+        let mut sp = vm.sp;
+        let start = vm.sp;
+        /*for &arg in args.iter().rev() {
+            sp = sp.sub(1);
+            sp.write(arg);
+        }*/
+        let mut argc = 0;
+        scm_dolist!(arg, args, {
+            sp = sp.sub(1);
+            sp.write(arg);
+            argc += 1;
+        });
+
+        sp = sp.sub(5);
+        let cfr = sp.cast::<CallFrame>();
+        (*cfr).caller = null_mut();
+        (*cfr).return_pc = null();
+        (*cfr).callee = callee;
+        (*cfr).argc = Value::encode_int32(argc);
+        vm.top_entry_frame = cfr;
+        vm.top_call_frame = cfr;
+        vm.sp = sp;
+        vm_eval(vm)
     });
 
     let result = std::panic::catch_unwind(|| cb());
@@ -1387,14 +1812,35 @@ pub unsafe fn _vm_entry_trampoline(
 
 pub fn apply(rator: Value, rands: &[Value]) -> Result<Value, Value> {
     let vm = scm_vm();
-
+    if TRAMPOLINE_INSTALLED.load(std::sync::atomic::Ordering::Acquire) {
+        let tramp = *TRAMPOLINE;
+        let cb = rator;
+        let args = scm_list(vm.mutator(), rands);
+        return unsafe { _vm_entry_trampoline(vm, scm_current_module(), tramp, &[cb, args]) };
+    }
     unsafe { _vm_entry_trampoline(vm, scm_current_module(), rator, rands) }
 }
 
 pub fn apply_in(module: Handle<Module>, rator: Value, rands: &[Value]) -> Result<Value, Value> {
     let vm = scm_vm();
-
+    if TRAMPOLINE_INSTALLED.load(std::sync::atomic::Ordering::Acquire) {
+        let tramp = *TRAMPOLINE;
+        let cb = rator;
+        let args = scm_list(vm.mutator(), rands);
+        return unsafe { _vm_entry_trampoline(vm, Some(module), tramp, &[cb, args]) };
+    }
     unsafe { _vm_entry_trampoline(vm, Some(module), rator, rands) }
+}
+
+pub fn apply_list(rator: Value, rands: Value) -> Result<Value, Value> {
+    let vm = scm_vm();
+    if TRAMPOLINE_INSTALLED.load(std::sync::atomic::Ordering::Acquire) {
+        let tramp = *TRAMPOLINE;
+        let cb = rator;
+        return unsafe { _vm_entry_trampoline(vm, scm_current_module(), tramp, &[cb, rands]) };
+    }
+
+    unsafe { _vm_entry_trampoline2(vm, scm_current_module(), rator, rands) }
 }
 
 pub fn scm_eval(expr: Value, e: Value) -> Result<Value, Value> {
@@ -1418,13 +1864,15 @@ pub fn scm_eval(expr: Value, e: Value) -> Result<Value, Value> {
     res
 }
 
-pub fn scm_compile(expr: Value, e: Value) -> Result<Value, Value> {
+pub fn scm_compile(
+    expr: Value,
+    e: Value,
+) -> Result<Value, Value> {
     let module = if e.is_module() {
         e.module()
     } else {
         scm_current_module().unwrap_or_else(|| scm_user_module().module())
     };
-
     let cenv = make_cenv(module, Value::encode_null_value());
 
     let code = compile(expr, cenv)?;

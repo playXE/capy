@@ -214,9 +214,9 @@ extern "C" fn format(cfr: &mut CallFrame) -> ScmResult {
     match do_format("format", port, None, 0, 1, cfr.argument_count(), cfr.arguments()) {
         Ok(_) => match port_extract_string(port) {
             Ok(s) => ScmResult::ok(s),
-            Err(e) => ScmResult::err(e),
+            Err(e) =>  return Err::<(), _>(e).into(),
         }
-        Err(e) => ScmResult::err(e),
+        Err(e) =>  return Err::<(), _>(e).into(),
     }
 }
 

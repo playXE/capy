@@ -7,7 +7,7 @@ use crate::{
         ClosedNativeProcedure, CodeBlock, NativeProcedure, ObjectHeader, Procedure, ScmResult, Type,
     },
     runtime::value::Value,
-    vm::{callframe::CallFrame, interpreter::apply, scm_vm},
+    vm::{callframe::CallFrame, scm_vm},
 };
 
 use super::{
@@ -237,30 +237,6 @@ pub const SCM_PRIM_STRUCT_TYPE_INDEXED_GETTER: i32 = 32;
 pub const SCM_PRIM_STRUCT_TYPE_PRED: i32 = 32 | 64;
 pub const SCM_PRIM_CONTINUATION: i32 = 32 | 64 | 128 | 256;
 
-extern "C" fn call_with_values(cfr: &mut CallFrame) -> ScmResult {
-    let v = cfr.argument(0);
-    let v1 = cfr.argument(1);
-    if !v.is_procedure() {
-        return wrong_contract::<()>("call-with-values", "procedure?", 0, 2, cfr.arguments())
-            .into();
-    }
-
-    if !v1.is_procedure() {
-        return wrong_contract::<()>("call-with-values", "procedure?", 1, 2, cfr.arguments())
-            .into();
-    }
-
-    let v = match apply(v, &[]) {
-        Ok(v) => v,
-        Err(err) => return ScmResult::err(err),
-    };
-
-    if v.is_values() {
-        ScmResult::tail(v1, &v.values())
-    } else {
-        ScmResult::tail(v1, &[v])
-    }
-}
 
 extern "C" fn apply_with_values(cfr: &mut CallFrame) -> ScmResult {
     if !cfr.argument(0).is_procedure() {
@@ -332,7 +308,11 @@ pub fn get_proc_name<'a>(val: Value) -> Option<&'a str> {
 
             Some(id.strsym())
         } else if val.is_native_procedure() {
-            Some(val.native_procedure().name.strsym())
+            if val.native_procedure().name.is_string() || val.native_procedure().name.is_symbol() {
+                return Some(val.native_procedure().name.strsym());
+            } else {
+                return None
+            }
         } else {
             None
         }
@@ -404,9 +384,9 @@ extern "C" fn apply_proc(cfr: &mut CallFrame) -> ScmResult {
 pub(crate) fn init() {
     let module = scm_scheme_module().module();
 
-    let subr = scm_make_subr("call-with-values", call_with_values, 2, 2);
+    /*let subr = scm_make_subr("call-with-values", call_with_values, 2, 2);
     scm_define(module, "call-with-values".intern(), subr.into()).unwrap();
-
+    */
     let subr = scm_make_subr("apply-with-values", apply_with_values, 2, 2);
     scm_define(module, "apply-with-values".intern(), subr.into()).unwrap();
 

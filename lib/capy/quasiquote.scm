@@ -18,7 +18,6 @@
      (syntax-error ",@ in illegal context" ?arg))
     ((.finalize-quasiquote ?mode ?arg ?return)
      (.interpret-continuation ?return (?mode . ?arg)))))
- 
  ; The first two "arguments" to .descend-quasiquote and to
  ; .descend-quasiquote-pair are always identical.
  

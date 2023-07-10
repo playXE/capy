@@ -1,25 +1,30 @@
+#![allow(unused_imports, dead_code, unused_variables)]
 use std::{
     collections::BTreeMap,
-    mem::{offset_of, size_of}, rc::Rc,
+    mem::{offset_of, size_of},
+    rc::Rc,
 };
 
 use b3::{
     jit::register_set::RegisterSetBuilder, variable::VariableId, BasicBlockBuilder, BlockId,
     Procedure, Reg, ValueId, ValueRep, ValueRepKind,
 };
-use macroassembler::{jit::gpr_info::{
-    ARGUMENT_GPR0, ARGUMENT_GPR1, ARGUMENT_GPR2, RETURN_VALUE_GPR, RETURN_VALUE_GPR2,
-}, assembler::{abstract_macro_assembler::AbsoluteAddress, RelationalCondition}};
+use macroassembler::{
+    assembler::{abstract_macro_assembler::AbsoluteAddress, RelationalCondition},
+    jit::gpr_info::{
+        ARGUMENT_GPR0, ARGUMENT_GPR1, ARGUMENT_GPR2, RETURN_VALUE_GPR, RETURN_VALUE_GPR2,
+    },
+};
 use rsgc::prelude::Handle;
 
 use crate::{
-    jit::baseline::thunks::baseline_define,
     op::Opcode,
     runtime::{
-        object::{CodeBlock, GLOC},
+        object::{CodeBlock, Type, GLOC},
         value::Value,
     },
-    vm::callframe::CallFrame,
+    vm::jit::baseline::thunks::{baseline_define, baseline_resolve_global},
+    vm::{callframe::CallFrame, VMType},
 };
 
 struct BasicBlock {
@@ -44,6 +49,7 @@ pub struct Stack2SSA<'a> {
     end_of_basic_block: bool,
     fallthrough: bool,
     runoff: usize,
+    vm: ValueId,
     cfr: ValueId,
     #[cfg(windows)]
     result_reg: ValueId,
@@ -53,6 +59,7 @@ impl<'a> Stack2SSA<'a> {
     pub fn new(
         procedure: &'a mut Procedure,
         code_block: Handle<CodeBlock>,
+        vm: ValueId,
         cfr: ValueId,
         entry: BlockId,
     ) -> Self {
@@ -70,6 +77,7 @@ impl<'a> Stack2SSA<'a> {
                 stack: vec![],
                 flags: 0,
             },
+            vm,
             ungenerated: vec![],
             blocks: BTreeMap::new(),
             end_of_basic_block: false,
@@ -352,7 +360,7 @@ impl<'a> Stack2SSA<'a> {
 
                 Opcode::Define => {
                     let n = read2!();
-                    let _constant = self.code.code()[index as usize];
+
                     index += 1;
 
                     let name = self.code.literals.vector_ref(n as usize);
@@ -363,8 +371,106 @@ impl<'a> Stack2SSA<'a> {
                     let thunk_addr = builder.const64(baseline_define as i64);
                     let name_constant = builder.const64(name.get_raw());
 
-                    //let ccall = builder.ccall(thunk_addr, &[name_constant, value]);
+                    self.call_thunk_with_result(
+                        baseline_define as *const u8,
+                        &[name_constant, value],
+                    );
+                    self.operand_stack.push(name_constant);
                 }
+
+                Opcode::GlobalRef => {
+                    let n = read2!();
+                    let constant = self.code.literals.vector_ref(n as usize);
+
+                    let value_offset = offset_of!(GLOC, value);
+
+                    // GLOC is resolved, directly load the value from the GLOC
+                    if constant.is_xtype(Type::GLOC) {
+                        let mut builder =
+                            BasicBlockBuilder::new(self.procedure, self.current_block.block);
+                        let gloc = builder.const64(constant.get_raw());
+                        let value =
+                            builder.load(b3::Type::Int64, gloc, value_offset as i32, None, None);
+                        self.operand_stack.push(value);
+                    } else {
+                        // GLOC was not resolved, this is *very* rare path, just invoke thunk that resolves the GLOC.
+                        let mut builder =
+                            BasicBlockBuilder::new(self.procedure, self.current_block.block);
+                        let cb = builder.const64(self.code.as_ptr() as _);
+                        let ix = builder.const32(n as _);
+                        let gloc =
+                            self.call_thunk_with_result(baseline_resolve_global as _, &[cb, ix]);
+                        let mut builder =
+                            BasicBlockBuilder::new(self.procedure, self.current_block.block);
+                        let value =
+                            builder.load(b3::Type::Int64, gloc, value_offset as i32, None, None);
+                        self.operand_stack.push(value);
+                    }
+                }
+
+                Opcode::GlobalSet => {
+                    let n = read2!();
+                    let constant = self.code.literals.vector_ref(n as usize);
+
+                    let value_offset = offset_of!(GLOC, value);
+
+                    let value = self.operand_stack.pop().unwrap();
+
+                    // GLOC is resolved, directly store the value to the GLOC
+                    if constant.is_xtype(Type::GLOC) {
+                        let mut builder =
+                            BasicBlockBuilder::new(self.procedure, self.current_block.block);
+                        let gloc = builder.const64(constant.get_raw());
+                        builder.store(value, gloc, value_offset as i32, None, None);
+                    } else {
+                        // GLOC was not resolved, this is *very* rare path, just invoke thunk that resolves the GLOC.
+                        let mut builder =
+                            BasicBlockBuilder::new(self.procedure, self.current_block.block);
+                        let cb = builder.const64(self.code.as_ptr() as _);
+                        let ix = builder.const32(n as _);
+                        let gloc =
+                            self.call_thunk_with_result(baseline_resolve_global as _, &[cb, ix]);
+                        let mut builder =
+                            BasicBlockBuilder::new(self.procedure, self.current_block.block);
+                        builder.store(value, gloc, value_offset as i32, None, None);
+                    }
+                }
+
+                Opcode::ClosureRef => {
+                    let n = read2!();
+                    let offset = offset_of!(crate::runtime::object::Procedure, captures)
+                        + n as usize * size_of::<Value>();
+                    let callee_offset = offset_of!(CallFrame, callee);
+                    let cfr = self.cfr;
+
+                    let mut builder =
+                        BasicBlockBuilder::new(self.procedure, self.current_block.block);
+
+                    let closure =
+                        builder.load(b3::Type::Int64, cfr, callee_offset as i32, None, None);
+                    let capture = builder.load(b3::Type::Int64, closure, offset as i32, None, None);
+                    self.operand_stack.push(capture);
+                }
+
+                Opcode::ClosureRefUnbox => {
+                    let n = read2!();
+                    let offset = offset_of!(crate::runtime::object::Procedure, captures)
+                        + n as usize * size_of::<Value>();
+                    let callee_offset = offset_of!(CallFrame, callee);
+                    let box_offset = offset_of!(crate::runtime::object::Box, value);
+                    let cfr = self.cfr;
+
+                    let mut builder =
+                        BasicBlockBuilder::new(self.procedure, self.current_block.block);
+
+                    let closure =
+                        builder.load(b3::Type::Int64, cfr, callee_offset as i32, None, None);
+                    let capture = builder.load(b3::Type::Int64, closure, offset as i32, None, None);
+                    let capture =
+                        builder.load(b3::Type::Int64, capture, box_offset as i32, None, None);
+                    self.operand_stack.push(capture);
+                }
+
                 _ => (),
             }
 
@@ -392,11 +498,16 @@ impl<'a> Stack2SSA<'a> {
         }
     }
 
-    pub fn call_thunk_with_result(
-        &mut self,
-        addr: *const u8,
-        args: &[b3::ValueId],
-    ) -> b3::ValueId {
+    pub fn call_thunk_with_result(&mut self, addr: *const u8, args: &[b3::ValueId]) -> b3::ValueId {
+        let mut builder = BasicBlockBuilder::new(self.procedure, self.current_block.block);
+        builder.store(
+            self.cfr,
+            self.vm,
+            offset_of!(VMType, top_call_frame) as i32,
+            None,
+            None,
+        );
+
         #[cfg(windows)]
         {
             todo!()
@@ -441,16 +552,19 @@ impl<'a> Stack2SSA<'a> {
                 ValueRep::reg(Reg::new_gpr(RETURN_VALUE_GPR2)),
             );
 
-            builder.procedure.stackmap_set_generator(patchpoint, Rc::new(move |jit, _params| {
-                // Arguments are in correct registers, return value tag is in RETURN_VALUE_GPR
-                // return value itself is in RETURN_VALUE_GPR2
-                jit.call_op(Some(AbsoluteAddress::new(addr)));
-                let br_ok = jit.branch32(RelationalCondition::NotEqual, RETURN_VALUE_GPR, 2i32);
-                jit.ret();
-                br_ok.link(jit);
-            }));
-        }
+            builder.procedure.stackmap_set_generator(
+                patchpoint,
+                Rc::new(move |jit, _params| {
+                    // Arguments are in correct registers, return value tag is in RETURN_VALUE_GPR
+                    // return value itself is in RETURN_VALUE_GPR2
+                    jit.call_op(Some(AbsoluteAddress::new(addr)));
+                    let br_ok = jit.branch32(RelationalCondition::Equal, RETURN_VALUE_GPR, 0i32);
+                    jit.ret();
+                    br_ok.link(jit);
+                }),
+            );
 
-        todo!()
+            patchpoint
+        }
     }
 }

@@ -5,9 +5,12 @@ use crate::{
     runtime::list::{scm_acons, scm_cons, scm_econs},
     runtime::object::{Module, ObjectHeader, Syntax, Type},
     runtime::string::make_string,
-    runtime::{vector::{make_bytevector_from_slice, make_vector}, module::is_global_identifier_eq},
     runtime::{bigint::BigInt, value::Value},
     runtime::{error::make_srcloc, symbol::make_symbol},
+    runtime::{
+        module::is_global_identifier_eq,
+        vector::{make_bytevector_from_slice, make_vector},
+    },
     scm_dolist, scm_for_each,
     vm::scm_current_module,
 };
@@ -387,32 +390,32 @@ impl LVar {
     }
 }
 
-// Compile-time environment (cenv)
-//
-//   Slots:
-//     module   - The 'current-module' to resolve global binding.
-//     frames   - List of local frames.  Each local frame has a form:
-//                (<type> (<name> . <obj>) ...)
-//
-//                <type>     <obj>
-//                ----------------------------------------------
-//                LEXICAL    <lvar>     // lexical binding
-//                SYNTAX     <macro>    // syntactic binding
-//
-//     exp-name - The "name" of the current expression, that is, the
-//                name of the variable the result of the current
-//                expression is to be bound.  This slot may contain
-//                an identifier (for global binding) or a lvar (for
-//                local binding).   This slot may be #f.
-//
-//     current-proc - Holds the information of the current
-//                compiling procedure.  It accumulates information needed
-//                in later stages for the optimization.  This slot may
-//                be #f.
-//
-//     source-path - While processing included file, this slot is set to
-//                the full path of the included filename.
-// (define-vector-struct cenv %make-cenv (module frames exp-name current-proc (source-path (current-load-path))))
+/// Compile-time environment (cenv)
+///
+///   Slots:
+///     module   - The 'current-module' to resolve global binding.
+///     frames   - List of local frames.  Each local frame has a form:
+///                (<type> (<name> . <obj>) ...)
+///
+///                <type>     <obj>
+///                ----------------------------------------------
+///                LEXICAL    <lvar>     // lexical binding
+///                SYNTAX     <macro>    // syntactic binding
+///
+///     exp-name - The "name" of the current expression, that is, the
+///                name of the variable the result of the current
+///                expression is to be bound.  This slot may contain
+///                an identifier (for global binding) or a lvar (for
+///                local binding).   This slot may be #f.
+///
+///     current-proc - Holds the information of the current
+///                compiling procedure.  It accumulates information needed
+///                in later stages for the optimization.  This slot may
+///                be #f.
+///
+///     source-path - While processing included file, this slot is set to
+///                the full path of the included filename.
+/// (define-vector-struct cenv %make-cenv (module frames exp-name current-proc (source-path (current-load-path))))
 pub fn make_cenv(module: Handle<Module>, frames: Value) -> Value {
     Value::encode_object_value(make_vector!(
         make_symbol("cenv", true).into(),
@@ -449,6 +452,7 @@ pub fn cenv_current_proc(cenv: Value) -> Value {
 pub fn cenv_source_path(cenv: Value) -> Value {
     cenv.vector_ref(5)
 }
+
 
 pub fn cenv_set_module(cenv: Value, module: Handle<Module>) {
     cenv.vector_set(1, module.into());
@@ -954,12 +958,7 @@ pub fn compile(expr: Value, cenv: Value) -> Result<Value, Value> {
     bc.compile_body(thread, iform, 0);
 
     let code_block = bc.finalize(thread);
-    /*iform
-        .pretty_print(termcolor::StandardStream::stderr(
-            termcolor::ColorChoice::Always,
-        ))
-        .unwrap();
-    eprintln!();*/
+
     Ok(make_procedure(thread, code_block).into())
 }
 
@@ -983,5 +982,5 @@ pub fn is_global_eq(var: Value, id: Value, cenv: Value) -> bool {
         }
     }
 
-    false 
+    false
 }

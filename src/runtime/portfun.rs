@@ -7,6 +7,7 @@ use rsgc::thread::Thread;
 
 use crate::raise_exn;
 use crate::runtime::reader::Reader;
+use crate::runtime::string::do_format;
 use crate::vm::callframe::CallFrame;
 use crate::vm::scm_vm;
 
@@ -329,24 +330,30 @@ fn init_std(fd: i32, name: &str, dir: u8) -> Result<Value, Value> {
 }
 
 pub fn get_current_input_port() -> Result<Value, Value> {
-    Ok(*CURREN_INPUT_PORT.get_or_try_init(|| -> Result<Mutex<Value>, Value> {
-        let port = init_std(0, "/dev/stdin", SCM_PORT_DIRECTION_IN)?;
-        Ok(Mutex::new(port))
-    })?.lock(true))
+    Ok(*CURREN_INPUT_PORT
+        .get_or_try_init(|| -> Result<Mutex<Value>, Value> {
+            let port = init_std(0, "/dev/stdin", SCM_PORT_DIRECTION_IN)?;
+            Ok(Mutex::new(port))
+        })?
+        .lock(true))
 }
 
 pub fn get_current_output_port() -> Result<Value, Value> {
-    Ok(*CURREN_OUTPUT_PORT.get_or_try_init(|| -> Result<Mutex<Value>, Value> {
-        let port = init_std(1, "/dev/stdout", SCM_PORT_DIRECTION_OUT)?;
-        Ok(Mutex::new(port))
-    })?.lock(true))
+    Ok(*CURREN_OUTPUT_PORT
+        .get_or_try_init(|| -> Result<Mutex<Value>, Value> {
+            let port = init_std(1, "/dev/stdout", SCM_PORT_DIRECTION_OUT)?;
+            Ok(Mutex::new(port))
+        })?
+        .lock(true))
 }
 
 pub fn get_current_error_port() -> Result<Value, Value> {
-    Ok(*CURREN_ERROR_PORT.get_or_try_init(|| -> Result<Mutex<Value>, Value> {
-        let port = init_std(2, "/dev/stderr", SCM_PORT_DIRECTION_OUT)?;
-        Ok(Mutex::new(port))
-    })?.lock(true))
+    Ok(*CURREN_ERROR_PORT
+        .get_or_try_init(|| -> Result<Mutex<Value>, Value> {
+            let port = init_std(2, "/dev/stderr", SCM_PORT_DIRECTION_OUT)?;
+            Ok(Mutex::new(port))
+        })?
+        .lock(true))
 }
 
 extern "C" fn current_input_port(cfr: &mut CallFrame) -> ScmResult {
@@ -917,19 +924,14 @@ extern "C" fn make_file_input_port(cfr: &mut CallFrame) -> ScmResult {
     if args[0].is_string() {
         let port = Port::new(vm.mutator());
 
-        match port_open_file(
+        port_open_file(
             port,
             args[0],
             SCM_PORT_DIRECTION_IN,
             0,
             SCM_PORT_BUFFER_MODE_BLOCK,
             true.into(),
-        ) {
-            Ok(_) => {}
-            Err(e) => {
-                return ScmResult::err(e);
-            }
-        }
+        )?;
 
         ScmResult::ok(port)
     } else {
@@ -944,19 +946,14 @@ extern "C" fn make_file_output_port(cfr: &mut CallFrame) -> ScmResult {
     if args[0].is_string() {
         let port = Port::new(vm.mutator());
 
-        match port_open_file(
+        port_open_file(
             port,
             args[0],
             SCM_PORT_DIRECTION_OUT,
             SCM_PORT_FILE_OPTION_NO_FAIL,
             SCM_PORT_BUFFER_MODE_BLOCK,
             true.into(),
-        ) {
-            Ok(_) => {}
-            Err(e) => {
-                return ScmResult::err(e);
-            }
-        }
+        )?;
 
         ScmResult::ok(port)
     } else {
@@ -1075,8 +1072,6 @@ extern "C" fn lookahead_char(cfr: &mut CallFrame) -> ScmResult {
         .into();
     }
 }
-
-
 
 extern "C" fn port_position_proc(cfr: &mut CallFrame) -> ScmResult {
     if cfr.argument(0).is_port() {
@@ -1388,7 +1383,7 @@ extern "C" fn get_bytevector_n(cfr: &mut CallFrame) -> ScmResult {
 
             Err(e) => {
                 port.lock.unlock();
-                return ScmResult::err(e);
+                return Err::<(), _>(e).into();
             }
         }
     } else {
@@ -1469,7 +1464,7 @@ extern "C" fn get_bytevector_n_destructing(cfr: &mut CallFrame) -> ScmResult {
 
             Err(e) => {
                 port.lock.unlock();
-                return ScmResult::err(e);
+                return Err::<(), _>(e).into();
             }
         }
     } else {
@@ -2154,7 +2149,7 @@ extern "C" fn put_string(cfr: &mut CallFrame) -> ScmResult {
     }
 
     if start == 0 && count == orig {
-        port_put_string(port, s).map_err(|e| {
+        port_put_string(port, &s).map_err(|e| {
             port.lock.unlock();
             e
         })?;
@@ -2166,7 +2161,7 @@ extern "C" fn put_string(cfr: &mut CallFrame) -> ScmResult {
             })?;
         }
     }
-    
+
     if port.force_sync {
         port_flush_output(port).map_err(|e| {
             port.lock.unlock();
@@ -2178,7 +2173,6 @@ extern "C" fn put_string(cfr: &mut CallFrame) -> ScmResult {
 
     return ScmResult::ok(Value::encode_undefined_value());
 }
-
 
 extern "C" fn read(cfr: &mut CallFrame) -> ScmResult {
     let port = if cfr.argument_count() > 0 {
@@ -2195,7 +2189,7 @@ extern "C" fn read(cfr: &mut CallFrame) -> ScmResult {
             cfr.arguments().len() as _,
             cfr.arguments(),
         )
-        .into();    
+        .into();
     }
 
     let port = port.port();
@@ -2205,15 +2199,148 @@ extern "C" fn read(cfr: &mut CallFrame) -> ScmResult {
 
     let mut reader = Reader::new(scm_vm(), port, false);
 
-    reader.read().and_then(|val| {
-        port.lock.unlock();
-        Ok(val)
-    }).map_err(|e| {
-        port.lock.unlock();
-        e
-    }).into()
+    reader
+        .read()
+        .and_then(|val| {
+            port.lock.unlock();
+            Ok(val)
+        })
+        .map_err(|e| {
+            port.lock.unlock();
+            e
+        })
+        .into()
 }
 
+extern "C" fn write(cfr: &mut CallFrame) -> ScmResult {
+    let port = if cfr.argument_count() == 1 {
+        get_current_output_port()?
+    } else {
+        cfr.argument(1)
+    };
+    if !port.is_port() {
+        return wrong_contract::<()>(
+            "write",
+            "port?",
+            1,
+            cfr.arguments().len() as _,
+            cfr.arguments(),
+        )
+        .into();
+    }
+
+    let port = port.port();
+
+    port.lock.lock(true);
+
+    check_opened_input_textual_port!(port, "write", 1, cfr.arguments());
+
+    if !port.transcoder.is_false() {
+        
+        do_format("write", port, Some("~s"), 0, 0, cfr.argument_count(), cfr.arguments()).map_err(|e| {
+            port.lock.unlock();
+            e
+        })?;
+    } else {
+        let vm = scm_vm();
+        let buf = Port::new(vm.mutator());
+        port_open_bytevector(port, "string".intern().into(), SCM_PORT_DIRECTION_OUT, Value::encode_bool_value(false), Value::encode_bool_value(true));
+        buf.lock.lock(true);
+
+        do_format("write", buf, Some("~s"), 0, 0, cfr.argument_count(), cfr.arguments()).map_err(|e| {
+            port.lock.unlock();
+            buf.lock.unlock();
+            e
+        })?;
+
+        port_put_string(port, port_extract_string(buf).map_err(|e| {
+            port.lock.unlock();
+            buf.lock.unlock();
+            e
+        })?.strsym()).map_err(|e| {
+            port.lock.unlock();
+            buf.lock.unlock();
+            e
+        })?;
+        buf.lock.unlock();
+    }
+
+    if port.force_sync {
+        port_flush_output(port).map_err(|e| {
+            port.lock.unlock();
+            e
+        })?;
+    }
+
+    port.lock.unlock();
+
+    ScmResult::ok(Value::encode_undefined_value())
+}
+
+extern "C" fn display(cfr: &mut CallFrame) -> ScmResult {
+    let port = if cfr.argument_count() == 1 {
+        get_current_output_port()?
+    } else {
+        cfr.argument(1)
+    };
+    if !port.is_port() {
+        return wrong_contract::<()>(
+            "write",
+            "port?",
+            1,
+            cfr.arguments().len() as _,
+            cfr.arguments(),
+        )
+        .into();
+    }
+
+    let port = port.port();
+
+    port.lock.lock(true);
+
+    check_opened_input_textual_port!(port, "write", 1, cfr.arguments());
+
+    if !port.transcoder.is_false() {
+        
+        do_format("write", port, Some("~a"), 0, 0, cfr.argument_count(), cfr.arguments()).map_err(|e| {
+            port.lock.unlock();
+            e
+        })?;
+    } else {
+        let vm = scm_vm();
+        let buf = Port::new(vm.mutator());
+        port_open_bytevector(port, "string".intern().into(), SCM_PORT_DIRECTION_OUT, Value::encode_bool_value(false), Value::encode_bool_value(true));
+        buf.lock.lock(true);
+
+        do_format("write", buf, Some("~a"), 0, 0, cfr.argument_count(), cfr.arguments()).map_err(|e| {
+            port.lock.unlock();
+            buf.lock.unlock();
+            e
+        })?;
+
+        port_put_string(port, port_extract_string(buf).map_err(|e| {
+            port.lock.unlock();
+            buf.lock.unlock();
+            e
+        })?.strsym()).map_err(|e| {
+            port.lock.unlock();
+            buf.lock.unlock();
+            e
+        })?;
+        buf.lock.unlock();
+    }
+
+    if port.force_sync {
+        port_flush_output(port).map_err(|e| {
+            port.lock.unlock();
+            e
+        })?;
+    }
+
+    port.lock.unlock();
+
+    ScmResult::ok(Value::encode_undefined_value())
+}
 
 pub(crate) fn init_ports() {
     heap::heap().add_root(SimpleRoot::new("portfun", "ports", |proc| {
@@ -2306,6 +2433,8 @@ pub(crate) fn init_ports() {
         put_char, "put-char", 2, 2
         put_string, "put-string", 2, 4
         read, "read", 0, 1
+        write, "write", 1, 2
+        display, "display", 1, 2
 
     }
 }

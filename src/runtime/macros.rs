@@ -40,7 +40,7 @@ use crate::{
     },
     runtime::module::scm_identifier_to_bound_gloc,
     runtime::object::{Identifier, Macro, Module, ObjectHeader, ScmResult, Type},
-    runtime::string::make_string,
+    runtime::{string::make_string, error::scm_raise_proc},
     runtime::value::Value,
     runtime::{symbol::make_symbol, value::scm_box},
     scm_append, scm_append1, scm_for_each,
@@ -59,7 +59,7 @@ use super::{
     list::{scm_assoc_ref, scm_list},
     module::{scm_capy_module, scm_define},
     symbol::Intern,
-    vector::scm_vector_copy, error::wrong_contract,
+    vector::scm_vector_copy, 
 };
 
 // no need to trace these symbols, they are registered in the global symbol table
@@ -968,7 +968,7 @@ fn match_synrule(
         let plen = pattern.vector_len();
         let mut elli = form.vector_len();
 
-        let mut flen = elli;
+        let flen = elli;
         let mut has_elli = false;
 
         if plen == 0 {
@@ -1195,7 +1195,7 @@ extern "C" fn synrule_transform(cfr: &mut CallFrame) -> ScmResult {
 
     match synrule_expand(Thread::current(), form, module, frames, sr.syntax_rules()) {
         Ok(x) => ScmResult::ok(x),
-        Err(x) => ScmResult::err(x),
+        Err(x) => ScmResult::tail(scm_raise_proc(), &[x]),
     }
 }
 
@@ -1428,6 +1428,7 @@ pub fn make_er_transformer_toplevel<const HAS_INJECT: bool>(
     xformer: Value,
     def_module: Value,
     _def_name: Value,
+
 ) -> Value {
     make_er_transformer::<HAS_INJECT>(
         xformer,
@@ -1441,6 +1442,7 @@ extern "C" fn make_er_transformer_toplevel_proc(cfr: &mut CallFrame) -> ScmResul
     let def_name = cfr.argument(2);
     let has_inject = cfr.argument(3);
 
+
     let xformer = if !has_inject.is_false() {
         make_er_transformer_toplevel::<true>(xformer, def_module, def_name)
     } else {
@@ -1453,7 +1455,8 @@ extern "C" fn make_er_transformer_toplevel_proc(cfr: &mut CallFrame) -> ScmResul
 extern "C" fn make_er_transformer_proc(cfr: &mut CallFrame) -> ScmResult {
     let xformer = cfr.argument(0);
     let def_env = cfr.argument(1);
-    let has_inject = cfr.argument(2);
+    let _def_package = cfr.argument(2);
+    let has_inject = cfr.argument(3);
     let xformer = if !has_inject.is_false() {
         make_er_transformer::<true>(xformer, def_env)
     } else {

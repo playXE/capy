@@ -1,17 +1,23 @@
-use rsgc::thread::Thread;
+use rsgc::{system::arraylist::ArrayList, thread::Thread};
 
-use crate::{raise_exn, vm::callframe::CallFrame};
+use crate::{
+    compile::{make_iform, Asm, AsmOperand, IForm},
+    op::Opcode,
+    raise_exn,
+    vm::callframe::CallFrame,
+};
 
 use super::{
-    arith::{scm_is_exact_non_negative_integer,},
+    arith::scm_is_exact_non_negative_integer,
     error::{out_of_range, wrong_contract},
-    fun::scm_make_subr,
-    list::{scm_is_list, scm_cons, scm_length},
+    fun::{scm_make_subr, scm_make_subr_inliner},
+    list::{scm_cons, scm_is_list, scm_length},
     module::{scm_capy_module, scm_define},
     object::{ScmResult, MAX_ARITY},
     string::make_string,
     symbol::Intern,
-    value::{scm_int, Value}, vector::make_vector,
+    value::{scm_int, Value},
+    vector::make_vector,
 };
 
 extern "C" fn undefined(_: &mut CallFrame) -> ScmResult {
@@ -580,7 +586,6 @@ extern "C" fn string_ref(cfr: &mut CallFrame) -> ScmResult {
 }
 
 extern "C" fn string_set(cfr: &mut CallFrame) -> ScmResult {
-    println!("{:?}", cfr.arguments());
     if !cfr.argument(0).is_string() {
         return wrong_contract::<()>(
             "string-set!",
@@ -1133,7 +1138,6 @@ extern "C" fn string_append(cfr: &mut CallFrame) -> ScmResult {
     ScmResult::ok(make_string(Thread::current(), &string))
 }
 
-
 extern "C" fn vector_p(cfr: &mut CallFrame) -> ScmResult {
     let arg = cfr.argument(0);
 
@@ -1313,7 +1317,7 @@ extern "C" fn list_vector(cfr: &mut CallFrame) -> ScmResult {
         )
         .into();
     }
-    
+
     let mut vector = make_vector(Thread::current(), scm_length(list).unwrap() as usize);
 
     let mut i = 0;
@@ -1371,13 +1375,69 @@ extern "C" fn vector_length(cfr: &mut CallFrame) -> ScmResult {
 fn init_vector() {
     let module = scm_capy_module().module();
 
-    let subr = scm_make_subr("vector?", vector_p, 1, 1);
+    let subr = scm_make_subr_inliner("vector?", vector_p, 1, 1, |iforms, _| {
+        if iforms.len() == 1 {
+            Some(make_iform(IForm::Asm(Asm {
+                op: Opcode::IsVector,
+                args: ArrayList::from_slice(Thread::current(), iforms),
+                operands: None,
+                exits: false,
+                pushes: true,
+                ic: false,
+            })))
+        } else {
+            None
+        }
+    });
     scm_define(module, "vector?".intern(), subr.into()).unwrap();
 
-    let subr = scm_make_subr("make-vector", make_vector_proc, 1, 2);
+    let subr = scm_make_subr_inliner("make-vector", make_vector_proc, 1, 2, |iforms, _| {
+        if iforms.len() == 1 || iforms.len() == 2 {
+            let n = iforms[0];
+            if let IForm::Const(n) = &*n {
+                if n.is_int32() && n.get_int32() >= 0 && n.get_int32() <= u16::MAX as i32 {
+                    let fill = if iforms.len() == 2 {
+                        iforms[1]
+                    } else {
+                        make_iform(IForm::Const(Value::encode_undefined_value()))
+                    };
+
+                    return Some(make_iform(IForm::Asm(Asm {
+                        op: Opcode::MakeVector,
+                        args: ArrayList::from_slice(Thread::current(), &[fill]),
+                        operands: Some(ArrayList::from_slice(
+                            Thread::current(),
+                            &[AsmOperand::I16(n.get_int32() as u16 as i16)],
+                        )),
+                        exits: false,
+                        pushes: true,
+                        ic: false,
+                    })));
+                }
+            }
+        }
+
+        None
+    });
     scm_define(module, "make-vector".intern(), subr.into()).unwrap();
 
-    let subr = scm_make_subr("vector", vector_proc, 0, MAX_ARITY);
+    let subr = scm_make_subr_inliner("vector", vector_proc, 0, MAX_ARITY, |iforms, _| {
+        let n = iforms.len();
+        if n > u16::MAX as usize {
+            return None;
+        }
+
+        let operands = ArrayList::from_slice(Thread::current(), &[AsmOperand::I16(n as u16 as i16)]);
+
+        Some(make_iform(IForm::Asm(Asm {
+            op: Opcode::MakeVector,
+            args: ArrayList::from_slice(Thread::current(), iforms),
+            operands: Some(operands),
+            exits: false,
+            pushes: true,
+            ic: false,
+        })))
+    });
     scm_define(module, "vector".intern(), subr.into()).unwrap();
 
     let subr = scm_make_subr("vector-ref", vector_ref, 2, 2);

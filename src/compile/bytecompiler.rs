@@ -1,27 +1,21 @@
-use std::collections::HashMap;
-
-use r7rs_parser::{
-    expr::{Expr, NoIntern},
-    parser::{ParseError, Parser},
-};
 use rsgc::{
     prelude::Handle,
     system::{array::Array, arraylist::ArrayList},
     thread::Thread,
 };
+use std::{collections::HashMap, ptr::null};
 
 use crate::{
-    compile::{make_cenv, pass1::pass1, ref_count_lvars, LetScope},
+    compaux::scm_unwrap_identifier,
+    compile::LetScope,
     op::{disassembly, Opcode},
-    raise_exn,
-    runtime::object::{CodeBlock, Module, ObjectHeader, Type, MAX_ARITY},
+    runtime::fun::make_procedure,
+    runtime::object::{CodeBlock, ObjectHeader, Type, MAX_ARITY},
+    runtime::value::Value,
     runtime::vector::make_vector_from_slice,
-    runtime::{error::make_srcloc, fun::make_procedure},
-    //cruntime::string::make_string,
-    runtime::{string::make_string, value::Value},
 };
 
-use super::{r7rs_to_value, AsmOperand, IForm, LVar, Lambda};
+use super::{AsmOperand, IForm, LVar, Lambda};
 
 struct BindingGroup {
     bindings: HashMap<usize, usize>,
@@ -72,7 +66,7 @@ pub struct ByteCompiler {
 }
 
 impl ByteCompiler {
-    pub fn new(thread: &mut Thread) -> Self {
+    pub fn new(thread: &mut Thread,) -> Self {
         Self {
             captures: CaptureGroup {
                 captures: Vec::new(),
@@ -141,7 +135,7 @@ impl ByteCompiler {
             }
 
             self.emit_simple(Opcode::PushConstant);
-            self.code.extend_from_slice(&(literal as u16).to_le_bytes());
+            self.code.extend_from_slice(&(literal as u32).to_le_bytes());
         }
     }
 
@@ -164,11 +158,37 @@ impl ByteCompiler {
         self.code.extend_from_slice(&arg.to_le_bytes());
     }
 
+    pub fn jmp(&mut self) -> impl FnOnce(&mut Self) {
+        let p = self.code.len();
+        self.code.push(Opcode::Branch as u8);
+        self.code.extend_from_slice(&(0u32).to_le_bytes());
+
+        move |ctx| {
+            let offset = ctx.code.len() as isize - p as isize;
+            ctx.code[p + 1..p + 5].copy_from_slice(&(offset as i32).to_le_bytes());
+        }
+    }
+
+    pub fn cjmp(&mut self, cond: bool) -> impl FnOnce(&mut Self) {
+        let p = self.code.len();
+        self.code.push(Opcode::Branch as u8);
+        self.code.extend_from_slice(&(0u32).to_le_bytes());
+        move |ctx| {
+            ctx.code[p + 1..p + 5].copy_from_slice(&(5i32).to_le_bytes());
+            ctx.code[p] = if cond {
+                Opcode::BranchIf
+            } else {
+                Opcode::BranchIfNot
+            } as u8;
+        }
+    }
+
     pub fn finalize(&mut self, thread: &mut Thread) -> Handle<CodeBlock> {
         let fragments = Array::new(thread, self.fragments.len(), |_, x| self.fragments[x]);
         let literals = make_vector_from_slice(thread, &self.literals);
 
         let code = CodeBlock {
+            mcode: null(),
             header: ObjectHeader::new(Type::CodeBlock),
             name: Value::encode_undefined_value(),
             literals: Value::encode_object_value(literals),
@@ -222,7 +242,7 @@ impl ByteCompiler {
                 bindings: HashMap::new(),
                 parent: None,
             }),
-        }; 
+        };
         let assert_argcount = lam.lvars.len() - lam.optarg as usize;
         closure_compiler.emit_simple(Opcode::Enter);
         if lam.optarg {
@@ -236,9 +256,6 @@ impl ByteCompiler {
                 .code
                 .extend_from_slice(&(assert_argcount as u16).to_le_bytes());
         }
-       
-
-       
 
         for ix in 0..lam.lvars.len() - lam.optarg as usize {
             closure_compiler.emit_ldarg(ix as _);
@@ -262,7 +279,7 @@ impl ByteCompiler {
 
             closure_compiler.bind(lvar, ix);
         }
-        
+
         /*let patch_alloc_ip = self.code.len();
 
         closure_compiler.emit_simple(Opcode::NoOp);
@@ -283,7 +300,11 @@ impl ByteCompiler {
 
         closure_compiler.compile_body(thread, lam.body, lam.lvars.len());
         let mut code = closure_compiler.finalize(thread);
-        code.name = lam.name;
+        code.name = if lam.name.is_wrapped_identifier() {
+            scm_unwrap_identifier(lam.name.identifier()).into()
+        } else {
+            Value::encode_null_value()
+        };
         code.mina = lam.lvars.len() as _;
         if lam.optarg {
             code.maxa = MAX_ARITY;
@@ -347,11 +368,14 @@ impl ByteCompiler {
                     return;
                 } else {
                     let ix = unsafe { (*this).captures.capture(lvar) };
-                    self.emit_closure_ref(ix as _);
 
                     if !lvar.is_immutable() && unbox {
-                        self.emit_simple(Opcode::BoxRef);
+                        self.emit_simple(Opcode::ClosureRefUnbox);
+                        self.code.extend_from_slice(&(ix as u16).to_le_bytes());
+                    } else {
+                        self.emit_closure_ref(ix as _);
                     }
+
                     return;
                 }
             }
@@ -585,8 +609,9 @@ impl ByteCompiler {
 
                 let else_jump_ip = self.code.len();
 
-                for _ in 0..5 {
-                    self.emit_simple(Opcode::NoOp);
+                self.emit_simple(Opcode::NoOp5);
+                for _ in 0..4 {
+                    self.code.push(0);
                 }
 
                 if self.compile_iform(thread, alt, tail) {
@@ -602,8 +627,9 @@ impl ByteCompiler {
 
                 let exit_jump_ip = self.code.len();
 
-                for _ in 0..5 {
-                    self.emit_simple(Opcode::NoOp);
+                self.emit_simple(Opcode::NoOp5);
+                for _ in 0..4 {
+                    self.code.push(0);
                 }
                 self.code[else_jump_ip] = Opcode::BranchIf as u8;
                 let diff = (self.code.len() - else_jump_ip) as i32 - 5;
@@ -634,9 +660,9 @@ impl ByteCompiler {
 
     pub fn compile_body(&mut self, thread: &mut Thread, expr: Handle<IForm>, argc: usize) {
         let patch_alloc = self.code.len();
-        for _ in 0..3 {
-            self.emit_simple(Opcode::NoOp);
-        }
+        self.emit_simple(Opcode::NoOp3);
+        self.code.push(0);
+        self.code.push(0);
 
         if !self.compile_iform(thread, expr, true) {
             self.emit_simple(Opcode::Return);
@@ -649,145 +675,5 @@ impl ByteCompiler {
             self.code[patch_alloc + 1] = n[0];
             self.code[patch_alloc + 2] = n[1];
         }
-    }
-
-    pub fn compile_toplevel(
-        &mut self,
-        thread: &mut Thread,
-        file: &str,
-        module: Handle<Module>,
-        parser: &mut Parser<NoIntern>,
-    ) -> Result<Value, Value> {
-        let cenv = make_cenv(module, Value::encode_null_value());
-
-        let patch_alloc = self.code.len();
-        for _ in 0..3 {
-            self.emit_simple(Opcode::NoOp);
-        }
-
-        while !parser.finished() {
-            let expr = match parser.parse(true) {
-                Ok(x) => x,
-                Err(e) => match e {
-                    ParseError::Lexical(loc, err) => {
-                        /*return Err(raise_error(
-                            "compile",
-                            &format!(
-                                "lexical error at {}:{}:{}: {}",
-                                file, loc.line, loc.col, err
-                            ),
-                            0,
-                        ));*/
-                        return raise_exn!(
-                            FailRead,
-                            &[make_srcloc(
-                                make_string(thread, file).into(),
-                                loc.line as _,
-                                loc.col as _,
-                                0i32
-                            )],
-                            "message: {}",
-                            err
-                        );
-                    }
-
-                    ParseError::Syntax(loc, err) => {
-                        return raise_exn!(
-                            FailRead,
-                            &[make_srcloc(
-                                make_string(thread, file).into(),
-                                loc.line as _,
-                                loc.col as _,
-                                0i32
-                            )],
-                            "message: {}",
-                            err
-                        )
-                    }
-                },
-            };
-            let file = make_string(thread, file);
-            let expr = r7rs_to_value(thread, file.into(), &expr);
-
-            let form = pass1(expr, cenv)?;
-
-            ref_count_lvars(form);
-
-            assert!(
-                !self.compile_iform(thread, form, false),
-                "top level statement can't exit"
-            );
-            self.emit_simple(Opcode::Pop);
-        }
-
-        self.emit_simple(Opcode::PushUndef);
-        self.emit_simple(Opcode::Return);
-
-        self.code[patch_alloc] = Opcode::Alloc as _;
-        let n = (self.max_locals as u16).to_le_bytes();
-        self.code[patch_alloc + 1] = n[0];
-        self.code[patch_alloc + 2] = n[1];
-
-        let code = self.finalize(thread);
-
-        Ok(make_procedure(thread, code).into())
-    }
-
-    pub fn compile_r7rs_expr(
-        thread: &mut Thread,
-        filename: Value,
-        module: Handle<Module>,
-        expr: &Expr<NoIntern>,
-    ) -> Result<Value, Value> {
-        let cenv = make_cenv(module, Value::encode_null_value());
-
-        let form = pass1(r7rs_to_value(thread, filename, expr), cenv)?;
-
-        ref_count_lvars(form);
-
-        let mut compiler = Self::new(thread);
-        compiler.emit_simple(Opcode::Enter);
-        compiler.compile_body(thread, form, 0);
-
-        let code = compiler.finalize(thread);
-
-        Ok(make_procedure(thread, code).into())
-    }
-
-    pub fn compile_while(
-        thread: &mut Thread,
-        mut k: impl FnMut(&mut Thread) -> Result<Option<Handle<IForm>>, Value>,
-    ) -> Result<Value, Value> {
-        let mut bc = Self::new(thread);
-        bc.emit_simple(Opcode::Enter);
-        let patch_alloc = bc.code.len();
-        for _ in 0..3 {
-            bc.emit_simple(Opcode::NoOp);
-        }
-        let mut exit = true;
-        let mut count = 0;
-        while let Some(form) = k(thread)? {
-            if !exit {
-                bc.emit_simple(Opcode::Pop);
-            }
-            exit = bc.compile_iform(thread, form, false);
-            count += 1;
-        }
-
-        if !exit || count == 0 {
-            if count == 0 {
-                bc.emit_simple(Opcode::PushUndef);
-            }
-            bc.emit_simple(Opcode::Return);
-        }
-
-        bc.code[patch_alloc] = Opcode::Alloc as _;
-        let n = (bc.max_locals as u16).to_le_bytes();
-        bc.code[patch_alloc + 1] = n[0];
-        bc.code[patch_alloc + 2] = n[1];
-
-        let code = bc.finalize(thread);
-
-        Ok(make_procedure(thread, code).into())
     }
 }

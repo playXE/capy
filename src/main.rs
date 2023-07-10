@@ -1,14 +1,17 @@
 #![allow(unused_imports)]
 use b3::BasicBlockBuilder;
 use capy::{
-    repl::repl,
+    compile::bytecompiler::ByteCompiler,
+    op::Opcode,
     runtime::{
         error::{Exception, EXN_TABLE},
         structure::{is_struct_instance, struct_ref},
     },
-    runtime::{load::scm_vm_load, module::scm_user_module}, compile::bytecompiler::ByteCompiler, Thread, op::Opcode, jit::baseline::stack2ssa,
+    runtime::{load::scm_vm_load, module::scm_user_module},
+    vm::scm_vm,
+    Thread,
 };
-use macroassembler::jit::gpr_info::ARGUMENT_GPR0;
+use macroassembler::{assembler::link_buffer::LinkBuffer, jit::gpr_info::ARGUMENT_GPR0};
 use rsgc::{prelude::HeapArguments, thread::main_thread};
 use std::path::PathBuf;
 use structopt::StructOpt;
@@ -44,7 +47,6 @@ fn main() {
                     if is_struct_instance(EXN_TABLE[Exception::Exn as usize].typ, e) {
                         let msg = struct_ref(e, 0);
                         println!("Error: {}", msg);
-                        println!("typ: {:?}", e);
                         let cmark = struct_ref(e, 1);
                         println!("cmarks: \n{:?}", cmark);
                     } else {
@@ -52,10 +54,12 @@ fn main() {
                     }
                 }
             }
-        } else {
-            repl();
         }
-        /* 
+        #[cfg(feature = "profile-opcodes")]
+        {
+            capy::vm::interpreter::print_profiles();
+        }
+        /*
         let t = Thread::current();
         let mut bc = ByteCompiler::new(t);
 
@@ -70,7 +74,7 @@ fn main() {
         let entry = proc.add_block(1.0);
         let mut builder = BasicBlockBuilder::new(&mut proc, entry);
         let cfr = builder.argument(b3::Reg::new_gpr(ARGUMENT_GPR0), b3::Type::Int64);
-        
+
         let mut stack2ssa = stack2ssa::Stack2SSA::new(&mut proc, cb, cfr, entry);
 
         stack2ssa.generate();

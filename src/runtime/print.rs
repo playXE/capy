@@ -358,7 +358,7 @@ impl<'a> Printer<'a> {
                         }
                     }
 
-                    if e.car().is_symbol() && e.car().strsym() == "unquote" {
+                    if false && e.car().is_symbol() && e.car().strsym() == "unquote" {
                         if e.cdr().is_pair() && e.cddr().is_null() {
                             port_puts(self.port, ". ,")?;
                             self._write(ht, e.cadr())?;
@@ -474,9 +474,9 @@ impl<'a> Printer<'a> {
                 _ => {
                     let name = obj.native_procedure().name;
                     if (obj.object_header().flags & SCM_PRIM_TYPE_PARAMETER as u32) != 0 {
-                        self.puts(&format!("#<parameter {}>", name.strsym()))
+                        self.puts(&format!("#<parameter {}>", name))
                     } else {
-                        self.puts(&format!("#<procedure {}>", name.strsym()))
+                        self.puts(&format!("#<procedure {}>", name))
                     }
                 }
             }

@@ -25,7 +25,24 @@ rustyline = { version = "12.0", features = [
 ] }
 structopt = "0.3"
 
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = [
+    "memoryapi",
+    "winnt",
+    "sysinfoapi",
+    "minwinbase",
+    "errhandlingapi",
+    "excpt",
+    "minwindef",
+    "profileapi",
+    "processthreadsapi"
+] }
+
+
 [profile.release]
-lto = true
+lto = false
 strip = true
 opt-level = 2
+
+[features]
+profile-opcodes = []

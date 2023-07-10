@@ -75,7 +75,7 @@ pub fn get_stacktrace_str(vm: &mut VM) -> String {
         let callee = frame.callee();
         let ip = frame.return_pc();
         let _code_block = frame.code_block();
-        println!("{:p}->{:p}", frame.cfr, unsafe { (*frame.cfr).caller() });
+        
         let name = get_proc_name(callee);
 
         if let Some(name) = name {

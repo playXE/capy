@@ -558,10 +558,10 @@ pub fn scm_require(feature: Value, _flags: i32, _base_module: Handle<Module>) ->
         if providing.is_false() {
             break;
         }
-
+      
         let mut p = providing;
 
-        if p.car().get_int32() == vm.vmid {
+        if p.cdr().get_int32() == vm.vmid {
             circular = true;
             break;
         }

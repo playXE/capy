@@ -230,6 +230,7 @@ pub fn make_struct_instance_(stype: Value, args: &[Value]) -> Result<Value, Valu
             inst.slots[j] = stype.parent_types[p as usize].uninit_val;
             ns -= 1;
         }
+       
         // fill in supplied fields
         while nis > 0 {
             j -= 1;

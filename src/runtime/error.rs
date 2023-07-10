@@ -12,7 +12,7 @@ use rsgc::{
 use crate::{
     runtime::{
         fun::scm_make_subr,
-        module::scm_define,
+        module::{scm_define, scm_find_binding, scm_internal_module},
         object::MAX_ARITY,
         structure::{force_struct_type_info, make_struct_names_from_array, make_struct_values},
         symbol::Intern,
@@ -195,6 +195,7 @@ pub static EXN_TABLE: Lazy<[ExnRec; Exception::Other as usize]> = Lazy::new(|| {
         super_pos: 0,
     }; Exception::Other as usize];
 
+    exn_table[Exception::Exn as usize].args = 2;
     exn_table[Exception::Fail as usize].args = 2;
     exn_table[Exception::FailContract as usize].args = 2;
     exn_table[Exception::FailContractArity as usize].args = 2;
@@ -702,47 +703,33 @@ pub fn out_of_range<T>(
 
 fn do_raise_range_error(who: &str, args: &[Value]) -> ScmResult {
     if !args[0].is_symbol() {
-        return ScmResult::err(
-            wrong_contract::<()>(who, "symbol?", 0, args.len() as _, args).unwrap_err(),
-        );
+        return wrong_contract::<()>(who, "symbol?", 0, args.len() as _, args).into();
     }
 
     if !args[1].is_string() {
-        return ScmResult::err(
-            wrong_contract::<()>(who, "string?", 1, args.len() as _, args).unwrap_err(),
-        );
+        return wrong_contract::<()>(who, "string?", 1, args.len() as _, args).into();
     }
 
     if !args[2].is_string() {
-        return ScmResult::err(
-            wrong_contract::<()>(who, "string?", 2, args.len() as _, args).unwrap_err(),
-        );
+        return wrong_contract::<()>(who, "string?", 2, args.len() as _, args).into();
     }
 
     if !args[3].is_int32() || args[3].get_type() != Type::BigNum {
-        return ScmResult::err(
-            wrong_contract::<()>(who, "exact-integer?", 3, args.len() as _, args).unwrap_err(),
-        );
+        return wrong_contract::<()>(who, "exact-integer?", 3, args.len() as _, args).into();
     }
 
     if !args[5].is_int32() || args[5].get_type() != Type::BigNum {
-        return ScmResult::err(
-            wrong_contract::<()>(who, "exact-integer?", 5, args.len() as _, args).unwrap_err(),
-        );
+        return wrong_contract::<()>(who, "exact-integer?", 5, args.len() as _, args).into();
     }
 
     if !args[6].is_int32() || args[6].get_type() != Type::BigNum {
-        return ScmResult::err(
-            wrong_contract::<()>(who, "exact-integer?", 6, args.len() as _, args).unwrap_err(),
-        );
+        return wrong_contract::<()>(who, "exact-integer?", 6, args.len() as _, args).into();
     }
 
     if args.len() > 7 {
         if !args[7].is_false() && !args[7].is_int32() && args[7].get_type() != Type::BigNum {
-            return ScmResult::err(
-                wrong_contract::<()>(who, "(or/c exact-integer? #f)", 7, args.len() as _, args)
-                    .unwrap_err(),
-            );
+            return wrong_contract::<()>(who, "(or/c exact-integer? #f)", 7, args.len() as _, args)
+                .into();
         }
     }
 
@@ -765,8 +752,9 @@ fn do_raise_range_error(who: &str, args: &[Value]) -> ScmResult {
     }
 }
 
-extern "C" fn raise_range_error(cfr: &mut CallFrame) -> ScmResult {
-    do_raise_range_error("raise-range-error", cfr.arguments())
+extern "C" fn make_range_error(cfr: &mut CallFrame) -> ScmResult {
+    let err = do_raise_range_error("raise-range-error", cfr.arguments()).value();
+    ScmResult::ok(err)
 }
 
 const MAX_MISMATCH_EXTRAS: usize = 5;
@@ -1047,7 +1035,7 @@ fn wrong_count_impl(
     if maxc > MAX_ARITY as i32 {
         maxc = -1;
     }
-    
+
     let s = make_arity_expect_string(Some(name), minc, maxc, args, "");
 
     raise_exn!(FailContractArity, &[], "{}", s)
@@ -1063,39 +1051,40 @@ pub fn wrong_count<T>(
     wrong_count_impl(name, minc, maxc, argc, args).map(|_| unreachable!())
 }
 
-extern "C" fn error_proc(cfr: &mut CallFrame) -> ScmResult {
+extern "C" fn make_error_proc(cfr: &mut CallFrame) -> ScmResult {
     match do_error("error", Exception::Fail, cfr.arguments()) {
         Ok(_) => unreachable!(),
-        Err(v) => ScmResult::err(v),
+        Err(v) => ScmResult::ok(v),
     }
 }
 
 extern "C" fn assert_unreachable(_: &mut CallFrame) -> ScmResult {
-    ScmResult::err(
-        contract_error::<()>("assert-unreachable", "unreachable code reached", &[]).unwrap_err(),
+    ScmResult::ok(
+        contract_error::<()>("%make-assert-unreachable", "unreachable code reached", &[])
+            .unwrap_err(),
     )
 }
 
-extern "C" fn raise_user_error(cfr: &mut CallFrame) -> ScmResult {
-    ScmResult::err(do_error("raise-user-error", Exception::FailUser, cfr.arguments()).unwrap_err())
+extern "C" fn make_user_error(cfr: &mut CallFrame) -> ScmResult {
+    ScmResult::ok(do_error("%make-user-error", Exception::FailUser, cfr.arguments()).unwrap_err())
 }
 
-extern "C" fn raise_type_error(cfr: &mut CallFrame) -> ScmResult {
-    ScmResult::err(
-        do_raise_type_error("raise-type-error", cfr.arguments(), Exception::Exn).unwrap_err(),
+extern "C" fn make_type_error(cfr: &mut CallFrame) -> ScmResult {
+    ScmResult::ok(
+        do_raise_type_error("%make-type-error", cfr.arguments(), Exception::Exn).unwrap_err(),
     )
 }
 
-extern "C" fn raise_argument_error(cfr: &mut CallFrame) -> ScmResult {
-    ScmResult::err(
-        do_raise_type_error("raise-arguments-error", cfr.arguments(), Exception::Fail).unwrap_err(),
+extern "C" fn make_argument_error(cfr: &mut CallFrame) -> ScmResult {
+    ScmResult::ok(
+        do_raise_type_error("%make-arguments-error", cfr.arguments(), Exception::Fail).unwrap_err(),
     )
 }
 
-extern "C" fn raise_result_error(cfr: &mut CallFrame) -> ScmResult {
-    ScmResult::err(
+extern "C" fn make_result_error(cfr: &mut CallFrame) -> ScmResult {
+    ScmResult::ok(
         do_raise_type_error(
-            "raise-result-error",
+            "%make-result-error",
             cfr.arguments(),
             Exception::FailContract,
         )
@@ -1143,8 +1132,8 @@ fn do_raise_arity_error<T>(who: &str, args: &[Value]) -> Result<T, Value> {
     }
 }
 
-extern "C" fn raise_arity_error(cfr: &mut CallFrame) -> ScmResult {
-    ScmResult::err(do_raise_arity_error::<()>("raise-arity-error", cfr.arguments()).unwrap_err())
+extern "C" fn make_arity_error(cfr: &mut CallFrame) -> ScmResult {
+    ScmResult::ok(do_raise_arity_error::<()>("%make-arity-error", cfr.arguments()).unwrap_err())
 }
 
 fn wrong_return_arity_impl(
@@ -1176,7 +1165,7 @@ fn wrong_return_arity_impl(
     raise_exn!(FailContractArity, &[], "{}", s)
 }
 
-extern "C" fn raise_result_arity_error(cfr: &mut CallFrame) -> ScmResult {
+extern "C" fn make_result_arity_error(cfr: &mut CallFrame) -> ScmResult {
     let args = cfr.arguments();
     let where_ = if args[0].is_false() {
         ""
@@ -1233,7 +1222,7 @@ extern "C" fn raise_result_arity_error(cfr: &mut CallFrame) -> ScmResult {
         );
     };
 
-    ScmResult::err(
+    ScmResult::ok(
         wrong_return_arity_impl(
             where_,
             expected,
@@ -1269,30 +1258,83 @@ pub fn make_srcloc(source: Value, line: i32, column: i32, position: i32) -> Valu
     )
 }
 
+extern "C" fn scheme_error(cfr: &mut CallFrame) -> ScmResult {
+    let port = Port::new(Thread::current());
+    port_open_bytevector(
+        port,
+        "%scheme-error".intern().into(),
+        SCM_PORT_DIRECTION_OUT,
+        false.into(),
+        false.into(),
+    );
+    do_format(
+        "%scheme-error",
+        port,
+        None,
+        0,
+        1,
+        cfr.argument_count(),
+        cfr.arguments(),
+    )?;
+    let err = raise_exn!(
+        (),
+        Exn,
+        &[Value::encode_undefined_value()],
+        "{}",
+        port_extract_string(port)?
+    )
+    .unwrap_err();
+    ScmResult::err(err)
+}
+
+extern "C" fn scheme_raise(cfr: &mut CallFrame) -> ScmResult {
+    ScmResult::err(cfr.argument(0))
+}
+
+static RAISE_PROC: Lazy<Value> = Lazy::new(|| {
+    let module = scm_internal_module().module();
+    let symbol = scm_find_binding(module, "%raise".intern(), 0).expect("raise not defined?");
+    heap().add_root(SimpleRoot::new("raise", "raise", |proc| {
+        RAISE_PROC.trace(proc.visitor());
+    }));
+    symbol.value
+});
+
+pub fn scm_raise_proc() -> Value {
+    *RAISE_PROC
+}
+
+pub fn scm_raise(val: Value) -> ScmResult {
+    ScmResult::tail(*RAISE_PROC, &[val])
+}
+
 pub(crate) fn init_error() {
     let capy = scm_capy_module().module();
 
     macro_rules! defproc {
         ($($name: ident, $lit: literal, $mina: expr, $maxa: expr)*) => {
+            let module = scm_internal_module().module();
             $(
 
                 let subr = scm_make_subr($lit, $name, $mina, $maxa);
-                scm_define(capy, $lit.intern().into(), subr).unwrap();
+                scm_define(module, $lit.intern().into(), subr).unwrap();
             )*
         };
     }
 
     defproc! {
-        error_proc, "error", 1, MAX_ARITY
-        raise_user_error, "raise-user-error", 1, MAX_ARITY
-        raise_type_error, "raise-type-error", 3, MAX_ARITY
-        raise_argument_error, "raise-argument-error", 3, MAX_ARITY
-        raise_result_error, "raise-result-error", 3, MAX_ARITY
-        raise_argument_error, "raise-arguments-error", 3, MAX_ARITY
-        raise_range_error, "raise-range-error", 7, 8
-        raise_arity_error, "raise-arity-error", 3, MAX_ARITY
-        raise_result_arity_error, "raise-result-arity-error", 3, MAX_ARITY
-        assert_unreachable, "assert-unreachable", 0, 0
+        make_error_proc, "%make-error", 1, MAX_ARITY
+        make_user_error, "%make-user-error", 1, MAX_ARITY
+        make_type_error, "%make-type-error", 3, MAX_ARITY
+        make_argument_error, "%make-argument-error", 3, MAX_ARITY
+        make_result_error, "%make-result-error", 3, MAX_ARITY
+        make_argument_error, "%make-arguments-error", 3, MAX_ARITY
+        make_range_error, "%make-range-error", 7, 8
+        make_arity_error, "%make-arity-error", 3, MAX_ARITY
+        make_result_arity_error, "%make-result-arity-error", 3, MAX_ARITY
+        assert_unreachable, "%make-assert-unreachable", 0, 0
+        scheme_error, "%scheme-error", 1, MAX_ARITY
+        scheme_raise, "%scheme-raise", 1, 1
     };
     let _ = *EXN_TABLE;
     heap().add_root(SimpleRoot::new("exn-table", "exns", |processor| {

@@ -8,6 +8,8 @@ use crate::runtime::object::CodeBlock;
 #[display(style = "snake_case")]
 pub enum Opcode {
     NoOp,
+    NoOp3,
+    NoOp5,
     /// Regular `enter` opcode. Means that function is not yet JIT compiled.
     /// Will simply increment hotness counter until certain threshold is reached.
     /// After JIT compilation is requested changes to `EnterCompiling`.
@@ -81,6 +83,8 @@ pub enum Opcode {
     ClosureRef,
     ClosureSet,
 
+    ClosureRefUnbox,
+
     Branch,
     BranchIf,
     BranchIfNot,
@@ -119,10 +123,12 @@ pub enum Opcode {
     SetCar,
     SetCdr,
     Vector,
+    MakeVector,
     VectorRef,
     VectorRefI,
     VectorSet,
     VectorSetI,
+    VectorLength,
     Tuple,
     TupleRef,
     TupleSet,
@@ -191,13 +197,15 @@ pub fn disassembly(
         }
 
         let op = unsafe { std::mem::transmute::<u8, Opcode>(op) };
-        write!(out, "({:p}){:04}: ", &code[ip], ip)?;
+        write!(out, "({:p}) {:04}: ", &code[ip], ip)?;
+        
         out.set_color(&ColorSpec::new().set_fg(Some(termcolor::Color::Blue)))?;
         write!(out, "{}", op)?;
         out.reset()?;
         ip += 1;
         match op {
-            Opcode::Alloc
+            | Opcode::NoOp3
+            | Opcode::Alloc
             | Opcode::AllocBelow
             | Opcode::LdArg
             | Opcode::SetArg
@@ -216,15 +224,17 @@ pub fn disassembly(
             | Opcode::StackSet
             | Opcode::StackGet
             | Opcode::ClosureRef
+            | Opcode::ClosureRefUnbox
             | Opcode::ClosureSet
             | Opcode::Vector
             | Opcode::List
             | Opcode::Popn
-            | Opcode::VectorRef
-            | Opcode::VectorSet
             | Opcode::Tuple
             | Opcode::TupleRef
-            | Opcode::TupleSet => {
+            | Opcode::TupleSet
+            | Opcode::MakeVector
+            | Opcode::VectorRefI
+            | Opcode::VectorSetI => {
                 let n = read2!();
                 writeln!(out, " {}", n)?;
             }
@@ -262,7 +272,12 @@ pub fn disassembly(
             }
 
             Opcode::PushConstant => {
-                let n = read2!();
+                let n = read4!();
+                writeln!(out, " {}", n)?;
+            }
+
+            Opcode::NoOp5 => {
+                let n = read4!();
                 writeln!(out, " {}", n)?;
             }
 
@@ -284,6 +299,9 @@ pub fn disassembly(
                 writeln!(out, "")?;
             }
         }
+
+       
+
     }
 
     Ok(())

@@ -50,5 +50,5 @@
         ((eq? (car args) '<param-convert>)
          converter)
        (else
-         (error "bad parameter syntax"))))))
+         (set! init (converter (car args))))))))
     

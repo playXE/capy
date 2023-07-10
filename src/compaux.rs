@@ -239,6 +239,7 @@ pub fn scm_identifier_global_ref(id: Handle<Identifier>) -> Result<(Value, Handl
         return Ok((gloc.value, gloc));
     }
 
+  
     Err(make_string(
         Thread::current(),
         &format!("unbound variable: {}", scm_unwrap_identifier(id)),

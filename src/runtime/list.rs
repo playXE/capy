@@ -13,10 +13,11 @@ use rsgc::{prelude::Handle, system::arraylist::ArrayList, thread::Thread};
 
 use super::{
     error::wrong_contract,
-    fun::{scm_make_subr_inliner, scm_make_subr},
+    fun::{scm_make_subr, scm_make_subr_inliner},
     module::{scm_define, scm_scheme_module},
     object::{ScmResult, MAX_ARITY},
-    symbol::Intern, value::scm_int,
+    symbol::Intern,
+    value::scm_int,
 };
 
 pub fn scm_cons(t: &mut Thread, car: Value, cdr: Value) -> Value {
@@ -536,9 +537,7 @@ macro_rules! scm_append {
 
 extern "C" fn car(cfr: &mut CallFrame) -> ScmResult {
     if unlikely(!cfr.argument(0).is_pair()) {
-        return ScmResult::err(
-            wrong_contract::<()>("car", "pair?", 0, 1, cfr.arguments()).unwrap_err(),
-        );
+        return wrong_contract::<()>("car", "pair?", 0, 1, cfr.arguments()).into();
     }
 
     ScmResult::ok(cfr.argument(0).car())
@@ -546,9 +545,7 @@ extern "C" fn car(cfr: &mut CallFrame) -> ScmResult {
 
 extern "C" fn cdr(cfr: &mut CallFrame) -> ScmResult {
     if unlikely(!cfr.argument(0).is_pair()) {
-        return ScmResult::err(
-            wrong_contract::<()>("cdr", "pair?", 0, 1, cfr.arguments()).unwrap_err(),
-        );
+        return wrong_contract::<()>("cdr", "pair?", 0, 1, cfr.arguments()).into();
     }
 
     ScmResult::ok(cfr.argument(0).cdr())
@@ -556,9 +553,7 @@ extern "C" fn cdr(cfr: &mut CallFrame) -> ScmResult {
 
 extern "C" fn set_car(cfr: &mut CallFrame) -> ScmResult {
     if unlikely(!cfr.argument(0).is_pair()) {
-        return ScmResult::err(
-            wrong_contract::<()>("set-car!", "pair?", 0, 2, cfr.arguments()).unwrap_err(),
-        );
+        return wrong_contract::<()>("set-car!", "pair?", 0, 2, cfr.arguments()).into();
     }
 
     Thread::current().write_barrier(cfr.argument(0).pair());
@@ -569,9 +564,7 @@ extern "C" fn set_car(cfr: &mut CallFrame) -> ScmResult {
 
 extern "C" fn set_cdr(cfr: &mut CallFrame) -> ScmResult {
     if unlikely(!cfr.argument(0).is_pair()) {
-        return ScmResult::err(
-            wrong_contract::<()>("set-cdr!", "pair?", 0, 2, cfr.arguments()).unwrap_err(),
-        );
+        return wrong_contract::<()>("set-cdr!", "pair?", 0, 2, cfr.arguments()).into();
     }
 
     Thread::current().write_barrier(cfr.argument(0).pair());
@@ -649,16 +642,14 @@ extern "C" fn list_transpose(cfr: &mut CallFrame) -> ScmResult {
 
         for i in 1..args.len() {
             if !scm_is_list(args[i]) {
-                return ScmResult::err(
-                    wrong_contract::<()>(
-                        "list-transpose",
-                        "list?",
-                        i as _,
-                        cfr.argument_count() as _,
-                        cfr.arguments(),
-                    )
-                    .unwrap_err(),
-                );
+                return wrong_contract::<()>(
+                    "list-transpose",
+                    "list?",
+                    i as _,
+                    cfr.argument_count() as _,
+                    cfr.arguments(),
+                )
+                .into();
             }
 
             if scm_length(args[i]).unwrap() != each_len {
@@ -749,7 +740,7 @@ extern "C" fn cons_star(cfr: &mut CallFrame) -> ScmResult {
         return ScmResult::ok(cfr.argument(0));
     }
     let thr = Thread::current();
-    let obj = scm_cons(thr, cfr.argument(0),Value::encode_null_value());
+    let obj = scm_cons(thr, cfr.argument(0), Value::encode_null_value());
     let mut tail = obj;
     for i in 1..cfr.argument_count() - 1 {
         let e = scm_cons(thr, cfr.argument(i), Value::encode_null_value());
@@ -768,7 +759,14 @@ extern "C" fn length_proc(cfr: &mut CallFrame) -> ScmResult {
     if let Some(len) = scm_length(cfr.argument(0)) {
         return ScmResult::ok(scm_int(len as _));
     } else {
-        return wrong_contract::<()>("length", "list?", 0, cfr.argument_count() as _, cfr.arguments()).into();
+        return wrong_contract::<()>(
+            "length",
+            "list?",
+            0,
+            cfr.argument_count() as _,
+            cfr.arguments(),
+        )
+        .into();
     }
 }
 
@@ -779,7 +777,14 @@ extern "C" fn append_proc(cfr: &mut CallFrame) -> ScmResult {
 
     for i in 0..cfr.argument_count() {
         if !scm_is_list(cfr.argument(i)) {
-            return wrong_contract::<()>("append", "list?", i as _, cfr.argument_count() as _, cfr.arguments()).into();
+            return wrong_contract::<()>(
+                "append",
+                "list?",
+                i as _,
+                cfr.argument_count() as _,
+                cfr.arguments(),
+            )
+            .into();
         }
     }
 
@@ -794,14 +799,28 @@ extern "C" fn append_proc(cfr: &mut CallFrame) -> ScmResult {
 
 extern "C" fn reverse(cfr: &mut CallFrame) -> ScmResult {
     if cfr.argument_count() != 1 {
-        return wrong_contract::<()>("reverse", "list?", 0, cfr.argument_count() as _, cfr.arguments()).into();
+        return wrong_contract::<()>(
+            "reverse",
+            "list?",
+            0,
+            cfr.argument_count() as _,
+            cfr.arguments(),
+        )
+        .into();
     }
 
     let mut res = Value::encode_null_value();
     let mut lst = cfr.argument(0);
 
     if !scm_is_list(lst) {
-        return wrong_contract::<()>("reverse", "list?", 0, cfr.argument_count() as _, cfr.arguments()).into();
+        return wrong_contract::<()>(
+            "reverse",
+            "list?",
+            0,
+            cfr.argument_count() as _,
+            cfr.arguments(),
+        )
+        .into();
     }
 
     while !lst.is_null() {
@@ -811,8 +830,6 @@ extern "C" fn reverse(cfr: &mut CallFrame) -> ScmResult {
 
     ScmResult::ok(res)
 }
-
-
 
 pub(crate) fn init_list() {
     let module = scm_scheme_module().module();
@@ -1017,18 +1034,20 @@ pub fn scm_assoc_ref(
     mut eq: impl FnMut(Value, Value) -> bool,
     default: Option<Value>,
 ) -> Value {
-    let mut list = list;
+    
 
-    while !list.is_null() {
-        let pair = list.car();
-        let key = pair.car();
+    scm_for_each!(cp, list, {
+        let entry = cp.car();
 
-        if eq(key, val) {
-            return pair.cdr();
+        if !entry.is_pair() {
+            cp = cp.cdr();
+            continue;
         }
 
-        list = list.cdr();
-    }
+        if eq(val, entry.car()) {
+            return entry;
+        }
+    });
 
     match default {
         Some(default) => default,
