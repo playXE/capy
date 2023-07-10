@@ -208,3 +208,13 @@
         x)
     ((do "step" x y)
         y)))
+
+; Acquires a lock on a variable, executes the body, and releases the lock.
+(define-syntax synchronize
+    (syntax-rules ()
+        ((_ var body ...)
+            (dynamic-wind 
+                (lambda () (acquire var))
+                (lambda () (begin 
+                    body ...))
+                (lambda () (release var))))))

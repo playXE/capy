@@ -45,7 +45,13 @@
                 (cond 
                     [(assq (cadr expr) type-codes) => cdr]
                     [else (error 'port-type "invalid port type")]))))
-                    
+
+    ;; matches the following and returns valid direction code:
+    ;; (port-direction input)
+    ;; (port-direction output)
+    ;; (port-direction input output)     
+    ;; (port-direction output input)
+    ;; otherwise throws an error
     (define-syntax port-direction 
         (er-macro-transformer
             (lambda (expr rename compare)
@@ -71,3 +77,7 @@
     (define port-reverse-lookup-codec-code (lambda (obj) (lookup obj flipped-codec-codes)))
     (define port-reverse-lookup-eol-style-code (lambda (obj) (lookup obj flipped-eol-style-codes)))
     (define port-reverse-lookup-error-handling-mode-code (lambda (obj) (lookup obj flipped-error-handling-mode-codes))))
+
+(define-module capy.io
+    (import capy.io.support)
+)

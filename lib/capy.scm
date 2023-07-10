@@ -5,6 +5,8 @@
 (require "capy/list")
 (require "capy/parameter")
 (require "capy/syntax-case")
+(require "capy/case-lambda")
 (require "capy/optionals")
 (require "capy/dynwind")
 (require "capy/io")
+(require "capy/struct")

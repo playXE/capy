@@ -85,6 +85,23 @@
 (define memp #f)
 (define list-copy #f)
 
+(define list-of-unique-symbols?
+    (lambda (lst)
+      (and (list? lst)
+           (not (let loop ((lst lst))
+                  (and (pair? lst)
+                       (or (not (symbol? (car lst)))
+                           (memq (car lst) (cdr lst))
+                           (loop (cdr lst)))))))))
+(define remove-duplicate-symbols
+    (lambda (lst)
+      (let loop ((lst lst) (ans '()))
+        (if (null? lst)
+            (reverse ans)
+            (if (memq (car lst) ans)
+                (loop (cdr lst) ans)
+                (loop (cdr lst) (cons (car lst) ans)))))))
+
 (define (map f x . rest)
 
   (define (lists-of-different-lengths . args)
