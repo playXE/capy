@@ -119,7 +119,7 @@ impl VM {
     }
 }
 
-impl Object for VM {
+unsafe impl Object for VM {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.specific.trace(visitor);
         self.thunk.trace(visitor);
@@ -131,10 +131,12 @@ impl Object for VM {
         self.winders.trace(visitor);
         let offset = self.sp as usize - self.stack.as_ptr() as usize;
 
-        visitor.visit_conservative(
-            unsafe { self.stack.as_ptr().add(offset / 8).cast() },
-            self.stack.len() - offset / 8,
-        );
+        unsafe {
+            visitor.visit_conservative(
+                self.stack.as_ptr().add(offset / 8).cast(),
+                self.stack.len() - offset / 8,
+            );
+        }
     }
 }
 
@@ -312,7 +314,7 @@ pub struct Winder {
     pub(crate) next: Option<Handle<Self>>,
 }
 
-impl Object for Winder {
+unsafe impl Object for Winder {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.before.trace(visitor);
         self.after.trace(visitor);
@@ -321,7 +323,7 @@ impl Object for Winder {
     }
 }
 
-impl Allocation for Winder {}
+unsafe impl Allocation for Winder {}
 
 impl PartialEq for Winder {
     fn eq(&self, other: &Self) -> bool {

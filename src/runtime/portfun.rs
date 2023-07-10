@@ -2232,9 +2232,9 @@ extern "C" fn write(cfr: &mut CallFrame) -> ScmResult {
     let port = port.port();
 
     port.lock.lock(true);
-
-    check_opened_input_textual_port!(port, "write", 1, cfr.arguments());
-
+    if cfr.argument_count() > 1 {
+        check_opened_output_textual_port!(port, "write", 1, cfr.arguments());
+    }
     if !port.transcoder.is_false() {
         
         do_format("write", port, Some("~s"), 0, 0, cfr.argument_count(), cfr.arguments()).map_err(|e| {
@@ -2297,9 +2297,9 @@ extern "C" fn display(cfr: &mut CallFrame) -> ScmResult {
     let port = port.port();
 
     port.lock.lock(true);
-
-    check_opened_input_textual_port!(port, "write", 1, cfr.arguments());
-
+    if cfr.argument_count() > 1 {
+        check_opened_output_textual_port!(port, "write", 1, cfr.arguments());
+    }
     if !port.transcoder.is_false() {
         
         do_format("write", port, Some("~a"), 0, 0, cfr.argument_count(), cfr.arguments()).map_err(|e| {

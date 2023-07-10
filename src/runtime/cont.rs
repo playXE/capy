@@ -247,9 +247,9 @@ pub struct Cont {
     pub(crate) vmcont: VMCont,
 }
 
-impl Object for Cont {
+unsafe impl Object for Cont {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
-        {
+        unsafe {
             visitor.visit_conservative(self.cstack.cast(), self.csize / size_of::<usize>());
             visitor.visit_conservative(
                 &self.jmpbuf as *const JmpBuf as *const _,
@@ -262,7 +262,7 @@ impl Object for Cont {
     }
 }
 
-impl Allocation for Cont {
+unsafe impl Allocation for Cont {
     const FINALIZE: bool = true;
     const DESTRUCTIBLE: bool = true;
 }

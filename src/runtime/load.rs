@@ -258,7 +258,7 @@ pub(crate) struct Loader {
     prov_mutex: RawMutex,
     prov_cv: Condvar,
 }
-impl Object for Loader {
+unsafe impl Object for Loader {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.load_path.trace(visitor);
         self.dynload_path.trace(visitor);

@@ -208,7 +208,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 proc.maxa,
                 (*cfr).argc.get_int32() as _,
             )) {
-                println!("{}", get_proc_name(proc.into()).unwrap_or("()"));
                 throw!(wrong_count::<()>(
                     get_proc_name(proc.into()).unwrap_or("()"),
                     proc.mina as _,
@@ -1139,6 +1138,7 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 Opcode::AssertArgCount => {
                     let argc = read2!();
                     if unlikely(argc != (*cfr).argc.get_int32() as u16) {
+                        println!("argc: {} {}", argc, (*cfr).argc.get_int32() as u16);
                         vm.sp = sp;
                         vm.top_call_frame = cfr;
                         #[cfg(feature = "profile-opcodes")]
@@ -1864,10 +1864,7 @@ pub fn scm_eval(expr: Value, e: Value) -> Result<Value, Value> {
     res
 }
 
-pub fn scm_compile(
-    expr: Value,
-    e: Value,
-) -> Result<Value, Value> {
+pub fn scm_compile(expr: Value, e: Value) -> Result<Value, Value> {
     let module = if e.is_module() {
         e.module()
     } else {

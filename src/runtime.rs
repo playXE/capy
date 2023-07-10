@@ -1,4 +1,10 @@
-use self::{load::scm_require, module::scm_reqbase_module, string::make_string, structure::{is_struct_instance, struct_ref}, error::{EXN_TABLE, Exception}};
+use self::{
+    error::{Exception, EXN_TABLE},
+    load::scm_require,
+    module::scm_reqbase_module,
+    string::make_string,
+    structure::{is_struct_instance, struct_ref},
+};
 use crate::vm::interpreter::TRAMPOLINE_INSTALLED;
 use rsgc::thread::Thread;
 
@@ -13,10 +19,10 @@ pub mod bigint;
 pub mod cmp;
 pub mod complex;
 pub mod cont;
-pub mod io;
 pub mod date;
 pub mod error;
 pub mod fun;
+pub mod io;
 pub mod load;
 pub mod macros;
 pub mod module;
@@ -30,6 +36,7 @@ pub mod reader;
 pub mod string;
 pub mod structure;
 pub mod symbol;
+pub mod sync;
 pub mod tuple;
 pub mod value;
 pub mod values;
@@ -46,6 +53,7 @@ pub(crate) fn init() {
     string::init_string();
     macros::init_macros();
     portfun::init_ports();
+    sync::init_sync();
     arithfun::init_arith();
     cont::init_cont();
     crate::vm::stacktrace::init_stacktrace();
@@ -56,8 +64,7 @@ pub(crate) fn init() {
         make_string(t, "capy").into(),
         0,
         scm_reqbase_module().module(),
-    )
-    {
+    ) {
         Ok(_) => (),
         Err(err) => {
             eprintln!("Failed to load standard library;");

@@ -9,7 +9,7 @@ use std::{
 use once_cell::sync::Lazy;
 use rsgc::{
     heap::{heap, root_processor::SimpleRoot},
-    utils::bitfield::BitField,
+    utils::bitfield::BitField, sync::mutex::RawMutex,
 };
 use rsgc::{
     prelude::{Allocation, Handle, Object},
@@ -32,13 +32,14 @@ pub type ExtendedPairBitfield = BitField<EXTENDED_PAIR_BIT_SIZE, EXTENDED_PAIR_B
 #[repr(C)]
 pub struct ObjectHeader {
     pub(crate) typ: Type,
+    pub(crate) lock: RawMutex,
     pub(crate) flags: u32,
 }
 
 impl ObjectHeader {
     #[inline(always)]
     pub(crate) const fn new(typ: Type) -> Self {
-        Self { typ, flags: 0 }
+        Self { typ, lock: RawMutex::INIT, flags: 0 }
     }
 
     #[inline(always)]
@@ -99,7 +100,8 @@ pub enum Type {
     Port,
     Continuation,
     EofObject,
-    Package,
+    Mutex,
+    Condition,
 }
 
 #[repr(C)]
@@ -110,7 +112,7 @@ pub struct ExtendedPair {
     pub(crate) attr: Value,
 }
 
-impl Object for ExtendedPair {
+unsafe impl Object for ExtendedPair {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.car.trace(visitor);
         self.cdr.trace(visitor);
@@ -118,7 +120,7 @@ impl Object for ExtendedPair {
     }
 }
 
-impl Allocation for ExtendedPair {}
+unsafe impl Allocation for ExtendedPair {}
 
 #[repr(C)]
 pub struct Pair {
@@ -127,14 +129,14 @@ pub struct Pair {
     pub(crate) cdr: Value,
 }
 
-impl Object for Pair {
+unsafe impl Object for Pair {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.car.trace(visitor);
         self.cdr.trace(visitor);
     }
 }
 
-impl Allocation for Pair {}
+unsafe impl Allocation for Pair {}
 
 #[repr(C)]
 pub struct Vector {
@@ -144,7 +146,7 @@ pub struct Vector {
     pub(crate) data: [Value; 0],
 }
 
-impl Object for Vector {
+unsafe impl Object for Vector {
     fn trace_range(&self, from: usize, to: usize, visitor: &mut dyn rsgc::prelude::Visitor) {
         for i in from..to {
             unsafe {
@@ -154,7 +156,7 @@ impl Object for Vector {
     }
 }
 
-impl Allocation for Vector {
+unsafe impl Allocation for Vector {
     const VARSIZE: bool = true;
     const VARSIZE_ITEM_SIZE: usize = size_of::<Value>();
     const VARSIZE_NO_HEAP_PTRS: bool = false;
@@ -171,9 +173,9 @@ pub struct Bytevector {
     pub(crate) data: [u8; 0],
 }
 
-impl Object for Bytevector {}
+unsafe impl Object for Bytevector {}
 
-impl Allocation for Bytevector {
+unsafe impl Allocation for Bytevector {
     const VARSIZE: bool = true;
     const VARSIZE_ITEM_SIZE: usize = size_of::<u8>();
     const VARSIZE_NO_HEAP_PTRS: bool = true;
@@ -190,7 +192,7 @@ pub struct Identifier {
     pub(crate) module: Value,
 }
 
-impl Object for Identifier {
+unsafe impl Object for Identifier {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.name.trace(visitor);
         self.env.trace(visitor);
@@ -198,7 +200,7 @@ impl Object for Identifier {
     }
 }
 
-impl Allocation for Identifier {}
+unsafe impl Allocation for Identifier {}
 
 #[repr(C)]
 pub struct Symbol {
@@ -210,9 +212,9 @@ pub struct Symbol {
     pub(crate) data: [u8; 0],
 }
 
-impl Object for Symbol {}
+unsafe impl Object for Symbol {}
 
-impl Allocation for Symbol {
+unsafe impl Allocation for Symbol {
     const VARSIZE: bool = true;
     const VARSIZE_ITEM_SIZE: usize = size_of::<u8>();
     const VARSIZE_NO_HEAP_PTRS: bool = true;
@@ -229,9 +231,9 @@ pub struct BigNum {
     pub(crate) data: [u32; 0],
 }
 
-impl Object for BigNum {}
+unsafe impl Object for BigNum {}
 
-impl Allocation for BigNum {
+unsafe impl Allocation for BigNum {
     const VARSIZE: bool = true;
     const VARSIZE_ITEM_SIZE: usize = size_of::<u32>();
     const VARSIZE_NO_HEAP_PTRS: bool = true;
@@ -247,14 +249,14 @@ pub struct Complex {
     pub(crate) imag: Value,
 }
 
-impl Object for Complex {
+unsafe impl Object for Complex {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.real.trace(visitor);
         self.imag.trace(visitor);
     }
 }
 
-impl Allocation for Complex {}
+unsafe impl Allocation for Complex {}
 
 #[repr(C)]
 pub struct Rational {
@@ -263,14 +265,14 @@ pub struct Rational {
     pub(crate) den: Value,
 }
 
-impl Object for Rational {
+unsafe impl Object for Rational {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.num.trace(visitor);
         self.den.trace(visitor);
     }
 }
 
-impl Allocation for Rational {}
+unsafe impl Allocation for Rational {}
 
 #[repr(C)]
 pub struct Str {
@@ -284,8 +286,8 @@ impl Str {
     }
 }
 
-impl Object for Str {}
-impl Allocation for Str {}
+unsafe impl Object for Str {}
+unsafe impl Allocation for Str {}
 
 impl Deref for Str {
     type Target = rsgc::system::string::String;
@@ -495,7 +497,7 @@ pub struct Module {
     pub(crate) sealed: bool,
 }
 
-impl Object for Module {
+unsafe impl Object for Module {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.name.trace(visitor);
         self.imported.trace(visitor);
@@ -510,7 +512,7 @@ impl Object for Module {
     }
 }
 
-impl Allocation for Module {}
+unsafe impl Allocation for Module {}
 
 #[repr(C)]
 pub struct GLOC {
@@ -523,7 +525,7 @@ pub struct GLOC {
     pub(crate) setter: Option<fn(Handle<GLOC>, Value) -> Result<(), Value>>,
 }
 
-impl Object for GLOC {
+unsafe impl Object for GLOC {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.name.trace(visitor);
         self.module.trace(visitor);
@@ -531,7 +533,7 @@ impl Object for GLOC {
     }
 }
 
-impl Allocation for GLOC {}
+unsafe impl Allocation for GLOC {}
 
 /// Syntax is a built-in procedure to compile given form.
 #[repr(C)]
@@ -540,10 +542,10 @@ pub struct Syntax {
     pub(crate) callback: fn(Value, Value) -> Result<Handle<IForm>, Value>,
 }
 
-impl Object for Syntax {
+unsafe impl Object for Syntax {
     fn trace(&self, _visitor: &mut dyn rsgc::prelude::Visitor) {}
 }
-impl Allocation for Syntax {}
+unsafe impl Allocation for Syntax {}
 
 /// An object to keep unrealized circular reference (e.g. #N=) during
 /// 'read'.  It is replaced by the reference value before exiting 'read',
@@ -556,13 +558,13 @@ pub struct ReaderReference {
     pub(crate) value: Value,
 }
 
-impl Object for ReaderReference {
+unsafe impl Object for ReaderReference {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.value.trace(visitor);
     }
 }
 
-impl Allocation for ReaderReference {}
+unsafe impl Allocation for ReaderReference {}
 
 #[repr(C)]
 pub struct CodeBlock {
@@ -598,7 +600,7 @@ impl Index<usize> for CodeBlock {
     }
 }
 
-impl Object for CodeBlock {
+unsafe impl Object for CodeBlock {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.name.trace(visitor);
         self.literals.trace(visitor);
@@ -606,7 +608,7 @@ impl Object for CodeBlock {
     }
 }
 
-impl Allocation for CodeBlock {
+unsafe impl Allocation for CodeBlock {
     const DESTRUCTIBLE: bool = true;
     const FINALIZE: bool = true;
     const VARSIZE: bool = true;
@@ -626,7 +628,7 @@ pub struct Procedure {
     pub(crate) captures: [Value; 0],
 }
 
-impl Object for Procedure {
+unsafe impl Object for Procedure {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.code.trace(visitor);
     }
@@ -640,7 +642,7 @@ impl Object for Procedure {
     }
 }
 
-impl Allocation for Procedure {
+unsafe impl Allocation for Procedure {
     const VARSIZE: bool = true;
     const VARSIZE_ITEM_SIZE: usize = size_of::<Value>();
     const VARSIZE_NO_HEAP_PTRS: bool = false;
@@ -661,13 +663,13 @@ pub struct NativeProcedure {
     pub(crate) callback: extern "C" fn(&mut CallFrame) -> ScmResult,
 }
 
-impl Object for NativeProcedure {
+unsafe impl Object for NativeProcedure {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.name.trace(visitor);
     }
 }
 
-impl Allocation for NativeProcedure {}
+unsafe impl Allocation for NativeProcedure {}
 
 #[repr(C)]
 pub struct ClosedNativeProcedure {
@@ -725,7 +727,7 @@ impl IndexMut<usize> for ClosedNativeProcedure {
     }
 }
 
-impl Object for ClosedNativeProcedure {
+unsafe impl Object for ClosedNativeProcedure {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.name.trace(visitor);
     }
@@ -739,7 +741,7 @@ impl Object for ClosedNativeProcedure {
     }
 }
 
-impl Allocation for ClosedNativeProcedure {
+unsafe impl Allocation for ClosedNativeProcedure {
     const VARSIZE: bool = true;
     const VARSIZE_ITEM_SIZE: usize = size_of::<Value>();
     const VARSIZE_NO_HEAP_PTRS: bool = false;
@@ -829,13 +831,13 @@ pub struct Box {
     pub(crate) value: Value,
 }
 
-impl Object for Box {
+unsafe impl Object for Box {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.value.trace(visitor);
     }
 }
 
-impl Allocation for Box {}
+unsafe impl Allocation for Box {}
 
 pub fn make_box(t: &mut Thread, value: Value) -> Value {
     let box_ = t.allocate(Box {
@@ -851,13 +853,13 @@ pub struct Macro {
     pub(crate) transformer: Value,
 }
 
-impl Object for Macro {
+unsafe impl Object for Macro {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.transformer.trace(visitor);
     }
 }
 
-impl Allocation for Macro {}
+unsafe impl Allocation for Macro {}
 
 // implement Try trait for ScmResult
 
@@ -912,7 +914,7 @@ pub struct Tuple {
     pub(crate) data: [Value; 0],
 }
 
-impl Object for Tuple {
+unsafe impl Object for Tuple {
     fn trace_range(&self, from: usize, to: usize, visitor: &mut dyn rsgc::prelude::Visitor) {
         for i in from..to {
             unsafe {
@@ -922,7 +924,7 @@ impl Object for Tuple {
     }
 }
 
-impl Allocation for Tuple {
+unsafe impl Allocation for Tuple {
     const VARSIZE: bool = true;
     const VARSIZE_ITEM_SIZE: usize = size_of::<Value>();
     const VARSIZE_NO_HEAP_PTRS: bool = false;
@@ -981,21 +983,21 @@ pub struct SyntaxLocation {
     pub(crate) filename: Value,
 }
 
-impl Object for SyntaxLocation {
+unsafe impl Object for SyntaxLocation {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.filename.trace(visitor);
     }
 }
 
-impl Allocation for SyntaxLocation {}
+unsafe impl Allocation for SyntaxLocation {}
 
 #[repr(C)]
 pub struct EofObject {
     pub(crate) header: ObjectHeader,
 }
 
-impl Object for EofObject {}
-impl Allocation for EofObject {}
+unsafe impl Object for EofObject {}
+unsafe impl Allocation for EofObject {}
 
 pub static EOF_OBJECT: Lazy<Value> = Lazy::new(|| {
     let t = Thread::current();

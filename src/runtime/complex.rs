@@ -19,14 +19,14 @@ pub struct Complex {
     pub i: Value
 }
 
-impl Object for Complex {
+unsafe impl Object for Complex {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.r.trace(visitor);
         self.i.trace(visitor);
     }
 }
 
-impl Allocation for Complex {}
+unsafe impl Allocation for Complex {}
 
 impl Value {
     pub fn complex(self) -> Handle<Complex> {

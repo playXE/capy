@@ -29,13 +29,13 @@ use rsgc::{
 
 #[derive(Clone, Copy)]
 #[repr(transparent)]
-pub struct Value(EncodedValueDescriptor);
+pub struct Value(pub(crate) EncodedValueDescriptor);
 
 #[derive(Clone, Copy)]
 #[repr(C)]
 pub(crate) union EncodedValueDescriptor {
-    as_int64: i64,
-    ptr: usize,
+    pub as_int64: i64,
+    pub ptr: usize,
 }
 
 impl PartialEq for Value {
@@ -326,7 +326,7 @@ impl<T: Object> Into<Value> for Handle<T> {
     }
 }
 
-impl Object for Value {
+unsafe impl Object for Value {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         if self.is_object() && !self.is_empty() {
             
@@ -335,7 +335,7 @@ impl Object for Value {
     }
 }
 
-impl Allocation for Value {}
+unsafe impl Allocation for Value {}
 
 impl Value {
     /// Check if the value is a heap-allocated type.
@@ -661,6 +661,15 @@ impl Value {
         unsafe {
             let ptr = self.get_raw() as usize;
             (ptr as *const ObjectHeader).read()
+        }
+    }
+
+    #[inline(always)]
+    pub fn object_header_ref<'a> (self) -> &'a ObjectHeader {
+        debug_assert!(self.is_object());
+        unsafe {
+            let ptr = self.get_raw() as usize;
+            (ptr as *const ObjectHeader).as_ref().unwrap()
         }
     }
     #[inline(always)]

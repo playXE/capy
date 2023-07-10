@@ -51,7 +51,7 @@ pub enum AsmOperand {
     I8(i8),
 }
 
-impl Object for AsmOperand {
+unsafe impl Object for AsmOperand {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         match self {
             AsmOperand::Constant(v) => v.trace(visitor),
@@ -60,7 +60,7 @@ impl Object for AsmOperand {
     }
 }
 
-impl Allocation for AsmOperand {}
+unsafe impl Allocation for AsmOperand {}
 
 pub struct Asm {
     pub op: Opcode,
@@ -71,7 +71,7 @@ pub struct Asm {
     pub ic: bool,
 }
 
-impl Object for IForm {
+unsafe impl Object for IForm {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         match self {
             IForm::Const(v) => v.trace(visitor),
@@ -98,7 +98,7 @@ impl Object for IForm {
     }
 }
 
-impl Allocation for IForm {}
+unsafe impl Allocation for IForm {}
 
 #[repr(C)]
 pub struct LVar {
@@ -109,14 +109,14 @@ pub struct LVar {
     pub set_count: usize,
 }
 
-impl Object for LVar {
+unsafe impl Object for LVar {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.initval.trace(visitor);
         self.name.trace(visitor);
     }
 }
 
-impl Allocation for LVar {}
+unsafe impl Allocation for LVar {}
 
 pub struct If {
     pub origin: Value,
@@ -125,7 +125,7 @@ pub struct If {
     pub alt: Handle<IForm>,
 }
 
-impl Object for If {
+unsafe impl Object for If {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.origin.trace(visitor);
         self.cond.trace(visitor);
@@ -134,7 +134,7 @@ impl Object for If {
     }
 }
 
-impl Allocation for If {}
+unsafe impl Allocation for If {}
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum LetScope {
@@ -150,7 +150,7 @@ pub struct Let {
     pub body: Handle<IForm>,
 }
 
-impl Object for Let {
+unsafe impl Object for Let {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.origin.trace(visitor);
         self.lvars.trace(visitor);
@@ -159,14 +159,14 @@ impl Object for Let {
     }
 }
 
-impl Allocation for Let {}
+unsafe impl Allocation for Let {}
 
 pub struct LSet {
     pub lvar: Handle<LVar>,
     pub value: Handle<IForm>,
 }
 
-impl Object for LSet {
+unsafe impl Object for LSet {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.lvar.trace(visitor);
         self.value.trace(visitor);
@@ -177,21 +177,21 @@ pub struct LRef {
     pub lvar: Handle<LVar>,
 }
 
-impl Object for LRef {
+unsafe impl Object for LRef {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.lvar.trace(visitor);
     }
 }
 
-impl Allocation for LRef {}
-impl Allocation for LSet {}
+unsafe impl Allocation for LRef {}
+unsafe impl Allocation for LSet {}
 
 pub struct GSet {
     pub id: Value,
     pub value: Handle<IForm>,
 }
 
-impl Object for GSet {
+unsafe impl Object for GSet {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.id.trace(visitor);
         self.value.trace(visitor);
@@ -202,14 +202,14 @@ pub struct GRef {
     pub id: Value,
 }
 
-impl Object for GRef {
+unsafe impl Object for GRef {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.id.trace(visitor);
     }
 }
 
-impl Allocation for GSet {}
-impl Allocation for GRef {}
+unsafe impl Allocation for GSet {}
+unsafe impl Allocation for GRef {}
 
 pub struct Receive {
     pub origin: Value,
@@ -220,7 +220,7 @@ pub struct Receive {
     pub body: Handle<IForm>,
 }
 
-impl Object for Receive {
+unsafe impl Object for Receive {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.origin.trace(visitor);
         self.lvars.trace(visitor);
@@ -229,7 +229,7 @@ impl Object for Receive {
     }
 }
 
-impl Allocation for Receive {}
+unsafe impl Allocation for Receive {}
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum LFlag {
@@ -308,7 +308,7 @@ pub struct Define {
     pub value: Handle<IForm>,
 }
 
-impl Object for Define {
+unsafe impl Object for Define {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.origin.trace(visitor);
         self.name.trace(visitor);
@@ -316,14 +316,14 @@ impl Object for Define {
     }
 }
 
-impl Object for List {
+unsafe impl Object for List {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.origin.trace(visitor);
         self.elems.trace(visitor);
     }
 }
 
-impl Object for Lambda {
+unsafe impl Object for Lambda {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.origin.trace(visitor);
         self.name.trace(visitor);
@@ -337,21 +337,21 @@ impl Object for Lambda {
     }
 }
 
-impl Object for Label {
+unsafe impl Object for Label {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.origin.trace(visitor);
         self.body.trace(visitor);
     }
 }
 
-impl Object for Seq {
+unsafe impl Object for Seq {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.origin.trace(visitor);
         self.body.trace(visitor);
     }
 }
 
-impl Object for Call {
+unsafe impl Object for Call {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.origin.trace(visitor);
         self.proc.trace(visitor);
@@ -359,7 +359,7 @@ impl Object for Call {
     }
 }
 
-impl Object for Dynenv {
+unsafe impl Object for Dynenv {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.origin.trace(visitor);
         self.kvs.trace(visitor);
@@ -367,7 +367,7 @@ impl Object for Dynenv {
     }
 }
 
-impl Object for Cons {
+unsafe impl Object for Cons {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.origin.trace(visitor);
         self.car.trace(visitor);

@@ -1,3 +1,9 @@
+use std::{
+    io::Cursor,
+    sync::atomic::{AtomicI64, Ordering},
+};
+
+use murmur3::murmur3_32;
 use rsgc::{system::arraylist::ArrayList, thread::Thread};
 
 use crate::{
@@ -16,7 +22,7 @@ use super::{
     object::{ScmResult, MAX_ARITY},
     string::make_string,
     symbol::Intern,
-    value::{scm_int, Value},
+    value::{scm_int, EncodedValueDescriptor, Value},
     vector::make_vector,
 };
 
@@ -1230,6 +1236,65 @@ extern "C" fn vector_ref(cfr: &mut CallFrame) -> ScmResult {
     ScmResult::ok(vector[index])
 }
 
+extern "C" fn vector_cas(cfr: &mut CallFrame) -> ScmResult {
+    let vector = cfr.argument(0);
+    let index = cfr.argument(1);
+    let old: Value = cfr.argument(2);
+    let new = cfr.argument(3);
+
+    if !vector.is_vector() {
+        return wrong_contract::<()>(
+            "vector-cas!",
+            "vector?",
+            0,
+            cfr.argument_count() as i32,
+            cfr.arguments(),
+        )
+        .into();
+    }
+
+    if !(scm_is_exact_non_negative_integer(index) && index.is_int32()) {
+        return wrong_contract::<()>(
+            "vector-cas!",
+            "exact-nonnegative-integer?",
+            1,
+            cfr.argument_count() as i32,
+            cfr.arguments(),
+        )
+        .into();
+    }
+
+    let index = index.get_int32() as usize;
+
+    let vector = vector.vector();
+
+    if index >= vector.len() {
+        return out_of_range::<()>(
+            "vector-cas!",
+            Some("vector"),
+            "",
+            Value::encode_int32(index as _),
+            Value::encode_int32(vector.len() as i32),
+            0,
+            vector.len() as _,
+        )
+        .into();
+    }
+    unsafe {
+        let ptr = vector.data.as_ptr().add(index).cast::<AtomicI64>();
+
+        match (*ptr).compare_exchange_weak(
+            old.get_raw(),
+            new.get_raw(),
+            Ordering::SeqCst,
+            Ordering::Relaxed,
+        ) {
+            Ok(old) => ScmResult::ok(Value(EncodedValueDescriptor { as_int64: old })),
+            Err(old) => ScmResult::ok(Value(EncodedValueDescriptor { as_int64: old })),
+        }
+    }
+}
+
 extern "C" fn vector_set(cfr: &mut CallFrame) -> ScmResult {
     let vector = cfr.argument(0);
     let index = cfr.argument(1);
@@ -1427,10 +1492,11 @@ fn init_vector() {
             return None;
         }
 
-        let operands = ArrayList::from_slice(Thread::current(), &[AsmOperand::I16(n as u16 as i16)]);
+        let operands =
+            ArrayList::from_slice(Thread::current(), &[AsmOperand::I16(n as u16 as i16)]);
 
         Some(make_iform(IForm::Asm(Asm {
-            op: Opcode::MakeVector,
+            op: Opcode::Vector,
             args: ArrayList::from_slice(Thread::current(), iforms),
             operands: Some(operands),
             exits: false,
@@ -1442,6 +1508,9 @@ fn init_vector() {
 
     let subr = scm_make_subr("vector-ref", vector_ref, 2, 2);
     scm_define(module, "vector-ref".intern(), subr.into()).unwrap();
+
+    let subr = scm_make_subr("vector-cas!", vector_cas, 4, 4);
+    scm_define(module, "vector-cas!".intern(), subr.into()).unwrap();
 
     let subr = scm_make_subr("vector-set!", vector_set, 3, 3);
     scm_define(module, "vector-set!".intern(), subr.into()).unwrap();
@@ -1458,10 +1527,191 @@ fn init_vector() {
     let subr = scm_make_subr("vector-length", vector_length, 1, 1);
     scm_define(module, "vector-length".intern(), subr.into()).unwrap();
 }
+pub const HASH_SEED: u32 = 5731;
+
+extern "C" fn symbol_hash(cfr: &mut CallFrame) -> ScmResult {
+    let x = cfr.argument(0);
+
+    if !x.is_symbol() {
+        return wrong_contract::<()>(
+            "symbol-hash",
+            "symbol?",
+            0,
+            cfr.argument_count() as i32,
+            cfr.arguments(),
+        )
+        .into();
+    }
+
+    let ptr = x.symbol().as_ptr() as usize;
+    let bytes = ptr.to_le_bytes();
+
+    let hash = match murmur3::murmur3_32(&mut Cursor::new(bytes), HASH_SEED).map_err(|err| {
+        let exn = raise_exn!((), Fail, &[], "symbol-hash failed: {}", err);
+        exn.unwrap_err()
+    }) {
+        Ok(hash) => hash,
+        Err(err) => return ScmResult::err(err),
+    };
+    ScmResult::ok(Value::encode_int32(hash as i32))
+}
+
+extern "C" fn string_hash(cfr: &mut CallFrame) -> ScmResult {
+    let x = cfr.argument(0);
+
+    if !x.is_string() {
+        return wrong_contract::<()>(
+            "string-hash",
+            "string?",
+            0,
+            cfr.argument_count() as i32,
+            cfr.arguments(),
+        )
+        .into();
+    }
+
+    let s = x.string();
+
+    let mut hash = murmur3_32(&mut Cursor::new(5022200u32.to_le_bytes()), HASH_SEED).unwrap();
+
+    hash = murmur3_32(&mut Cursor::new(s.len().to_le_bytes()), hash).unwrap();
+
+    hash = murmur3_32(&mut Cursor::new(s.as_bytes()), hash).unwrap();
+
+    ScmResult::ok(Value::encode_int32(hash as i32))
+}
+
+pub fn object_hash(x: Value) -> Value {
+    if x.is_symbol() {
+        let ptr = x.symbol().as_ptr() as usize;
+        let bytes = ptr.to_le_bytes();
+
+        let hash = murmur3::murmur3_32(&mut Cursor::new(bytes), HASH_SEED).unwrap();
+        Value::encode_int32(hash as i32)
+    } else if x.is_number() {
+        if x.is_int32() || x.is_double() {
+            let bits = x.get_raw();
+
+            let hash = murmur3_32(&mut Cursor::new(bits.to_le_bytes()), HASH_SEED).unwrap();
+
+            Value::encode_int32(hash as i32)
+        } else if x.is_bignum() {
+            let mut hash = HASH_SEED;
+
+            hash = murmur3_32(&mut Cursor::new(7900000u32.to_le_bytes()), hash).unwrap();
+
+            let bignum = x.bignum();
+
+            hash = murmur3_32(&mut Cursor::new(&[bignum.is_negative() as u8]), hash).unwrap();
+
+            for word in bignum.uwords().iter() {
+                hash = murmur3_32(&mut Cursor::new(word.to_le_bytes()), hash).unwrap();
+            }
+
+            hash = murmur3_32(&mut Cursor::new(bignum.uwords().len().to_le_bytes()), hash).unwrap();
+
+            Value::encode_int32(hash as i32)
+        } else {
+            todo!()
+        }
+    } else if x.is_string() {
+        let s = x.string();
+
+        let mut hash = murmur3_32(&mut Cursor::new(5022200u32.to_le_bytes()), HASH_SEED).unwrap();
+
+        hash = murmur3_32(&mut Cursor::new(s.len().to_le_bytes()), hash).unwrap();
+
+        hash = murmur3_32(&mut Cursor::new(s.as_bytes()), hash).unwrap();
+
+        Value::encode_int32(hash as i32)
+    } else {
+        let raw = x.get_raw();
+
+        let hash = murmur3_32(&mut Cursor::new(raw.to_le_bytes()), HASH_SEED).unwrap();
+
+        Value::encode_int32(hash as i32)
+    }
+}
+
+extern "C" fn object_hash_proc(cfr: &mut CallFrame) -> ScmResult {
+    let x = cfr.argument(0);
+
+    ScmResult::ok(object_hash(x))
+}
+
+extern "C" fn equal_hash(cfr: &mut CallFrame) -> ScmResult {
+    fn do_hash(val: Value, hash: u32, budget: isize) -> u32 {
+        if budget > 0 {
+            if val.is_string() {
+                let s = val.string();
+
+                let mut hash =
+                    murmur3_32(&mut Cursor::new(5022200u32.to_le_bytes()), hash).unwrap();
+
+                hash = murmur3_32(&mut Cursor::new(s.len().to_le_bytes()), hash).unwrap();
+
+                hash = murmur3_32(&mut Cursor::new(s.as_bytes()), hash).unwrap();
+                hash
+            } else if val.is_pair() {
+                let budget = budget / 2;
+
+                let mut hash = do_hash(val.car(), hash, budget);
+                hash = do_hash(val.cdr(), hash, budget);
+
+                hash
+            } else if val.is_vector() {
+                let mut hash =
+                    murmur3_32(&mut Cursor::new(4003330u32.to_le_bytes()), hash).unwrap();
+
+                let vec = val.vector();
+
+                hash = murmur3_32(&mut Cursor::new(vec.len().to_le_bytes()), hash).unwrap();
+
+                for &val in vec.iter() {
+                    hash = do_hash(val, hash, budget);
+                }
+
+                hash
+            } else if val.is_bytevector() {
+                let mut hash =
+                    murmur3_32(&mut Cursor::new(4488623u32.to_le_bytes()), hash).unwrap();
+
+                let vec = val.bytevector();
+
+                hash = murmur3_32(&mut Cursor::new(vec.len().to_le_bytes()), hash).unwrap();
+
+                hash = murmur3_32(&mut Cursor::new(&*vec), hash).unwrap();
+
+                hash
+            } else {
+                object_hash(val).get_int32() as u32
+            }
+        } else {
+            0
+        }
+    }
+
+    let x = cfr.argument(0);
+
+    ScmResult::ok(Value::encode_int32(do_hash(x, HASH_SEED, 100) as _))
+}
 
 pub(crate) fn init_base() {
     let module = scm_capy_module().module();
     init_vector();
+
+    let subr = scm_make_subr("object-hash", object_hash_proc, 1, 1);
+    scm_define(module, "object-hash".intern(), subr.into()).unwrap();
+
+    let subr = scm_make_subr("equal-hash", equal_hash, 1, 1);
+    scm_define(module, "equal-hash".intern(), subr.into()).unwrap();
+
+    let subr = scm_make_subr("symbol-hash", symbol_hash, 1, 1);
+    scm_define(module, "symbol-hash".intern(), subr.into()).unwrap();
+
+    let subr = scm_make_subr("string-hash", string_hash, 1, 1);
+    scm_define(module, "string-hash".intern(), subr.into()).unwrap();
+
     let subr = scm_make_subr("undefined", undefined, 0, 0);
     scm_define(module, "undefined".intern(), subr.into()).unwrap();
 

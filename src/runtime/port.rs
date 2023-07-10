@@ -96,7 +96,7 @@ impl Port {
     }
 }
 
-impl Object for Port {
+unsafe impl Object for Port {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.handlers.trace(visitor);
         self.bytes.trace(visitor);
@@ -106,7 +106,7 @@ impl Object for Port {
     }
 }
 
-impl Allocation for Port {}
+unsafe impl Allocation for Port {}
 
 pub const SCM_PORT_TYPE_NAMED_FILE: u8 = 1;
 pub const SCM_PORT_TYPE_BYTEVECTOR: u8 = 2;

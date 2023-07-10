@@ -887,13 +887,23 @@ pub fn define_syntax() {
     });
 
     define_syntax!("syntax-rules", None, form, cenv, {
-        let literals = form.cadr();
-        let rules = form.cddr();
+        let mut literals = form.cadr();
+        let ellipsis = if literals.is_identifier() {
+            literals = form.caddr();
+            Some(form.cadr())
+        } else {
+            None
+        };
+        let rules = if ellipsis.is_some() {
+            form.cdddr()
+        } else {
+            form.cddr()
+        };
 
         let sr = scm_compile_syntax_rules(
             Value::encode_null_value(),
             form,
-            Value::encode_bool_value(true),
+            ellipsis.unwrap_or(true.into()),
             literals,
             rules,
             cenv_module(cenv),

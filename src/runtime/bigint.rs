@@ -1295,9 +1295,9 @@ impl<'a> BigIntBase<'a> {
     }
 }
 
-impl Object for BigInt {}
+unsafe impl Object for BigInt {}
 
-impl Allocation for BigInt {
+unsafe impl Allocation for BigInt {
     const VARSIZE: bool = true;
     const VARSIZE_ITEM_SIZE: usize = size_of::<u32>();
     const VARSIZE_NO_HEAP_PTRS: bool = true;

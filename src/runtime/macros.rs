@@ -86,7 +86,7 @@ pub struct SyntaxRuleBranch {
     pub max_level: u32,
 }
 
-impl Object for SyntaxRules {
+unsafe impl Object for SyntaxRules {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.name.trace(visitor);
         self.module.trace(visitor);
@@ -126,7 +126,7 @@ impl IndexMut<usize> for SyntaxRules {
     }
 }
 
-impl Allocation for SyntaxRules {
+unsafe impl Allocation for SyntaxRules {
     const VARSIZE: bool = true;
     const VARSIZE_ITEM_SIZE: usize = size_of::<SyntaxRuleBranch>();
     const VARSIZE_NO_HEAP_PTRS: bool = false;
@@ -144,13 +144,13 @@ struct SyntaxPattern {
     num_following_items: i16,
 }
 
-impl Object for SyntaxPattern {
+unsafe impl Object for SyntaxPattern {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.pattern.trace(visitor);
         self.vars.trace(visitor);
     }
 }
-impl Allocation for SyntaxPattern {}
+unsafe impl Allocation for SyntaxPattern {}
 
 #[repr(C)]
 struct PVRef {
@@ -159,8 +159,8 @@ struct PVRef {
     count: i16,
 }
 
-impl Object for PVRef {}
-impl Allocation for PVRef {}
+unsafe impl Object for PVRef {}
+unsafe impl Allocation for PVRef {}
 
 impl Value {
     fn is_pvref(self) -> bool {
@@ -620,7 +620,7 @@ fn compile_rules(
         .ok_or_else(|| make_string(t, &format!("Bad syntax-rules form",)).into())?;
 
     if scm_length(literals).is_none() {
-        return Err(make_string(t, "Bad syntax-rules form: bad literals").into());
+        return Err(make_string(t, &format!("Bad syntax-rules form: bad literals: {}", literals)).into());
     }
     let mut ctx = PatternContext {
         name,
@@ -661,7 +661,7 @@ fn compile_rules(
             let rule = rp.car();
 
             if scm_length(rule) != Some(2) {
-                return Err(make_string(t, "Bad syntax-rules form: bad rule").into());
+                return Err(make_string(t, &format!("Bad syntax-rules form: bad rule: {}", rule)).into());
             }
 
             let mut pat = make_syntax_pattern(t, 0, 0);
@@ -729,7 +729,7 @@ struct MatchVar {
     root: Value,
 }
 
-impl Object for MatchVar {
+unsafe impl Object for MatchVar {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.branch.trace(visitor);
         self.sprout.trace(visitor);
@@ -737,7 +737,7 @@ impl Object for MatchVar {
     }
 }
 
-impl Allocation for MatchVar {}
+unsafe impl Allocation for MatchVar {}
 
 fn get_pvref_value(pvref: Value, mvec: &[MatchVar], indices: &[i32], exlev: &mut i32) -> Value {
     let level = pvref.pvref().level;
@@ -1505,7 +1505,11 @@ extern "C" fn unwrap_syntax(cfr: &mut CallFrame) -> ScmResult {
     ScmResult::ok(scm_unwrap_syntax(val, immutable))
 } 
 
+extern "C" fn identifier_p(cfr: &mut CallFrame) -> ScmResult {
+    let val = cfr.argument(0);
 
+    ScmResult::ok(val.is_identifier())
+}
 
 pub(crate) fn init_macros() {
     let module = scm_capy_module().module();
@@ -1516,6 +1520,9 @@ pub(crate) fn init_macros() {
 
     let subr = scm_make_subr("unwrap-syntax", unwrap_syntax, 2, 2);   
     scm_define(module, "unwrap-syntax".intern(), subr).unwrap();
+
+    let subr = scm_make_subr("identifier?", identifier_p, 1, 1);
+    scm_define(module, "identifier?".intern(), subr).unwrap();
 
 
     heap::heap().add_root(SimpleRoot::new("macros", "mc", |proc| {

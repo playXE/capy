@@ -48,7 +48,7 @@ pub struct StructType {
     pub(crate) parent_types: ArrayList<Handle<Self>>,
 }
 
-impl Object for StructType {
+unsafe impl Object for StructType {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.name.trace(visitor);
         self.accessor.trace(visitor);
@@ -60,7 +60,7 @@ impl Object for StructType {
     }
 }
 
-impl Allocation for StructType {}
+unsafe impl Allocation for StructType {}
 
 #[repr(C)]
 pub struct StructProperty {
@@ -71,7 +71,7 @@ pub struct StructProperty {
     pub(crate) contract_name: Value,
 }
 
-impl Object for StructProperty {
+unsafe impl Object for StructProperty {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.name.trace(visitor);
         self.guard.trace(visitor);
@@ -80,7 +80,7 @@ impl Object for StructProperty {
     }
 }
 
-impl Allocation for StructProperty {}
+unsafe impl Allocation for StructProperty {}
 
 #[repr(C)]
 pub struct Structure {
@@ -89,14 +89,14 @@ pub struct Structure {
     pub(crate) slots: Handle<Array<Value>>,
 }
 
-impl Object for Structure {
+unsafe impl Object for Structure {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.type_.trace(visitor);
         self.slots.trace(visitor);
     }
 }
 
-impl Allocation for Structure {}
+unsafe impl Allocation for Structure {}
 
 pub const STRUCT_NO_TYPE: i32 = 0x01;
 pub const STRUCT_NO_CONSTRUCTOR: i32 = 0x02;
