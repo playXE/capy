@@ -11,3 +11,4 @@
 (require "capy/io")
 (require "capy/match")
 (require "capy/struct")
+(require "capy/hashtable")

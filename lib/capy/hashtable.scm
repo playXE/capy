@@ -30,4 +30,66 @@
     (define hashtable-hash-function        (lambda (ht) equal-hash))
     (define hashtable-mutable?             (lambda (ht) #t))
 
-    (define hashtable-reset!        (lambda (ht) (undefined))))
+    (define hashtable-reset!        (lambda (ht) (undefined)))
+    
+    (struct *hashtable*
+        ((count #:mutable)
+         hash-function
+         safe-hash-function
+         equivalence-predicate
+         bucket-searched
+         hashtable-type 
+         (buckets #:mutable)
+         (mutable-flag #:mutable)))
+    
+    (let ((%hashtable? *hashtable*?)
+          [make-raw-ht 
+            (let ([make-safe-hasher-caching
+                (lambda (hf)
+                    (let ((cache #f))
+                        (lambda (key)
+                            (let ((keyhash cache))
+                                (if (and keyhash (eq? key (car keyhash)))
+                                    (cdr keyhash)
+                                    
+                                (let ([h (hf key)])
+                                    (set! cache (cons key h))
+                                    h))))))]
+                   [make-safe-hasher 
+                    (lambda (hf)
+                        (lambda (key) (hf key)))])
+                        
+                (lambda (hf equiv searcher size type)
+                    (let* ([n (if (> size 1) size 1)]
+                           [n (if (eq? type 'usual)
+                                n
+                                (+ 1 (quotient n 2)))]
+                           [b (make-vector n '())])
+                           
+                        (*hashtable* 
+                            0
+                            hf 
+                            (if (eq? type 'usual)
+                                (make-safe-hasher-caching hf)
+                                hf)
+                            equiv 
+                            searcher
+                            type
+                            b 
+                            #t))
+                ))]
+             [count *hashtable*-count]
+             [count! set-*hashtable*-count!]
+             [hasher *hashtable*-hash-function]
+             [safe-hasher *hashtable*-safe-hash-function]
+             [equiv *hashtable*-equivalence-predicate]
+             [searcher *hashtable*-bucket-searched]
+             [htype *hashtable*-hashtable-type]
+             [buckets *hashtable*-buckets]
+             [buckets! set-*hashtable*-buckets!]
+             [mutable? *hashtable*-mutable-flag]
+             [immutable! (lambda (ht) (set-*hashtable*-mutable-flag! ht #f))]
+             [defaultn 20])
+             
+             0)
+)
