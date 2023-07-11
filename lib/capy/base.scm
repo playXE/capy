@@ -12,3 +12,6 @@
 (define void undefined)
 (define void? undefined?)
 (define unspecified? undefined?)
+
+(define (newline)
+    (display "\n"))

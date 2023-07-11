@@ -1,6 +1,15 @@
 ; R6RS Hash Tables
 
 (define-module capy.hashtable
+
+    (define (eqv-hash x)
+        (cond
+            [(number? x) (object-hash x)]
+            [(char? x) (object-hash x)]
+            [(symbol? x) (object-hash x)]
+            [else (eq-hash x)]))
+    
+
     ; these global variables are assigned new values later.
     (define make-eq-hashtable (lambda args '*))
     (define make-eqv-hashtable (lambda args '*))

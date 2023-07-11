@@ -38,9 +38,7 @@ use super::{
 #[macro_export]
 macro_rules! raise_exn {
     ($id:ident, $eargs:expr, $msg:literal $(,)? $($arg:expr),*) => {{
-        if $crate::runtime::error::Exception::$id == $crate::runtime::error::Exception::FailRead {
-            panic!($msg, $($arg),*);
-        }
+
         $crate::runtime::error::finish_exn_impl($crate::runtime::error::Exception::$id, $crate::runtime::error::EXN_TABLE[$crate::runtime::error::Exception::$id as usize].args, $eargs, format!($msg, $($arg),*), None, false)
     }};
 
@@ -250,7 +248,7 @@ pub static EXN_TABLE: Lazy<[ExnRec; Exception::Other as usize]> = Lazy::new(|| {
         "exn",
         &["message", "stack-trace"],
         Value::encode_null_value(),
-        Value::encode_null_value()
+        Value::encode_bool_value(false)
     );
 
     setup_struct!(
@@ -259,7 +257,7 @@ pub static EXN_TABLE: Lazy<[ExnRec; Exception::Other as usize]> = Lazy::new(|| {
         "exn:fail",
         &[],
         Value::encode_null_value(),
-        Value::encode_null_value()
+        Value::encode_bool_value(false)
     );
 
     setup_struct!(
@@ -268,7 +266,7 @@ pub static EXN_TABLE: Lazy<[ExnRec; Exception::Other as usize]> = Lazy::new(|| {
         "exn:fail:contract",
         &[],
         Value::encode_null_value(),
-        Value::encode_null_value()
+        Value::encode_bool_value(false)
     );
 
     setup_struct!(
@@ -277,7 +275,7 @@ pub static EXN_TABLE: Lazy<[ExnRec; Exception::Other as usize]> = Lazy::new(|| {
         "exn:fail:contract:arity",
         &[],
         Value::encode_null_value(),
-        Value::encode_null_value()
+        Value::encode_bool_value(false)
     );
 
     setup_struct!(
@@ -286,7 +284,7 @@ pub static EXN_TABLE: Lazy<[ExnRec; Exception::Other as usize]> = Lazy::new(|| {
         "exn:fail:contract:divide-by-zero",
         &[],
         Value::encode_null_value(),
-        Value::encode_null_value()
+        Value::encode_bool_value(false)
     );
 
     setup_struct!(
@@ -295,7 +293,7 @@ pub static EXN_TABLE: Lazy<[ExnRec; Exception::Other as usize]> = Lazy::new(|| {
         "exn:fail:contract:non-fixnum-result",
         &[],
         Value::encode_null_value(),
-        Value::encode_null_value()
+        Value::encode_bool_value(false)
     );
 
     setup_struct!(
@@ -304,7 +302,7 @@ pub static EXN_TABLE: Lazy<[ExnRec; Exception::Other as usize]> = Lazy::new(|| {
         "exn:fail:contract:continuation",
         &[],
         Value::encode_null_value(),
-        Value::encode_null_value()
+        Value::encode_bool_value(false)
     );
 
     setup_struct!(
@@ -313,7 +311,7 @@ pub static EXN_TABLE: Lazy<[ExnRec; Exception::Other as usize]> = Lazy::new(|| {
         "exn:fail:contract:variable",
         &EXN_FAIL_CONTRACT_VARIABLE_FIELDS,
         Value::encode_null_value(),
-        Value::encode_null_value()
+        Value::encode_bool_value(false)
     );
 
     setup_struct!(
@@ -322,7 +320,7 @@ pub static EXN_TABLE: Lazy<[ExnRec; Exception::Other as usize]> = Lazy::new(|| {
         "exn:fail:read",
         &[],
         Value::encode_null_value(),
-        Value::encode_null_value()
+        Value::encode_bool_value(false)
     );
 
     setup_struct!(
@@ -331,7 +329,7 @@ pub static EXN_TABLE: Lazy<[ExnRec; Exception::Other as usize]> = Lazy::new(|| {
         "exn:fail:read:eof",
         &[],
         Value::encode_null_value(),
-        Value::encode_null_value()
+        Value::encode_bool_value(false)
     );
 
     setup_struct!(
@@ -340,7 +338,7 @@ pub static EXN_TABLE: Lazy<[ExnRec; Exception::Other as usize]> = Lazy::new(|| {
         "exn:fail:read:non-char",
         &[],
         Value::encode_null_value(),
-        Value::encode_null_value()
+        Value::encode_bool_value(false)
     );
 
     setup_struct!(
@@ -349,7 +347,7 @@ pub static EXN_TABLE: Lazy<[ExnRec; Exception::Other as usize]> = Lazy::new(|| {
         "exn:fail:filesystem",
         &[],
         Value::encode_null_value(),
-        Value::encode_null_value()
+        Value::encode_bool_value(false)
     );
 
     setup_struct!(
@@ -358,7 +356,7 @@ pub static EXN_TABLE: Lazy<[ExnRec; Exception::Other as usize]> = Lazy::new(|| {
         "exn:fail:filesystem:exists",
         &[],
         Value::encode_null_value(),
-        Value::encode_null_value()
+        Value::encode_bool_value(false)
     );
 
     setup_struct!(
@@ -367,7 +365,7 @@ pub static EXN_TABLE: Lazy<[ExnRec; Exception::Other as usize]> = Lazy::new(|| {
         "exn:fail:filesystem:version",
         &[],
         Value::encode_null_value(),
-        Value::encode_null_value()
+        Value::encode_bool_value(false)
     );
 
     setup_struct!(
@@ -376,7 +374,7 @@ pub static EXN_TABLE: Lazy<[ExnRec; Exception::Other as usize]> = Lazy::new(|| {
         "exn:fail:filesystem:errno",
         &["errno"],
         Value::encode_null_value(),
-        Value::encode_null_value()
+        Value::encode_bool_value(false)
     );
 
     setup_struct!(
@@ -385,7 +383,7 @@ pub static EXN_TABLE: Lazy<[ExnRec; Exception::Other as usize]> = Lazy::new(|| {
         "exn:fail:network",
         &[],
         Value::encode_null_value(),
-        Value::encode_null_value()
+        Value::encode_bool_value(false)
     );
 
     setup_struct!(
@@ -394,7 +392,7 @@ pub static EXN_TABLE: Lazy<[ExnRec; Exception::Other as usize]> = Lazy::new(|| {
         "exn:fail:network:errno",
         &["errno"],
         Value::encode_null_value(),
-        Value::encode_null_value()
+        Value::encode_bool_value(false)
     );
 
     setup_struct!(
@@ -403,7 +401,7 @@ pub static EXN_TABLE: Lazy<[ExnRec; Exception::Other as usize]> = Lazy::new(|| {
         "exn:fail:out-of-memory",
         &[],
         Value::encode_null_value(),
-        Value::encode_null_value()
+        Value::encode_bool_value(false)
     );
 
     setup_struct!(
@@ -412,7 +410,7 @@ pub static EXN_TABLE: Lazy<[ExnRec; Exception::Other as usize]> = Lazy::new(|| {
         "exn:fail:unsupported",
         &[],
         Value::encode_null_value(),
-        Value::encode_null_value()
+        Value::encode_bool_value(false)
     );
 
     setup_struct!(
@@ -421,7 +419,7 @@ pub static EXN_TABLE: Lazy<[ExnRec; Exception::Other as usize]> = Lazy::new(|| {
         "exn:fail:user",
         &[],
         Value::encode_null_value(),
-        Value::encode_null_value()
+        Value::encode_bool_value(false)
     );
 
     exn_table
@@ -1267,6 +1265,10 @@ extern "C" fn scheme_error(cfr: &mut CallFrame) -> ScmResult {
         false.into(),
         false.into(),
     );
+
+    for arg in cfr.arguments() {
+        println!("arg: {}", arg);
+    }
     do_format(
         "%scheme-error",
         port,

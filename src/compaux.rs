@@ -146,7 +146,7 @@ impl UnwrapCtx {
                         .into();
                     *entry.get_mut() = v;
                 }
-
+                
                 return *entry.get();
             }
 
@@ -157,18 +157,19 @@ impl UnwrapCtx {
             let ca = self.unwrap_rec(form.car());
             let cd = self.unwrap_rec(form.cdr());
 
-            if ca == form.car() && cd == form.cdr() && !self.immutable {
+            if (ca == form.car() && cd == form.cdr()) && !self.immutable {
                 Self::fill_history(self.history.entry(form), form);
 
                 return form;
             }
-
+           
             let p = scm_cons(Thread::current(), ca, cd);
 
             Self::fill_history(self.history.entry(form), p);
 
             self.register_location(&mut p.pair().car, ca);
             self.register_location(&mut p.pair().cdr, cd);
+            return p;
         } else if form.is_wrapped_identifier() {
             return scm_unwrap_identifier(form.identifier()).into();
         } else if form.is_vector() {
@@ -217,11 +218,11 @@ pub fn scm_unwrap_syntax(form: Value, immutable: bool) -> Value {
         refs: HashMap::with_hasher_and_capacity(RandomState::new(), 16),
         immutable,
     };
-
+   
     let form = ctx.unwrap_rec(form);
 
     ctx.patch_locations();
-
+    
     form
 }
 

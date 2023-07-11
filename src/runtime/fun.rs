@@ -262,7 +262,7 @@ extern "C" fn apply_with_values(cfr: &mut CallFrame) -> ScmResult {
 
         return ScmResult::tail_raw();
     } else {
-        return wrong_contract::<()>("apply-with-values", "values?", 1, 2, cfr.arguments()).into();
+        return ScmResult::tail(cfr.argument(0), &[x]);
     }
 }
 

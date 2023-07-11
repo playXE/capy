@@ -7,7 +7,6 @@ use rsgc::system::collections::hashmap::HashMap;
 
 use crate::compaux::scm_outermost_identifier;
 
-
 use super::bigint::BigInt;
 use super::fun::SCM_PRIM_TYPE_PARAMETER;
 use super::port::*;
@@ -36,7 +35,7 @@ pub struct Printer<'a> {
 const WRITE_STRING_ESCAPE_CODES: [u8; 9] = [7, 8, 9, 10, 11, 12, 13, 92, 0];
 const WRITE_STRING_ESCAPE_NAMES: [&str; 8] = ["a", "b", "t", "n", "v", "f", "r", "\\"];
 
-impl<'a> Printer<'a> {  
+impl<'a> Printer<'a> {
     pub fn new(vm: &'a mut crate::vm::VM, port: Handle<Port>) -> Self {
         Self {
             vm,
@@ -178,7 +177,6 @@ impl<'a> Printer<'a> {
             port_put_byte(self.port, b'|')?;
         }
 
-      
         let mut i = 0;
 
         while i < utf8.len() {
@@ -500,9 +498,17 @@ impl<'a> Printer<'a> {
             self.puts("#<box ")?;
             self._write(ht, obj.box_ref())?;
             self.puts(">")
-        
+        } else if obj.is_macro() {
+            self.puts("#<macro ")?;
+            let macro_transformer = obj.r#macro().transformer;
+            self._write(ht, macro_transformer)?;
+            self.puts(">")
         } else {
-            self.puts(&format!("#<unknown {:?}@{:x}>", obj.get_type(), obj.get_raw()))
+            self.puts(&format!(
+                "#<unknown {:?}@{:x}>",
+                obj.get_type(),
+                obj.get_raw()
+            ))
         }
     }
 }

@@ -1,5 +1,6 @@
 #![allow(unused_variables, unused_assignments, unused_labels)]
 use once_cell::sync::Lazy;
+
 use rsgc::prelude::Handle;
 use rsgc::system::arraylist::ArrayList;
 use std::cmp::Ordering;
@@ -1138,7 +1139,7 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 Opcode::AssertArgCount => {
                     let argc = read2!();
                     if unlikely(argc != (*cfr).argc.get_int32() as u16) {
-                        println!("argc: {} {}", argc, (*cfr).argc.get_int32() as u16);
+                        
                         vm.sp = sp;
                         vm.top_call_frame = cfr;
                         #[cfg(feature = "profile-opcodes")]
@@ -1601,6 +1602,29 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                     ));
 
                     push!(Value::encode_object_value(name));
+                }
+
+                Opcode::StructPropPred => {
+                    let ix = read2!();
+                    let prop = code_block!().literals.vector_ref(ix as _);
+                    let v = pop!();
+                    let stype = if v.is_struct() {
+                        v.structure().type_
+                    } else if v.is_struct_type() {
+                        v.struct_type()
+                    } else {
+                        push!(false.into());
+                        continue 'interp;
+                    };
+
+                    for i in 0..stype.props.len() {
+                        if stype.props[i].car() == prop {
+                            push!(true.into());
+                            continue 'interp;
+                        }
+                    }
+
+                    push!(false.into());
                 }
                 Opcode::Dup => {
                     let val = pop!();

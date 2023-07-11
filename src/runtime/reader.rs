@@ -290,7 +290,7 @@ impl<'a> Reader<'a> {
                 self.parsing_line_from, self.parsing_line_to
             ));
         }
-       
+        println!("message: {}", message);
         raise_exn!(
             FailRead,
             &[make_srcloc(
@@ -963,6 +963,76 @@ impl<'a> Reader<'a> {
         self.lexical_error("token buffer overflow while reading quoted symbol")
     }
 
+    pub fn read_kw_symbol(&mut self) -> Result<Value, Value> {
+        let mut buf = [0u8; 256];
+        buf[0] = '#' as u8;
+        buf[1] = ':' as u8;
+        let mut i = 2;
+        while i + 4 < buf.len() {
+            let mut c = match self.lookahead_char()? {
+                Some(c) => c,
+                None => {
+                    buf[i] = 0;
+                    return Ok(make_symbol(std::str::from_utf8(&buf[..i]).unwrap(), true).into());
+                }
+            };
+
+            if delimited(c) {
+                buf[i] = 0;
+                return Ok(make_symbol(std::str::from_utf8(&buf[..i]).unwrap(), true).into());
+            }
+
+            self.get_char()?;
+
+            if c == '\\' {
+                c = self.get_char()?.ok_or_else(|| {
+                    self.lexical_error::<()>("unexpected end-of-file while reading symbol")
+                        .unwrap_err()
+                })?;
+
+                if c == 'x' {
+                    self.unget_char();
+                    c = char::from_u32(self.read_escape_sequence()?).unwrap();
+                    i += c.encode_utf8(&mut buf[i..]).len();
+                    continue;
+                } else {
+                    return self.lexical_error("invalid character in symbol");
+                }
+            }
+
+            if c as u8 > 127 {
+                self.ensure_ucs4(c as u32)?;
+
+                if i == 0 {
+                    if is_initial(c) {
+                        i += c.encode_utf8(&mut buf[i..]).len();
+                        continue;
+                    }
+                } else {
+                    if is_subsequent(c) {
+                        i += c.encode_utf8(&mut buf[i..]).len();
+                        continue;
+                    }
+                }
+
+                return self.lexical_error("invalid character in symbol");
+            }
+
+            if self.foldcase && c.is_ascii() {
+                c = c.to_ascii_lowercase();
+            }
+
+            if is_subsequent(c) {
+                i += c.encode_utf8(&mut buf[i..]).len();
+                continue;
+            }
+
+            return self.lexical_error(&format!("invalid character '{}' in symbol", c));
+        }
+
+        self.lexical_error("token buffer overflow while reading symbol")
+    }
+
     pub fn read_symbol(&mut self) -> Result<Value, Value> {
         let mut buf = [0u8; 256];
 
@@ -1339,6 +1409,12 @@ impl<'a> Reader<'a> {
                                     &[inherent_symbols()[InherentSymbol::Unsyntax], expr],
                                 ));
                             }
+                        }
+
+                        ':' => {
+                            let sym = self.read_kw_symbol()?;
+
+                            return Ok(sym);
                         }
 
                         _ => {

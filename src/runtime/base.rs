@@ -1696,9 +1696,20 @@ extern "C" fn equal_hash(cfr: &mut CallFrame) -> ScmResult {
     ScmResult::ok(Value::encode_int32(do_hash(x, HASH_SEED, 100) as _))
 }
 
+extern "C" fn eq_hash(cfr: &mut CallFrame) -> ScmResult {
+    let x = cfr.argument(0);
+
+    let hash = murmur3_32(&mut Cursor::new(x.get_raw().to_le_bytes()), HASH_SEED).unwrap();
+
+    ScmResult::ok(Value::encode_int32(hash as i32))
+}
+
 pub(crate) fn init_base() {
     let module = scm_capy_module().module();
     init_vector();
+
+    let subr = scm_make_subr("eq-hash", eq_hash, 1, 1);
+    scm_define(module, "eq-hash".intern(), subr.into()).unwrap();
 
     let subr = scm_make_subr("object-hash", object_hash_proc, 1, 1);
     scm_define(module, "object-hash".intern(), subr.into()).unwrap();

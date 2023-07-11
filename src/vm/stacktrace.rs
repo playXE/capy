@@ -54,7 +54,7 @@ impl<'a> Iterator for StackTrace<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.cfr.is_null() {
-            self.cfr = self.vm.prev_top_call_frame;
+            //self.cfr = self.vm.prev_top_call_frame;
             if self.cfr.is_null() {
                 return None;
             }
@@ -72,6 +72,7 @@ pub fn get_stacktrace_str(vm: &mut VM) -> String {
     let st = StackTrace::new(vm);
     let mut s = String::new();
     for frame in st {
+       
         let callee = frame.callee();
         let ip = frame.return_pc();
         let _code_block = frame.code_block();

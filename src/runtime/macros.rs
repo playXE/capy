@@ -40,8 +40,8 @@ use crate::{
     },
     runtime::module::scm_identifier_to_bound_gloc,
     runtime::object::{Identifier, Macro, Module, ObjectHeader, ScmResult, Type},
-    runtime::{string::make_string, error::scm_raise_proc},
     runtime::value::Value,
+    runtime::{error::scm_raise_proc, string::make_string},
     runtime::{symbol::make_symbol, value::scm_box},
     scm_append, scm_append1, scm_for_each,
     vm::callframe::CallFrame,
@@ -59,7 +59,7 @@ use super::{
     list::{scm_assoc_ref, scm_list},
     module::{scm_capy_module, scm_define},
     symbol::Intern,
-    vector::scm_vector_copy, 
+    vector::scm_vector_copy,
 };
 
 // no need to trace these symbols, they are registered in the global symbol table
@@ -620,7 +620,11 @@ fn compile_rules(
         .ok_or_else(|| make_string(t, &format!("Bad syntax-rules form",)).into())?;
 
     if scm_length(literals).is_none() {
-        return Err(make_string(t, &format!("Bad syntax-rules form: bad literals: {}", literals)).into());
+        return Err(make_string(
+            t,
+            &format!("Bad syntax-rules form: bad literals: {}", literals),
+        )
+        .into());
     }
     let mut ctx = PatternContext {
         name,
@@ -661,7 +665,9 @@ fn compile_rules(
             let rule = rp.car();
 
             if scm_length(rule) != Some(2) {
-                return Err(make_string(t, &format!("Bad syntax-rules form: bad rule: {}", rule)).into());
+                return Err(
+                    make_string(t, &format!("Bad syntax-rules form: bad rule: {}", rule)).into(),
+                );
             }
 
             let mut pat = make_syntax_pattern(t, 0, 0);
@@ -988,7 +994,7 @@ fn match_synrule(
 
         if elli < flen {
             let pat = pattern.vector_ref(elli).syntax_pattern();
-            let prest = scm_list(Thread::current(), &pattern.vector()[elli+1..plen]);
+            let prest = scm_list(Thread::current(), &pattern.vector()[elli + 1..plen]);
             let frest = scm_list(Thread::current(), &form.vector()[elli..flen]);
 
             return match_subpattern(t, frest, pat, prest, module, env, mvec);
@@ -1174,12 +1180,16 @@ pub fn synrule_expand(
 
             println!();*/
             let expanded = realize_template(t, sr, &sr[i as usize], &mvec);
-            
-            return Ok(expanded);    
+
+            return Ok(expanded);
         }
     }
 
-    Err(make_string(t, &format!("{:?}: no matching syntax rule", form.car())).into())
+    Err(make_string(
+        t,
+        &format!("{:?}: no matching syntax rule: {}", form.car(), form.cdr()),
+    )
+    .into())
 }
 
 extern "C" fn synrule_transform(cfr: &mut CallFrame) -> ScmResult {
@@ -1269,7 +1279,7 @@ fn er_rename(form: Value, dict: Value, module: Value, env: Value) -> (Value, Val
     if form.is_identifier() {
         let id = scm_assoc_ref(dict, form, |x, y| x == y, None);
         if !id.is_false() {
-            (id, dict)
+            (id.cdr(), dict)
         } else {
             let id = scm_make_identifier(form, Some(module.module()), env);
             (
@@ -1280,7 +1290,7 @@ fn er_rename(form: Value, dict: Value, module: Value, env: Value) -> (Value, Val
     } else if form.is_pair() {
         let (a, dict) = er_rename(form.car(), dict, module, env);
         let (d, dict) = er_rename(form.cdr(), dict, module, env);
-
+        
         if a == form.car() && d == form.cdr() {
             (form, dict)
         } else {
@@ -1307,6 +1317,7 @@ fn er_rename(form: Value, dict: Value, module: Value, env: Value) -> (Value, Val
 
         (vec, dict)
     } else {
+        println!("ayo");
         (form, dict)
     }
 }
@@ -1343,7 +1354,7 @@ pub fn make_er_transformer<const HAS_INJECT: bool>(xformer: Value, def_env: Valu
                     let (id, dict_) = er_rename(sym, dict.box_ref(), def_module, def_frames);
                     Thread::current().write_barrier(dict.r#box());
                     dict.box_set(dict_);
-
+                    
                     ScmResult::ok(id)
                 }
                 rename
@@ -1428,7 +1439,6 @@ pub fn make_er_transformer_toplevel<const HAS_INJECT: bool>(
     xformer: Value,
     def_module: Value,
     _def_name: Value,
-
 ) -> Value {
     make_er_transformer::<HAS_INJECT>(
         xformer,
@@ -1441,7 +1451,6 @@ extern "C" fn make_er_transformer_toplevel_proc(cfr: &mut CallFrame) -> ScmResul
     let def_module = cfr.argument(1);
     let def_name = cfr.argument(2);
     let has_inject = cfr.argument(3);
-
 
     let xformer = if !has_inject.is_false() {
         make_er_transformer_toplevel::<true>(xformer, def_module, def_name)
@@ -1503,7 +1512,7 @@ extern "C" fn unwrap_syntax(cfr: &mut CallFrame) -> ScmResult {
     let immutable = cfr.argument(1).to_bool();
 
     ScmResult::ok(scm_unwrap_syntax(val, immutable))
-} 
+}
 
 extern "C" fn identifier_p(cfr: &mut CallFrame) -> ScmResult {
     let val = cfr.argument(0);
@@ -1518,15 +1527,16 @@ pub(crate) fn init_macros() {
 
     scm_define(module, "free-identifier=?".intern(), subr).unwrap();
 
-    let subr = scm_make_subr("unwrap-syntax", unwrap_syntax, 2, 2);   
+    let subr = scm_make_subr("unwrap-syntax", unwrap_syntax, 2, 2);
     scm_define(module, "unwrap-syntax".intern(), subr).unwrap();
 
     let subr = scm_make_subr("identifier?", identifier_p, 1, 1);
     scm_define(module, "identifier?".intern(), subr).unwrap();
 
-
     heap::heap().add_root(SimpleRoot::new("macros", "mc", |proc| {
         MAKE_ER_TRANSFORMER.get().map(|x| x.trace(proc.visitor()));
-        MAKE_ER_TRANSFORMER_TOPLEVEL.get().map(|x| x.trace(proc.visitor()));
+        MAKE_ER_TRANSFORMER_TOPLEVEL
+            .get()
+            .map(|x| x.trace(proc.visitor()));
     }));
 }

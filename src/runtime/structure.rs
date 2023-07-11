@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use std::mem::transmute;
+use std::{collections::hash_map::RandomState, mem::transmute};
 
 use super::{
     error::*,
@@ -20,11 +20,12 @@ use super::{
 use crate::{
     compile::{make_iform, Asm, AsmOperand, IForm},
     op::Opcode,
-    vm::{callframe::CallFrame, interpreter::apply, scm_vm},
+    raise_exn,
+    vm::{callframe::CallFrame, interpreter::apply, scm_vm}, runtime::fun::check_arity,
 };
 use rsgc::{
     prelude::{Allocation, Handle, Object},
-    system::{array::Array, arraylist::ArrayList},
+    system::{array::Array, arraylist::ArrayList, collections::hashmap::HashMap},
     thread::Thread,
 };
 
@@ -43,9 +44,9 @@ pub struct StructType {
     pub(crate) accessor: Value,
     pub(crate) mutator: Value,
     pub(crate) uninit_val: Value,
-    pub(crate) props: ArrayList<Value>,
+    pub(crate) props: Handle<Array<Value>>,
     pub(crate) guard: Value,
-    pub(crate) parent_types: ArrayList<Handle<Self>>,
+    pub(crate) parent_types: ArrayList<Value>,
 }
 
 unsafe impl Object for StructType {
@@ -210,13 +211,15 @@ pub fn make_struct_instance_(stype: Value, args: &[Value]) -> Result<Value, Valu
     while p >= 0 {
         let (mut ns, mut nis): (i32, i32) = if p != 0 {
             (
-                stype.parent_types[p as usize].num_slots
-                    - stype.parent_types[(p as usize) - 1].num_slots,
-                stype.parent_types[p as usize].num_islots
-                    - stype.parent_types[(p as usize) - 1].num_islots,
+                stype.parent_types[p as usize].struct_type().num_slots
+                    - stype.parent_types[(p as usize) - 1].struct_type().num_slots,
+                stype.parent_types[p as usize].struct_type().num_islots
+                    - stype.parent_types[(p as usize) - 1]
+                        .struct_type()
+                        .num_islots,
             )
         } else {
-            let parent: Handle<StructType> = stype.parent_types[0];
+            let parent: Handle<StructType> = stype.parent_types[0usize].struct_type();
             let ns: i32 = parent.num_slots;
             (ns, parent.num_islots)
         };
@@ -227,10 +230,10 @@ pub fn make_struct_instance_(stype: Value, args: &[Value]) -> Result<Value, Valu
         while ns != 0 {
             j -= 1;
             vm.mutator().write_barrier(inst.slots);
-            inst.slots[j] = stype.parent_types[p as usize].uninit_val;
+            inst.slots[j] = stype.parent_types[p as usize].struct_type().uninit_val;
             ns -= 1;
         }
-       
+
         // fill in supplied fields
         while nis > 0 {
             j -= 1;
@@ -596,7 +599,10 @@ extern "C" fn struct_type_property_p(cfr: &mut CallFrame) -> ScmResult {
 
 pub fn is_struct_type(st: Handle<StructType>, v: Handle<Structure>) -> bool {
     (st.name_pos <= v.type_.name_pos)
-        && (st.as_ptr() == v.type_.parent_types[st.name_pos as usize].as_ptr())
+        && (st.as_ptr()
+            == v.type_.parent_types[st.name_pos as usize]
+                .struct_type()
+                .as_ptr())
 }
 
 pub fn is_struct_instance(typ: Value, v: Value) -> bool {
@@ -622,11 +628,13 @@ pub fn struct_set(sv: Value, pos: usize, v: Value) {
 
 pub fn is_simple_struct_type(stype: Handle<StructType>) -> bool {
     for p in (0..=stype.name_pos).rev() {
-        if stype.parent_types[p as usize].guard.is_true() {
+        if stype.parent_types[p as usize].struct_type().guard.is_true() {
             return false;
         }
 
-        if stype.parent_types[p as usize].num_slots != stype.parent_types[p as usize].num_islots {
+        if stype.parent_types[p as usize].struct_type().num_slots
+            != stype.parent_types[p as usize].struct_type().num_islots
+        {
             return false;
         }
     }
@@ -677,14 +685,19 @@ pub(crate) fn parse_pos(
     };
 
     if (pos < st.num_slots) && (st.name_pos != 0) {
-        pos += st.parent_types[st.name_pos as usize - 1].num_slots;
+        pos += st.parent_types[st.name_pos as usize - 1]
+            .struct_type()
+            .num_slots;
     }
 
     if pos >= st.num_slots {
         let who = if who.len() == 0 { name } else { who };
 
         let sc = if st.name_pos != 0 {
-            st.num_slots - st.parent_types[st.name_pos as usize - 1].num_slots
+            st.num_slots
+                - st.parent_types[st.name_pos as usize - 1]
+                    .struct_type()
+                    .num_slots
         } else {
             st.num_slots
         };
@@ -722,7 +735,9 @@ fn extract_accessor_offset(acc: Value) -> i32 {
     let st = acc.struct_type();
 
     if st.name_pos != 0 {
-        st.parent_types[st.name_pos as usize - 1].num_slots
+        st.parent_types[st.name_pos as usize - 1]
+            .struct_type()
+            .num_slots
     } else {
         0
     }
@@ -963,7 +978,9 @@ pub fn make_struct_values(typ: Value, names: &mut [Value], flags: i32) -> Value 
     }
 
     let mut slot_num = if stype.name_pos != 0 {
-        stype.parent_types[stype.name_pos as usize - 1].num_slots
+        stype.parent_types[stype.name_pos as usize - 1]
+            .struct_type()
+            .num_slots
     } else {
         0
     };
@@ -1222,9 +1239,11 @@ fn get_struct_type_info(args: &[Value], a: &mut [Value]) {
     };
 
     a[0] = stype.name;
-    let cnt = stype.num_islots - parent.map(|x| x.num_islots).unwrap_or(0);
+    let cnt = stype.num_islots - parent.map(|x| x.struct_type().num_islots).unwrap_or(0);
     a[1] = Value::encode_int32(cnt);
-    a[2] = Value::encode_int32(stype.num_slots - parent.map(|x| x.num_slots).unwrap_or(0) - cnt);
+    a[2] = Value::encode_int32(
+        stype.num_slots - parent.map(|x| x.struct_type().num_slots).unwrap_or(0) - cnt,
+    );
     a[3] = stype.accessor;
     a[4] = stype.mutator;
 
@@ -1243,16 +1262,32 @@ fn get_struct_type_info(args: &[Value], a: &mut [Value]) {
 fn guard_property(prop: Value, v: Value, t: Handle<StructType>) -> Result<Value, Value> {
     let p = prop.struct_property();
 
-    if p.guard.is_true() && p.guard.is_procedure() {
-        let mut info: [Value; 7] = [Value::encode_null_value(); 7];
+    if p.guard.is_procedure() {
+        let mut info: [Value; 8] = [Value::encode_null_value(); 8];
         get_struct_type_info(&[t.into()], &mut info);
 
         let l = scm_list(Thread::current(), &info);
-
+        
         return apply(p.guard, &[v, l]);
     } else {
         Ok(v)
     }
+}
+
+fn count_props(mut props: Value) -> usize {
+    let mut c = 0;
+    while props.is_pair() {
+        let v = props.car();
+        c += 1;
+
+        if v.car().struct_property().supers.is_pair() {
+            c += count_props(v.struct_property().supers);
+        }
+
+        props = props.cdr();
+    }
+
+    c
 }
 
 fn _make_struct_type(
@@ -1261,10 +1296,10 @@ fn _make_struct_type(
     num_fields: usize,
     num_uninit_fields: usize,
     uninit_val: Option<Value>,
-    _props: Value,
+    props: Value,
     guard: Value,
 ) -> Result<Value, Value> {
-    let parent_type = if parent.is_false() {
+    /*let parent_type = if parent.is_false() {
         None
     } else {
         Some(parent.struct_type())
@@ -1277,81 +1312,38 @@ fn _make_struct_type(
         + parent_type.map(|x| x.num_slots).unwrap_or(0);
     let num_islots = num_fields as i32 + parent_type.map(|x| x.num_islots).unwrap_or(0);
     //let sprops = parent_type.map(|x| x.props);
-    //let mut num_props = parent_type.map(|x| x.props.len()).unwrap_or(0);
+    let num_props = parent_type.map(|x| x.props.len()).unwrap_or(0);
+
     let uninit_val = uninit_val.unwrap_or(false.into());
-    /*
-    if props.pairp() {
-        let snum_props = props.list_length();
+    let thr = Thread::current();
+    if props.is_pair() {
+        let mut snum_props = count_props(props);
+        let mut pa = ArrayList::with_capacity(thr, num_props);
         let mut i = 0;
-        let mut can_override = HashMap::with_hasher_and_capacity(RandomState::new(), snum_props as u32 + num_props as u32);
-        while i < num_props {
-            let prop = sprops.unwrap()[i].car();
-            can_override.put(vm.mutator(), prop, true);
-            i += 1;
+        if parent_type.is_some() {
+            for i in 0..num_props {
+                pa.push(thr, parent_type.unwrap().props[i as usize]);
+            }
+
+            i = parent_type.unwrap().props.len();
         }
 
-        let mut pa = Array::new(vm.mutator(), i as usize + snum_props as usize, |_, _| Value::null());
-
-        if i != 0 {
-            pa.copy_from_slice(&sprops.unwrap()[..i]);
-        }
-
-        num_props = i;
+        snum_props = i;
 
         let mut l = props;
 
-        while l.pairp() {
-            let mut skip_supers = false;
-
+        while l.is_pair() {
             let a = l.car();
-
             let prop = a.car();
-
-            //let propv = guard_property(vm, prop, a.cdr(), )
-
-            let propv = a.cdr();
-            let mut j = 0;
-            while j < num_props {
-                if pa[j].car() == prop {
-                    break;
-                }
-            }
-
-            if j < num_props {
-                if !can_override.get(&prop).copied().unwrap() {
-                    if propv != pa[j].cdr() {
-                        break;
-                    }
-                    skip_supers = true;
-                }
-
-                can_override.put(vm.mutator(), prop, false);
-            } else {
-                snum_props += 1;
-            }
-
-
-
-            l = l.cdr();
-
-            if !skip_supers {
-                l = append_super_props(vm, prop.downcast_structureproperty(), propv, l)?;
-            }
-
-            a = Value::make_cons(prop, propv);
-            pa[j] = a;
+            let propv = guard_property(prop, a.cdr(), parent_type.unwrap())?;
         }
-
-        if snum_props != 0 {
-
-        }
-
-    }   */
-
+    }
 
     let vm = scm_vm();
     vm.mutator().safepoint();
-    let  props = ArrayList::with_capacity(Thread::current(), 1);
+    let props = ArrayList::with_capacity(Thread::current(), 1);
+
+
 
     let mut parent_types = ArrayList::with_capacity(vm.mutator(), depth as usize + 1);
     unsafe {
@@ -1394,7 +1386,164 @@ fn _make_struct_type(
     this.parent_types.write_barrier(vm.mutator());
     this.parent_types[depth as usize] = this.into();
 
-    Ok(this.into())
+    Ok(this.into())*/
+
+    let parent_type = if parent.is_struct_type() {
+        Some(parent.struct_type())
+    } else {
+        None
+    };
+
+    let depth = parent_type.map(|x| 1 + x.name_pos).unwrap_or(0);
+
+    let vm = scm_vm();
+
+    let mut struct_type = vm.mutator().allocate(StructType {
+        header: ObjectHeader::new(Type::StructType),
+        num_islots: 0,
+        num_slots: 0,
+        name,
+        name_pos: 0,
+        accessor: false.into(),
+        mutator: false.into(),
+        uninit_val: false.into(),
+        props: Array::new(Thread::current(), 0, |_, _| Value::encode_null_value()),
+        guard: false.into(),
+        parent_types: ArrayList::with_capacity(Thread::current(), depth as usize + 1),
+    });
+
+    struct_type.name_pos = depth;
+    unsafe {
+        struct_type.parent_types.set_len(depth as usize + 1);
+    }
+    vm.mutator().write_barrier(struct_type);
+    struct_type.parent_types[depth as usize] = struct_type.into();
+    let mut j = depth;
+
+    while j != 0 {
+        j -= 1;
+        vm.mutator().write_barrier(struct_type);
+        struct_type.parent_types[j as usize] = parent_type.unwrap().parent_types[j as usize];
+    }
+
+    struct_type.name = name;
+    struct_type.num_slots = num_fields as i32
+        + num_uninit_fields as i32
+        + parent_type.map(|x| x.num_slots).unwrap_or(0);
+    struct_type.num_islots = num_fields as i32 + parent_type.map(|x| x.num_islots).unwrap_or(0);
+
+    if num_fields >= u16::MAX as usize
+        || num_uninit_fields >= u16::MAX as usize
+        || num_uninit_fields + num_fields >= u16::MAX as usize
+    {
+        return raise_exn!(
+            Fail,
+            &[],
+            "too many fields for a struct-type\n maximum total field count: {}",
+            u16::MAX
+        );
+    }
+
+    if let Some(parent_type) = parent_type {
+        struct_type.props = parent_type.props;
+    }
+
+    let uninit_val = uninit_val.unwrap_or(false.into());
+
+    struct_type.uninit_val = uninit_val;
+
+    if props.is_pair() {
+        let mut num_props = count_props(props);
+        let mut can_override = HashMap::with_hasher_and_capacity(RandomState::new(), 4);
+        let mut ji = 0;
+        for i in 0..struct_type.props.len() {
+            let prop = struct_type.props[i];
+            can_override.put(Thread::current(), prop, true);
+            ji = i;
+        }
+        let mut skip_supers = false;
+        let mut pa = Array::new(Thread::current(), ji + num_props, |_, _| {
+            Value::encode_null_value()
+        });
+
+        if ji != 0 {
+            for i in 0..ji {
+                pa[i] = struct_type.props[i];
+            }
+        }
+        num_props = ji;
+        let mut l = props;
+
+        while l.is_pair() {
+            let mut a = l.car();
+
+            let prop = a.car();
+
+            let propv = guard_property(prop, a.cdr(), struct_type)?;
+
+            let mut j = 0;
+
+            while j < num_props {
+                if pa[j] == prop {
+                    break;
+                }
+                j += 1;
+            }
+           
+            if j < num_props {
+                if can_override.get(&prop) == Some(&false) {
+                    if propv != pa[j] {
+                        break;
+                    }
+                    skip_supers = true;
+                }
+                println!("overriden");
+                can_override.put(Thread::current(), prop, false);
+            } else {
+                num_props += 1;
+            }
+
+            l = l.cdr();
+
+            if !skip_supers {
+                l = append_super_props(prop.struct_property(), propv, l)?;
+            }
+
+            a = scm_cons(Thread::current(), prop, propv);
+            Thread::current().write_barrier(pa);
+            pa[j] = a;
+        }
+
+        if num_props != 0 {
+            struct_type.props = pa;
+        }
+
+        if !l.is_null() {
+            let a = l.car();
+
+            return raise_exn!(FailContract, &[], "duplicate property binding: {}", a);
+        }
+    }
+
+    if !guard.is_false() {
+        if !guard.is_procedure() || !check_arity(guard, struct_type.num_islots + 1, false)  {
+            return raise_exn!(
+                FailContract,
+                &[],
+                "guard procedure does not accept correct number of arguments;\n
+                 should accept one more than the number of constructor arguments\n
+                guard procedure: {}, expected arity: {}",
+                guard,
+                struct_type.num_islots + 1
+            );
+        }
+
+        struct_type.guard = guard;
+    } else {
+        struct_type.guard = Value::encode_undefined_value();
+    }
+
+    Ok(struct_type.into())
 }
 
 pub fn make_struct_type(
@@ -1483,7 +1632,7 @@ extern "C" fn make_struct_type_proc(cfr: &mut CallFrame) -> ScmResult {
 
     let mut uninit_val: Value = false.into();
     let mut props = Value::encode_null_value();
-    let mut guard = Value::encode_null_value();
+    let mut guard = Value::encode_bool_value(false);
     let mut cstr_name = Value::encode_null_value();
 
     if args.len() > 4 {
@@ -1495,7 +1644,7 @@ extern "C" fn make_struct_type_proc(cfr: &mut CallFrame) -> ScmResult {
             if args.len() > 6 {
                 guard = args[6];
 
-                if !guard.is_procedure() {
+                if !guard.is_procedure() && !guard.is_false() {
                     return ScmResult::err(
                         wrong_contract::<()>(
                             "make-struct-type",
@@ -1678,7 +1827,7 @@ fn make_struct_field_xxor(who: &str, getter: bool, args: &[Value]) -> ScmResult 
         Err(e) => return ScmResult::err(e),
     };
 
-    let fieldstr ;
+    let fieldstr;
     let mut name = None;
     let mut contract = Value::encode_null_value();
     let mut _module = Value::encode_null_value();
@@ -1807,7 +1956,12 @@ pub(crate) fn initialize_struct() {
 
     scm_define(module, "struct-type-make-constructor".intern(), subr).unwrap();
 
-    let subr = scm_make_subr("make-struct-field-accessor", make_struct_field_accessor, 2, 5);
+    let subr = scm_make_subr(
+        "make-struct-field-accessor",
+        make_struct_field_accessor,
+        2,
+        5,
+    );
     scm_define(module, "make-struct-field-accessor".intern(), subr).unwrap();
 
     let subr = scm_make_subr("make-struct-field-mutator", make_struct_field_mutator, 2, 5);

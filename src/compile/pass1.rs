@@ -137,8 +137,9 @@ pub fn pass1(program: Value, cenv: Value) -> Result<Handle<IForm>, Value> {
             }
 
             GlobalCall::Macro(m) => {
+                
                 let v = apply(m.r#macro().transformer, &[program, cenv])?;
-
+                
                 let v = pass1(v, cenv)?;
 
                 Ok(v)
@@ -175,8 +176,9 @@ pub fn pass1(program: Value, cenv: Value) -> Result<Handle<IForm>, Value> {
 
             h if h.is_macro() => {
                 let transformer = h.r#macro().transformer;
+                
                 let res = apply(transformer, &[program, cenv])?;
-
+                
                 pass1(res, cenv)
             }
 
@@ -335,10 +337,12 @@ pub fn define_syntax() {
     }
 
     define_syntax!("define", None, form, cenv, {
+        println!("define: {:?}", form);
         pass1_define(form, form, false, false, cenv_module(cenv), cenv)
     });
 
     define_syntax!("define", Some("capy"), form, cenv, {
+        
         pass1_define(form, form, false, true, cenv_module(cenv), cenv)
     });
 
@@ -1181,7 +1185,7 @@ fn pass1_body_rec(
                         )?;*/
 
                         let expanded = apply(head.r#macro().transformer, &[exprs.car(), cenv])?;
-
+                        
                         return pass1_body_rec(
                             scm_list_star(Thread::current(), &[expanded, rest]),
                             mframe,
@@ -1197,6 +1201,7 @@ fn pass1_body_rec(
                     head if is_global_identifier_eq(head, (*DEFINE).into())
                         || is_global_identifier_eq(head, (*R5RS_DEFINE).into()) =>
                     {
+                        
                         let def = match args {
                             // match ((name . formals) . body)
                             args if args.is_pair() && args.car().is_pair() => {
@@ -1286,7 +1291,7 @@ fn pass1_body_rec(
                             if gloc.value.is_macro() {
                                 let expanded =
                                     apply(gloc.value.r#macro().transformer, &[exprs.car(), cenv])?;
-
+                                
                                 return pass1_body_rec(
                                     scm_list_star(Thread::current(), &[expanded, rest]),
                                     mframe,

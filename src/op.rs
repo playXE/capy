@@ -226,6 +226,7 @@ pub fn disassembly(
             | Opcode::ClosureRef
             | Opcode::ClosureRefUnbox
             | Opcode::ClosureSet
+            | Opcode::StructPropPred
             | Opcode::Vector
             | Opcode::List
             | Opcode::Popn
