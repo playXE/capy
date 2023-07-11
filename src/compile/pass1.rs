@@ -21,7 +21,7 @@ use crate::{
         is_global_identifier_eq, scm_export_symbols, scm_find_module, scm_import_module,
         scm_insert_binding, scm_make_module,
     },
-    runtime::value::Value,
+    runtime::{value::Value, list::scm_is_circular_list},
     runtime::{
         load::scm_require,
         module::scm_reqbase_module,
@@ -1145,7 +1145,7 @@ fn pass1_body_rec(
             Ok(())
         }
     }
-
+    assert!(!scm_is_circular_list(exprs));
     match exprs {
         // match ((op . args) . rest)
         exprs if exprs.is_pair() && exprs.car().is_pair() => {
@@ -1194,8 +1194,13 @@ fn pass1_body_rec(
                         );
                     }
 
+                    
                     head if head.is_pair() && head.car() == make_symbol(":rec", true) => {
                         return pass1_body_finish(exprs, mframe, vframe, cenv)
+                    }
+
+                    head if !head.is_wrapped_identifier() => {
+                        panic!("[internal] pass1/body: {}", head);
                     }
 
                     head if is_global_identifier_eq(head, (*DEFINE).into())
@@ -1283,7 +1288,7 @@ fn pass1_body_rec(
                         }
                     }
                     head if is_global_identifier_eq(head, (*BEGIN).into()) => {
-                        pass1_body_rec(args, mframe, vframe, cenv)
+                        pass1_body_rec(scm_append(Thread::current(), args, rest), mframe, vframe, cenv)
                     }
 
                     head if head.is_wrapped_identifier() => {

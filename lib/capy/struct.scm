@@ -51,6 +51,23 @@
                 (match f 
                     [(? identifier? id)
                         (make-field id #f #f #f)]
+                    [((? identifier? id) p ...)
+                        (let loop ([ps p] [def-val #f] [auto? #f] [mutable? #f])
+                            (cond 
+                                [(null? ps) (make-field id def-val auto? mutable?)]
+                                [(eq? '#:mutable (car ps))
+                                    (when mutable? 
+                                        (error 'struct "redundant ~a for field ~a" (car ps) id))
+                                    (loop (cdr ps) def-val auto? #t)]
+                                [(eq? #:default (car ps))
+                                    (when def-val
+                                        (error 'struct "multiple ~a for field ~a" (car ps) id))
+                                    (loop (cdr ps) (cadr ps) auto? mutable?)]
+                                [(eq? #:auto (car ps))
+                                    (when auto? 
+                                        (error 'struct "redundant ~a for field ~a" (car ps) id))
+                                    (loop (cdr ps) def-val #t mutable?)]
+                                [else (error 'struct "bad field spec: ~a" f)]))]
                     [_ (error 'struct "bad syntax;\n expected a field identifier or a paranthesized identifier and field-specification sequence ~a" expr)]))
 
             (define (lookup config s)
@@ -200,7 +217,7 @@
                                                                         (values (cons this-set other-sets) count*)))]
                                                         ))
                                                 ])
-                                                    0
+                                                    
                                                     `(,(rename 'define-values) (,struct: ,make- ,? ,@sels ,@sets)
                                                         (let-values ([(struct: make- ? -ref -set!)
                                                             (make-struct-type ',struct:

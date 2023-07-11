@@ -1,4 +1,6 @@
 (select-module capy)
+
+#|
 ; Copied from https://github.com/larcenists/larceny/blob/master/src/Compiler/usual.sch
 ; A complete implementation of quasiquote, obtained by translating
 ; Jonathan Rees's implementation that was posted to RRRS-AUTHORS
@@ -116,8 +118,9 @@
     ((quasiquote ?x)
      (.descend-quasiquote ?x ?x () (0)))))
 
+|#
 
-#|
+;; taken from Chibi Scheme. The one from Larceny seems to have a bug with infinite expansion?
 (define-syntax quasiquote
   (er-macro-transformer
    (lambda (expr rename compare)
@@ -132,8 +135,7 @@
                      (qq (cadr x) (- d 1)))))
           ((compare (rename 'unquote-splicing) (car x))
            (if (<= d 0)
-               (list (rename 'cons-source) (qq (car x) d) (qq (cdr x) d)
-                     (list (rename 'quote) x))
+               (list (rename 'cons) (qq (car x) d) (qq (cdr x) d))
                (list (rename 'list) (list (rename 'quote) 'unquote-splicing)
                      (qq (cadr x) (- d 1)))))
           ((compare (rename 'quasiquote) (car x))
@@ -145,11 +147,10 @@
                (cadr (car x))
                (list (rename 'append) (cadr (car x)) (qq (cdr x) d))))
           (else
-           (list (rename 'cons-source) (qq (car x) d) (qq (cdr x) d)
-                 (list (rename 'quote) x)))))
+           (list (rename 'cons) (qq (car x) d) (qq (cdr x) d)
+                 ))))
         ((vector? x) (list (rename 'list->vector) (qq (vector->list x) d)))
         ((if (identifier? x) #t (null? x)) (list (rename 'quote) x))
         (else x)))
      (qq (cadr expr) 0))))
 
-|#
