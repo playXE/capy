@@ -66,7 +66,7 @@ pub struct ByteCompiler {
 }
 
 impl ByteCompiler {
-    pub fn new(thread: &mut Thread,) -> Self {
+    pub fn new(thread: &mut Thread) -> Self {
         Self {
             captures: CaptureGroup {
                 captures: Vec::new(),
@@ -193,8 +193,10 @@ impl ByteCompiler {
             name: Value::encode_undefined_value(),
             literals: Value::encode_object_value(literals),
             fragments,
+            num_vars: 0,
             code_len: self.code.len() as _,
             mina: 0,
+            stack_size: 0,
             maxa: 0,
             code: [],
         };
@@ -216,7 +218,7 @@ impl ByteCompiler {
         if !true {
             disassembly(
                 code,
-                termcolor::StandardStream::stderr(termcolor::ColorChoice::Always),
+                termcolor::StandardStream::stdout(termcolor::ColorChoice::Never),
             )
             .unwrap();
         }

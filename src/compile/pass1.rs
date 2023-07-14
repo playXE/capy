@@ -125,7 +125,7 @@ pub fn pass1_lookup_head(head: Value, cenv: Value) -> Value {
         Value::encode_bool_value(false)
     }
 }
-
+#[allow(unreachable_patterns)]
 pub fn pass1(program: Value, cenv: Value) -> Result<Handle<IForm>, Value> {
     //heap().request_gc();
     fn global_call(program: Value, id: Value, cenv: Value) -> Result<Handle<IForm>, Value> {
@@ -146,6 +146,10 @@ pub fn pass1(program: Value, cenv: Value) -> Result<Handle<IForm>, Value> {
             }
 
             GlobalCall::Inliner(proc) => expand_inliner(proc, program, id, cenv),
+            _ => {
+                let gref = make_iform(IForm::GRef(GRef { id }));
+                pass1_call(program, gref, program.cdr(), cenv)
+            }
         }
     }
 
@@ -520,6 +524,7 @@ pub fn define_syntax() {
                         name: var,
                         initval: None,
                         ref_count: 0,
+                        arg: false,
                         set_count: 0,
                     });
 
@@ -551,7 +556,7 @@ pub fn define_syntax() {
 
                 Ok(make_iform(IForm::Let(Let {
                     origin: form,
-                    scope: LetScope::Rec,
+                    scope: LetScope::Let,
                     lvars: vars,
                     inits,
                     body,
@@ -584,6 +589,7 @@ pub fn define_syntax() {
                 initval: None,
                 ref_count: 0,
                 set_count: 0,
+                arg: false,
             });
 
             let mut args = ArrayList::with_capacity(t, scm_length(bindings).unwrap());
@@ -604,6 +610,7 @@ pub fn define_syntax() {
                     initval: None,
                     ref_count: 0,
                     set_count: 0,
+                    arg: false
                 });
 
                 args.push(t, lvar);
@@ -974,7 +981,12 @@ pub fn define_syntax() {
                 false,
             )?;
 
-            Ok(make_iform(IForm::Const(Value::encode_undefined_value())))
+            let constant = make_iform(IForm::Const(transformer));
+            Ok(make_iform(IForm::Define(Define {
+                origin: form,
+                name: Value::encode_object_value(id),
+                value: constant,
+            })))
         } else {
             Err(make_string(
                 Thread::current(),
@@ -1346,6 +1358,7 @@ fn pass1_body_finish(
                 initval: None,
                 ref_count: 0,
                 set_count: 0,
+                arg: false,
             });
             lvars.push(t, lvar);
         });
@@ -1441,6 +1454,7 @@ pub fn pass1_vanilla_lambda(
             initval: None,
             ref_count: 0,
             set_count: 0,
+            arg: false,
         });
         lvars.push(t, lvar);
     });
@@ -1509,6 +1523,7 @@ pub fn pass1_letrec(
             let lvar = t.allocate(LVar {
                 header: ObjectHeader::new(Type::LVar),
                 name: var,
+                arg: false,
                 initval: None,
                 ref_count: 0,
                 set_count: 0,

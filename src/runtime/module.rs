@@ -47,7 +47,11 @@ use crate::{
     vm::callframe::CallFrame,
 };
 
-use super::{object::ScmResult, error::{wrong_contract, scm_raise_proc}};
+use super::{
+    error::{scm_raise_proc, wrong_contract},
+    list::scm_is_list,
+    object::ScmResult,
+};
 type Modules = Mutex<HashMap<Handle<Symbol>, Value>>;
 
 pub const SCM_BINDING_STAY_IN_MODULE: i32 = 1 << 0;
@@ -154,13 +158,26 @@ pub(crate) fn init_modules() {
 
     drop(mods);
     {
-        let module = scm_scheme_module().module();
+        let module = scm_capy_module().module();
 
         let subr = scm_make_subr("module-name->path", module_name_to_path, 1, 1);
         scm_define(module, "module-name->path".intern(), subr).unwrap();
 
         let subr = scm_make_subr("path->module-name", path_to_module_name, 1, 1);
         scm_define(module, "path->module-name".intern(), subr).unwrap();
+
+        let subr = scm_make_subr("find-module", find_module, 3, 3);
+        scm_define(module, "find-module".intern(), subr).unwrap();
+
+        let subr = scm_make_subr("module?", module_p, 1, 1);
+        scm_define(module, "module?".intern(), subr).unwrap();
+
+        let subr = scm_make_subr("module-import", module_import, 2, 2);
+        scm_define(module, "module-import".intern(), subr).unwrap();
+
+        let subr = scm_make_subr("module-export", module_export, 2, 2);
+        scm_define(module, "module-export".intern(), subr).unwrap();
+
     }
 }
 
@@ -1031,7 +1048,13 @@ pub fn scm_module_name_to_path(name: Value) -> Result<PathBuf, Value> {
     } else if name.is_symbol() {
         name.symbol()
     } else {
-        return wrong_contract("module-name->path", "(or/c symbol? identifier?)", 0, 1, &[name]);
+        return wrong_contract(
+            "module-name->path",
+            "(or/c symbol? identifier?)",
+            0,
+            1,
+            &[name],
+        );
     };
 
     let name: &str = &name;
@@ -1083,4 +1106,98 @@ extern "C" fn path_to_module_name(cfr: &mut CallFrame) -> ScmResult {
     let name = scm_path_to_module_name(&path);
 
     ScmResult::ok(make_symbol(&name, true))
+}
+
+extern "C" fn find_module(cfr: &mut CallFrame) -> ScmResult {
+    let name = cfr.argument(0);
+    let create = cfr.argument(1).is_true();
+    let quiet = cfr.argument(2).is_true();
+
+    let name: Handle<Symbol> = if name.is_wrapped_identifier() {
+        identifier_to_symbol(name.identifier())
+    } else if name.is_symbol() {
+        name.symbol()
+    } else {
+        return wrong_contract::<()>(
+            "find-module",
+            "(or/c symbol? identifier?)",
+            0,
+            cfr.argument_count() as _,
+            cfr.arguments(),
+        )
+        .into();
+    };
+
+    scm_find_module(name, create, quiet)
+        .map(|x| {
+            x.map(|x| Value::encode_object_value(x))
+                .unwrap_or(Value::encode_bool_value(false))
+        })
+        .into()
+}
+
+extern "C" fn module_export(cfr: &mut CallFrame) -> ScmResult {
+    let module = cfr.argument(0);
+    let spec = cfr.argument(1);
+
+    if !module.is_module() {
+        return wrong_contract::<()>(
+            "module-export",
+            "module?",
+            0,
+            cfr.argument_count() as _,
+            cfr.arguments(),
+        )
+        .into();
+    }
+
+    if !scm_is_list(spec) {
+        return wrong_contract::<()>(
+            "module-export",
+            "list?",
+            1,
+            cfr.argument_count() as _,
+            cfr.arguments(),
+        )
+        .into();
+    }
+
+    scm_export_symbols(module.module(), spec)
+        .map(|_| Value::encode_undefined_value())
+        .into()
+}
+
+extern "C" fn module_import(cfr: &mut CallFrame) -> ScmResult {
+    let module = cfr.argument(0);
+    let spec = cfr.argument(1);
+
+    if !module.is_module() {
+        return wrong_contract::<()>(
+            "module-import",
+            "module?",
+            0,
+            cfr.argument_count() as _,
+            cfr.arguments(),
+        )
+        .into();
+    }
+
+    if !module.is_module() && !module.is_identifier() {
+        return wrong_contract::<()>(
+            "module-import",
+            "(or/c identifier? module?)",
+            0,
+            cfr.argument_count() as _,
+            cfr.arguments(),
+        )
+        .into();
+    }
+
+    scm_import_module(module.module(), spec, Value::encode_null_value()).into()
+}
+
+extern "C" fn module_p(cfr: &mut CallFrame) -> ScmResult {
+    let module = cfr.argument(0);
+
+    ScmResult::ok(Value::encode_bool_value(module.is_module()))
 }

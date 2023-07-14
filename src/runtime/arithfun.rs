@@ -1,14 +1,28 @@
-use std::{hint::unreachable_unchecked, intrinsics::unlikely, cmp::Ordering};
+use std::{cmp::Ordering, hint::unreachable_unchecked, intrinsics::unlikely};
 
 use rsgc::{prelude::Handle, system::arraylist::ArrayList, thread::Thread};
 
-use crate::{vm::{callframe::CallFrame, scm_vm}, runtime::{fun::{scm_make_subr, scm_make_subr_inliner}, module::scm_define, object::MAX_ARITY, symbol::Intern}, compile::{IForm, make_iform, Asm}, op::Opcode};
+use crate::{
+    compile::{make_iform, Asm, AsmOperand, IForm},
+    op::Opcode,
+    runtime::{
+        fun::{scm_make_subr, scm_make_subr_inliner},
+        module::scm_define,
+        object::MAX_ARITY,
+        symbol::Intern,
+    },
+    vm::{callframe::CallFrame, scm_vm},
+};
 
 use super::{
-    arith::{arith_add, arith_negate, scm_is_number, arith_sub, arith_mul, arith_div, arith_quotient, arith_remainder, scm_is_integer, scm_n_compare, scm_is_real, scm_is_number_equal},
+    arith::{
+        arith_add, arith_div, arith_mul, arith_negate, arith_quotient, arith_remainder, arith_sub,
+        scm_is_integer, scm_is_number, scm_is_number_equal, scm_is_real, scm_n_compare,
+    },
     error::wrong_contract,
+    module::scm_capy_module,
     object::ScmResult,
-    value::Value, module::scm_capy_module,
+    value::Value,
 };
 
 pub(crate) fn init_arith() {
@@ -27,10 +41,25 @@ pub(crate) fn init_arith() {
             )*
         };
     }
-    
+
     fn inline_add(iforms: &[Handle<IForm>], _: Value) -> Option<Handle<IForm>> {
         if iforms.len() != 2 {
             return None;
+        }
+
+        if let IForm::Const(x) = &*iforms[1] {
+            if x.is_int32() {
+                let operands =
+                    ArrayList::from_slice(Thread::current(), &[AsmOperand::I32(x.get_int32())]);
+                return Some(make_iform(IForm::Asm(Asm {
+                    op: Opcode::Addi,
+                    args: ArrayList::from_slice(Thread::current(), &[iforms[0]]),
+                    operands: Some(operands),
+                    exits: false,
+                    pushes: true,
+                    ic: false,
+                })));
+            }
         }
 
         Some(make_iform(IForm::Asm(Asm {
@@ -39,7 +68,7 @@ pub(crate) fn init_arith() {
             operands: None,
             exits: false,
             pushes: true,
-            ic: false 
+            ic: false,
         })))
     }
 
@@ -54,7 +83,7 @@ pub(crate) fn init_arith() {
             operands: None,
             exits: false,
             pushes: true,
-            ic: false 
+            ic: false,
         })))
     }
 
@@ -69,22 +98,22 @@ pub(crate) fn init_arith() {
             operands: None,
             exits: false,
             pushes: true,
-            ic: false 
+            ic: false,
         })))
     }
 
-    fn inline_div(iforms: &[Handle<IForm>], _: Value) -> Option<Handle<IForm>> {
+    fn inline_quotient(iforms: &[Handle<IForm>], _: Value) -> Option<Handle<IForm>> {
         if iforms.len() != 2 {
             return None;
         }
 
         Some(make_iform(IForm::Asm(Asm {
-            op: Opcode::Div,
+            op: Opcode::Quotient,
             args: ArrayList::from_slice(Thread::current(), iforms),
             operands: None,
             exits: false,
             pushes: true,
-            ic: false 
+            ic: false,
         })))
     }
 
@@ -99,7 +128,7 @@ pub(crate) fn init_arith() {
             operands: None,
             exits: false,
             pushes: true,
-            ic: false 
+            ic: false,
         })))
     }
 
@@ -114,7 +143,7 @@ pub(crate) fn init_arith() {
             operands: None,
             exits: false,
             pushes: true,
-            ic: false 
+            ic: false,
         })))
     }
 
@@ -129,7 +158,7 @@ pub(crate) fn init_arith() {
             operands: None,
             exits: false,
             pushes: true,
-            ic: false 
+            ic: false,
         })))
     }
 
@@ -144,7 +173,7 @@ pub(crate) fn init_arith() {
             operands: None,
             exits: false,
             pushes: true,
-            ic: false 
+            ic: false,
         })))
     }
 
@@ -159,7 +188,7 @@ pub(crate) fn init_arith() {
             operands: None,
             exits: false,
             pushes: true,
-            ic: false 
+            ic: false,
         })))
     }
 
@@ -167,9 +196,9 @@ pub(crate) fn init_arith() {
         plus, "+", 0, MAX_ARITY, Some(inline_add)
         minus, "-", 1, MAX_ARITY, Some(inline_sub)
         mul, "*", 0, MAX_ARITY, Some(inline_mul)
-        div, "/", 1, MAX_ARITY, Some(inline_div)
-        quotient, "quotient", 2, 2, None 
-        remainder, "remainder", 2, 2, None 
+        div, "/", 1, MAX_ARITY, None
+        quotient, "quotient", 2, 2, Some(inline_quotient)
+        remainder, "remainder", 2, 2, None
         less, "<", 2, MAX_ARITY, Some(inline_less)
         less_equal, "<=", 2, MAX_ARITY, Some(inline_less_equal)
         greater, ">", 2, MAX_ARITY, Some(inline_greater)
@@ -252,7 +281,9 @@ extern "C" fn minus(cfr: &mut CallFrame) -> ScmResult {
             return wrong_contract::<()>("-", "number?", 0, 1, cfr.arguments()).into();
         }
 
-        return ScmResult::ok(unsafe { arith_negate(scm_vm(), cfr.argument(0)).unwrap_unchecked() });
+        return ScmResult::ok(unsafe {
+            arith_negate(scm_vm(), cfr.argument(0)).unwrap_unchecked()
+        });
     }
 
     for i in 0..cfr.argument_count() {
@@ -375,7 +406,6 @@ extern "C" fn div(cfr: &mut CallFrame) -> ScmResult {
 }
 
 extern "C" fn remainder(cfr: &mut CallFrame) -> ScmResult {
-
     let a = cfr.argument(0);
     let b = cfr.argument(1);
 
@@ -448,11 +478,25 @@ extern "C" fn less(cfr: &mut CallFrame) -> ScmResult {
     let b = cfr.argument(1);
 
     if !scm_is_real(a) {
-        return wrong_contract::<()>("<", "real?", 0, cfr.argument_count() as i32, cfr.arguments()).into();
+        return wrong_contract::<()>(
+            "<",
+            "real?",
+            0,
+            cfr.argument_count() as i32,
+            cfr.arguments(),
+        )
+        .into();
     }
 
     if !scm_is_real(b) {
-        return wrong_contract::<()>("<", "real?", 1, cfr.argument_count() as i32, cfr.arguments()).into();
+        return wrong_contract::<()>(
+            "<",
+            "real?",
+            1,
+            cfr.argument_count() as i32,
+            cfr.arguments(),
+        )
+        .into();
     }
 
     if cfr.argument_count() == 2 {
@@ -471,7 +515,14 @@ extern "C" fn less(cfr: &mut CallFrame) -> ScmResult {
 
     for i in 0..cfr.argument_count() {
         if !scm_is_real(cfr.argument(i)) {
-            return wrong_contract::<()>("<", "real?", i as _, cfr.argument_count() as i32, cfr.arguments()).into();
+            return wrong_contract::<()>(
+                "<",
+                "real?",
+                i as _,
+                cfr.argument_count() as i32,
+                cfr.arguments(),
+            )
+            .into();
         }
     }
 
@@ -502,11 +553,25 @@ extern "C" fn less_equal(cfr: &mut CallFrame) -> ScmResult {
     let b = cfr.argument(1);
 
     if !scm_is_real(a) {
-        return wrong_contract::<()>("<=", "real?", 0, cfr.argument_count() as i32, cfr.arguments()).into();
+        return wrong_contract::<()>(
+            "<=",
+            "real?",
+            0,
+            cfr.argument_count() as i32,
+            cfr.arguments(),
+        )
+        .into();
     }
 
     if !scm_is_real(b) {
-        return wrong_contract::<()>("<=", "real?", 1, cfr.argument_count() as i32, cfr.arguments()).into();
+        return wrong_contract::<()>(
+            "<=",
+            "real?",
+            1,
+            cfr.argument_count() as i32,
+            cfr.arguments(),
+        )
+        .into();
     }
 
     if cfr.argument_count() == 2 {
@@ -525,7 +590,14 @@ extern "C" fn less_equal(cfr: &mut CallFrame) -> ScmResult {
 
     for i in 0..cfr.argument_count() {
         if !scm_is_real(cfr.argument(i)) {
-            return wrong_contract::<()>("<=", "real?", i as _, cfr.argument_count() as i32, cfr.arguments()).into();
+            return wrong_contract::<()>(
+                "<=",
+                "real?",
+                i as _,
+                cfr.argument_count() as i32,
+                cfr.arguments(),
+            )
+            .into();
         }
     }
 
@@ -556,11 +628,25 @@ extern "C" fn greater(cfr: &mut CallFrame) -> ScmResult {
     let b = cfr.argument(1);
 
     if !scm_is_real(a) {
-        return wrong_contract::<()>("<", "real?", 0, cfr.argument_count() as i32, cfr.arguments()).into();
+        return wrong_contract::<()>(
+            "<",
+            "real?",
+            0,
+            cfr.argument_count() as i32,
+            cfr.arguments(),
+        )
+        .into();
     }
 
     if !scm_is_real(b) {
-        return wrong_contract::<()>("<", "real?", 1, cfr.argument_count() as i32, cfr.arguments()).into();
+        return wrong_contract::<()>(
+            "<",
+            "real?",
+            1,
+            cfr.argument_count() as i32,
+            cfr.arguments(),
+        )
+        .into();
     }
 
     if cfr.argument_count() == 2 {
@@ -579,7 +665,14 @@ extern "C" fn greater(cfr: &mut CallFrame) -> ScmResult {
 
     for i in 0..cfr.argument_count() {
         if !scm_is_real(cfr.argument(i)) {
-            return wrong_contract::<()>("<", "real?", i as _, cfr.argument_count() as i32, cfr.arguments()).into();
+            return wrong_contract::<()>(
+                "<",
+                "real?",
+                i as _,
+                cfr.argument_count() as i32,
+                cfr.arguments(),
+            )
+            .into();
         }
     }
 
@@ -610,11 +703,25 @@ extern "C" fn greater_equal(cfr: &mut CallFrame) -> ScmResult {
     let b = cfr.argument(1);
 
     if !scm_is_real(a) {
-        return wrong_contract::<()>("<=", "real?", 0, cfr.argument_count() as i32, cfr.arguments()).into();
+        return wrong_contract::<()>(
+            "<=",
+            "real?",
+            0,
+            cfr.argument_count() as i32,
+            cfr.arguments(),
+        )
+        .into();
     }
 
     if !scm_is_real(b) {
-        return wrong_contract::<()>("<=", "real?", 1, cfr.argument_count() as i32, cfr.arguments()).into();
+        return wrong_contract::<()>(
+            "<=",
+            "real?",
+            1,
+            cfr.argument_count() as i32,
+            cfr.arguments(),
+        )
+        .into();
     }
 
     if cfr.argument_count() == 2 {
@@ -633,7 +740,14 @@ extern "C" fn greater_equal(cfr: &mut CallFrame) -> ScmResult {
 
     for i in 0..cfr.argument_count() {
         if !scm_is_real(cfr.argument(i)) {
-            return wrong_contract::<()>("<=", "real?", i as _, cfr.argument_count() as i32, cfr.arguments()).into();
+            return wrong_contract::<()>(
+                "<=",
+                "real?",
+                i as _,
+                cfr.argument_count() as i32,
+                cfr.arguments(),
+            )
+            .into();
         }
     }
 
@@ -663,11 +777,25 @@ extern "C" fn equal(cfr: &mut CallFrame) -> ScmResult {
     let b = cfr.argument(1);
 
     if !scm_is_number(a) {
-        return wrong_contract::<()>("=", "number?", 0, cfr.argument_count() as i32, cfr.arguments()).into();
+        return wrong_contract::<()>(
+            "=",
+            "number?",
+            0,
+            cfr.argument_count() as i32,
+            cfr.arguments(),
+        )
+        .into();
     }
 
     if !scm_is_number(b) {
-        return wrong_contract::<()>("=", "number?", 1, cfr.argument_count() as i32, cfr.arguments()).into();
+        return wrong_contract::<()>(
+            "=",
+            "number?",
+            1,
+            cfr.argument_count() as i32,
+            cfr.arguments(),
+        )
+        .into();
     }
 
     if cfr.argument_count() == 2 {

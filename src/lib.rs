@@ -5,13 +5,19 @@
     thread_local,
     core_intrinsics,
     try_trait_v2,
-    absolute_path
+    absolute_path,
+    adt_const_params,
+    inherent_associated_types,
+    backtrace_frames
 )]
+#![allow(incomplete_features)]
 #[macro_use]
 pub mod runtime;
+pub mod bytecode;
 pub mod compaux;
 pub mod compile;
 pub mod fasl;
+pub mod bytecompiler;
 pub mod op;
 //pub mod repl;
 pub mod support;

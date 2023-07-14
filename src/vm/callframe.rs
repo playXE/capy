@@ -1,4 +1,4 @@
-use std::mem::size_of;
+use std::{mem::size_of, marker::PhantomData};
 
 use crate::runtime::value::Value;
 
@@ -100,4 +100,15 @@ impl CallFrame {
             std::slice::from_raw_parts_mut(self.args.as_mut_ptr(), self.argc.get_int32() as usize)
         }
     }
+
+    pub const HEADER_SIZE_IN_REGISTERS: usize = 5;
+}
+
+#[repr(C)]
+pub struct ProtoCallFrame<'a> {
+    pub code_block_value: Value,
+    pub callee_value: Value,
+    pub argcount: Value,
+    pub args: *const Value,
+    pub marker: PhantomData<&'a [Value]>,
 }

@@ -1524,11 +1524,11 @@ pub fn arith_quotient(vm: &mut VM, lhs: Value, rhs: Value) -> Option<Value> {
 pub fn arith_remainder(vm: &mut VM, lhs: Value, rhs: Value) -> Option<Value> {
     let lhs = lhs.normalized();
     let rhs = rhs.normalized();
-
+   
     if lhs.is_int32() {
         if rhs.is_int32() {
             let n = lhs.get_int32() as i64 % rhs.get_int32() as i64;
-
+           
             if n >= i32::MIN as i64 && n <= i32::MAX as i64 {
                 return Some(Value::encode_int32(n as i32));
             }

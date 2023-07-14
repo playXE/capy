@@ -425,6 +425,7 @@ pub static EXN_TABLE: Lazy<[ExnRec; Exception::Other as usize]> = Lazy::new(|| {
     exn_table
 });
 
+#[cold]
 #[doc(hidden)]
 pub fn finish_exn_impl<T>(
     mut id: Exception,
@@ -469,6 +470,7 @@ pub fn finish_exn_impl<T>(
     Err(instance)
 }
 
+#[cold]
 pub fn wrong_contract<T>(
     name: &str,
     expected: &str,
@@ -1302,6 +1304,7 @@ static RAISE_PROC: Lazy<Value> = Lazy::new(|| {
     symbol.value
 });
 
+#[inline(never)]
 pub fn scm_raise_proc() -> Value {
     *RAISE_PROC
 }

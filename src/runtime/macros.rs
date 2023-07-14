@@ -40,7 +40,7 @@ use crate::{
     },
     runtime::module::scm_identifier_to_bound_gloc,
     runtime::object::{Identifier, Macro, Module, ObjectHeader, ScmResult, Type},
-    runtime::value::Value,
+    runtime::{value::Value, fun::{SCM_PRIM_ERI_MACRO, SCM_PRIM_ER_MACRO}},
     runtime::{error::scm_raise_proc, string::make_string},
     runtime::{symbol::make_symbol, value::scm_box},
     scm_append, scm_append1, scm_for_each,
@@ -57,7 +57,7 @@ use rsgc::{
 use super::{
     fun::scm_make_subr,
     list::{scm_assoc_ref, scm_list},
-    module::{scm_capy_module, scm_define},
+    module::{scm_capy_module, scm_define, scm_internal_module},
     symbol::Intern,
     vector::scm_vector_copy,
 };
@@ -1322,6 +1322,17 @@ fn er_rename(form: Value, dict: Value, module: Value, env: Value) -> (Value, Val
     }
 }
 
+extern "C" fn er_rename_proc(cfr: &mut CallFrame) -> ScmResult {
+    let form = cfr.argument(0);
+    let dict = cfr.argument(1);
+    let module = cfr.argument(2);
+    let env = cfr.argument(3);
+
+    let (form, dict) = er_rename(form, dict, module, env);
+
+    ScmResult::ok(scm_cons(Thread::current(), form, dict))
+}
+
 pub fn make_er_transformer<const HAS_INJECT: bool>(xformer: Value, def_env: Value) -> Value {
     let def_module = cenv_module(def_env);
     let def_frames = cenv_frames(def_env);
@@ -1423,7 +1434,7 @@ pub fn make_er_transformer<const HAS_INJECT: bool>(xformer: Value, def_env: Valu
         }
     }
 
-    let transformer = scm_make_closed_native_procedure(
+    let mut transformer = scm_make_closed_native_procedure(
         Thread::current(),
         "%er-transformer".intern().into(),
         expand::<HAS_INJECT>,
@@ -1431,7 +1442,11 @@ pub fn make_er_transformer<const HAS_INJECT: bool>(xformer: Value, def_env: Valu
         2,
         &[def_module.into(), def_frames, xformer],
     );
-
+    transformer.header.flags = if HAS_INJECT {
+        SCM_PRIM_ERI_MACRO
+    } else {
+        SCM_PRIM_ER_MACRO
+    } as u32;
     scm_make_macro(Thread::current(), transformer.into()).into()
 }
 
@@ -1520,18 +1535,24 @@ extern "C" fn identifier_p(cfr: &mut CallFrame) -> ScmResult {
     ScmResult::ok(val.is_identifier())
 }
 
+
+
 pub(crate) fn init_macros() {
     let module = scm_capy_module().module();
 
     let subr = scm_make_subr("free-identifier=?", free_identifier_eq, 2, 2);
-
     scm_define(module, "free-identifier=?".intern(), subr).unwrap();
 
     let subr = scm_make_subr("unwrap-syntax", unwrap_syntax, 2, 2);
     scm_define(module, "unwrap-syntax".intern(), subr).unwrap();
 
+
     let subr = scm_make_subr("identifier?", identifier_p, 1, 1);
     scm_define(module, "identifier?".intern(), subr).unwrap();
+
+    let module = scm_internal_module().module();
+    let subr = scm_make_subr("er-rename", er_rename_proc, 4, 4);
+    scm_define(module, "er-rename".intern(), subr).unwrap();
 
     heap::heap().add_root(SimpleRoot::new("macros", "mc", |proc| {
         MAKE_ER_TRANSFORMER.get().map(|x| x.trace(proc.visitor()));

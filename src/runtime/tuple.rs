@@ -125,10 +125,10 @@ pub(crate) fn init_tuple() {
         match &*iforms[1] {
             IForm::Const(x) => {
                 if x.is_int32() {
-                    if x.get_int32() < u16::MAX as i32 && x.get_int32() > 0 {
+                    if x.get_int32() < u16::MAX as i32 && x.get_int32() >= 0 {
                         return Some(make_iform(IForm::Asm(Asm {
                             op: Opcode::TupleRefI,
-                            args: ArrayList::from_slice(Thread::current(), iforms),
+                            args: ArrayList::from_slice(Thread::current(), &[iforms[0]]),
                             operands: Some(ArrayList::from_slice(
                                 Thread::current(),
                                 &[AsmOperand::I16(x.get_int32() as _)],
@@ -161,17 +161,19 @@ pub(crate) fn init_tuple() {
         }
         match &*iforms[1] {
             IForm::Const(x) => {
+               
                 if x.is_int32() {
-                    if x.get_int32() < u16::MAX as i32 && x.get_int32() > 0 {
+                    if x.get_int32() < u16::MAX as i32 && x.get_int32() >= 0 {
+                       
                         return Some(make_iform(IForm::Asm(Asm {
                             op: Opcode::TupleSetI,
-                            args: ArrayList::from_slice(Thread::current(), iforms),
+                            args: ArrayList::from_slice(Thread::current(), &[iforms[0], iforms[2]]),
                             operands: Some(ArrayList::from_slice(
                                 Thread::current(),
                                 &[AsmOperand::I16(x.get_int32() as _)],
                             )),
                             exits: false,
-                            pushes: true,
+                            pushes: false,
                             ic: false,
                         })));
                     }
@@ -186,7 +188,7 @@ pub(crate) fn init_tuple() {
             args: ArrayList::from_slice(Thread::current(), iforms),
             operands: None,
             exits: false,
-            pushes: true,
+            pushes: false,
             ic: false,
         })))
     });

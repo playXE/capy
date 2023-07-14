@@ -42,6 +42,12 @@ pub enum IForm {
     Define(Define),
     Asm(Asm),
     It,
+    Add(Handle<IForm>, Handle<IForm>),
+    Sub(Handle<IForm>, Handle<IForm>),
+    Mul(Handle<IForm>, Handle<IForm>),
+    Div(Handle<IForm>, Handle<IForm>),
+    Mod(Handle<IForm>, Handle<IForm>),
+    Eq(Handle<IForm>, Handle<IForm>),
 }
 #[derive(Copy, Clone)]
 pub enum AsmOperand {
@@ -105,6 +111,7 @@ pub struct LVar {
     pub(crate) header: ObjectHeader,
     pub name: Value,
     pub initval: Option<Handle<IForm>>,
+    pub arg: bool,
     pub ref_count: usize,
     pub set_count: usize,
 }
@@ -581,6 +588,7 @@ pub enum GlobalCall {
 pub fn global_call_type(id: Value, _cenv: Value) -> GlobalCall {
     if let Some(gloc) = scm_identifier_global_binding(id.identifier()) {
         let gval = gloc.value;
+        
         if gval.is_empty() {
             return GlobalCall::Normal;
         }
@@ -626,7 +634,7 @@ impl IForm {
                 .text("lref")
                 .annotate(ColorSpec::new().set_fg(Some(Color::Blue)).clone())
                 .append(allocator.space())
-                .append(format!("{:?}", lref.lvar.name))
+                .append(format!("{:?}.{:p}", lref.lvar.name, lref.lvar.as_ptr()))
                 .group()
                 .parens(),
 
@@ -637,7 +645,7 @@ impl IForm {
                     .text("lset!")
                     .annotate(ColorSpec::new().set_fg(Some(Color::Blue)).clone())
                     .append(allocator.space())
-                    .append(format!("{:?}", lset.lvar.name))
+                    .append(format!("{:?}.{:p}", lset.lvar.name, lset.lvar.as_ptr()))
                     .append(allocator.space())
                     .append(e_pret)
                     .group()
@@ -751,7 +759,7 @@ impl IForm {
                     .intersperse(
                         var.lvars.iter().zip(var.inits.iter()).map(|(n, e)| {
                             allocator
-                                .text(format!("{:?}", n.name))
+                                .text(format!("{:?}.{:p}", n.name, n.as_ptr()))
                                 .annotate(ColorSpec::new().set_fg(Some(Color::Red)).clone())
                                 .append(allocator.space())
                                 .append(e.pretty(allocator))
@@ -879,6 +887,7 @@ pub fn ref_count_lvars(mut iform: Handle<IForm>) {
         IForm::LRef(x) => x.lvar.ref_count += 1,
         IForm::LSet(x) => {
             x.lvar.set_count += 1;
+            ref_count_lvars(x.value);
         }
 
         IForm::Call(call) => {
@@ -943,7 +952,9 @@ pub fn ref_count_lvars(mut iform: Handle<IForm>) {
             ref_count_lvars(x.body);
         }
 
-        _ => (),
+        IForm::Const(_) => (),
+        IForm::GRef(_) => (),
+        _ => ()
     }
 }
 
@@ -953,6 +964,7 @@ pub fn compile(expr: Value, cenv: Value) -> Result<Value, Value> {
 
     let iform = pass1::pass1(expr, cenv)?;
     ref_count_lvars(iform);
+    
     let mut bc = bytecompiler::ByteCompiler::new(thread);
 
     bc.compile_body(thread, iform, 0);

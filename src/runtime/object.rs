@@ -571,6 +571,8 @@ pub struct CodeBlock {
     pub(crate) header: ObjectHeader,
     /// Machine code address, or NULL if not compiled yet.
     pub(crate) mcode: *const u8,
+    pub(crate) stack_size: u16,
+    pub(crate) num_vars: u16,
     pub name: Value,
     /// vector of constants
     pub literals: Value,
@@ -787,8 +789,8 @@ impl ScmResult {
             tag: Self::ERR,
             value: value.into(),
         }
-    }
-
+    }   
+    #[allow(dead_code)]
     pub(crate) fn jit_err(value: impl Into<Value>) -> Self {
         Self {
             tag: Self::JIT_ERR,

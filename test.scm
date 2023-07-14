@@ -1,21 +1,7 @@
+(define (rec-fib n)
+    (let loop ((n n) (a 0) (b 1))
+        (if (= n 0)
+            a
+            (loop (- n 1) b (+ a b)))))
 
-(require "capy")
-
-
-(define (display x) (put-string (current-output-port) (format "~a" x)))
-(define (newline) (put-string (current-output-port) "\n"))
-
-
-(define p1 (make-parameter 1))
-(define p2 (make-parameter 2))
-
-(parameterize ([p1 4] [p2 5])
-  (display (p1))
-  (newline)
-  (display (p2))
-  (newline))
-
-(display (p1))
-(newline)
-(display (p2))
-(newline)
+(display (rec-fib 1000))

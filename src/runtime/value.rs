@@ -16,7 +16,7 @@ use crate::{
 
 use super::{
     bigint::BigInt,
-    object::{Tuple, Rational, },
+    object::{Tuple, Rational, CodeBlock, },
     port::{port_extract_string, port_open_bytevector, Port, SCM_PORT_DIRECTION_OUT, SCM_PORT_DIRECTION_IN},
     print::Printer,
     pure_nan::*,
@@ -535,8 +535,8 @@ impl Value {
     #[inline(always)]
     pub fn vector_ref(self, idx: usize) -> Value {
         debug_assert!(self.is_xtype(Type::Vector));
-        {
-            self.vector()[idx]
+        unsafe {
+            self.vector().data.as_ptr().add(idx).read()
         }
     }
     #[inline(always)]
@@ -907,6 +907,15 @@ impl Value {
 
     pub fn is_output_port(self) -> bool {
         self.is_port() && (self.port().direction & SCM_PORT_DIRECTION_OUT) != 0
+    }
+
+    pub fn is_code_block(self) -> bool {
+        self.is_xtype(Type::CodeBlock)
+    }
+
+    pub fn code_block(self) -> Handle<CodeBlock> {
+        debug_assert!(self.is_code_block());
+        unsafe { std::mem::transmute(self) }
     }
 
     pub fn get_int64(self) -> Option<i64> {

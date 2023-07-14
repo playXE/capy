@@ -238,6 +238,7 @@ pub mod interpreter;
 pub mod jit;
 pub mod setjmp;
 pub mod stacktrace;
+pub mod engine;
 //#[cfg(llint)]
 //pub mod llint;
 

@@ -58,6 +58,7 @@ pub(crate) fn init() {
     cont::init_cont();
     crate::vm::stacktrace::init_stacktrace();
     date::init_date();
+    //crate::vm::jit::baseline::init_baseline();
     // load necessary files
     let t = Thread::current();
     match scm_require(

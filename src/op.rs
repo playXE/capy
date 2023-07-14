@@ -58,12 +58,21 @@ pub enum Opcode {
     Add,
     Sub,
     Mul,
-    Div,
+    Quotient,
+    Addi,
+    Subi,
+    Muli,
+    Quotienti,
     NumberEqual,
     Less,
     LessEqual,
     Greater,
     GreaterEqual,
+    Lessi,
+    LessEquali,
+    Greateri,
+    GreaterEquali,
+    NEqi,
 
     AssertArgCount,
     AssertMinArgCount,
@@ -231,10 +240,10 @@ pub fn disassembly(
             | Opcode::List
             | Opcode::Popn
             | Opcode::Tuple
-            | Opcode::TupleRef
-            | Opcode::TupleSet
             | Opcode::MakeVector
             | Opcode::VectorRefI
+            | Opcode::TupleSetI 
+            | Opcode::TupleRefI
             | Opcode::VectorSetI => {
                 let n = read2!();
                 writeln!(out, " {}", n)?;
@@ -272,7 +281,7 @@ pub fn disassembly(
                 writeln!(out, " {}, {}; => {}", argc, n, ip as i32 + n,)?;
             }
 
-            Opcode::PushConstant => {
+            Opcode::PushConstant | Opcode::Addi | Opcode::Subi | Opcode::Quotienti | Opcode::Muli => {
                 let n = read4!();
                 writeln!(out, " {}", n)?;
             }

@@ -678,7 +678,6 @@ extern "C" fn list_transpose(cfr: &mut CallFrame) -> ScmResult {
 
 extern "C" fn list_transpose_plus(cfr: &mut CallFrame) -> ScmResult {
     let args = cfr.arguments_mut();
-
     if scm_is_list(args[0]) {
         let each_len = scm_length(args[0]).unwrap();
         for i in 1..args.len() {

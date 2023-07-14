@@ -5,6 +5,7 @@ use rsgc::prelude::Object;
 use rsgc::sync::mutex::Mutex;
 use rsgc::thread::Thread;
 
+use crate::fasl::FASLPrinter;
 use crate::raise_exn;
 use crate::runtime::reader::Reader;
 use crate::runtime::string::do_format;
@@ -952,7 +953,7 @@ extern "C" fn make_file_output_port(cfr: &mut CallFrame) -> ScmResult {
             SCM_PORT_DIRECTION_OUT,
             SCM_PORT_FILE_OPTION_NO_FAIL,
             SCM_PORT_BUFFER_MODE_BLOCK,
-            true.into(),
+            false.into(),
         )?;
 
         ScmResult::ok(port)
@@ -2342,6 +2343,34 @@ extern "C" fn display(cfr: &mut CallFrame) -> ScmResult {
     ScmResult::ok(Value::encode_undefined_value())
 }
 
+
+extern "C" fn put_fasl(cfr: &mut CallFrame) -> ScmResult {
+    let port = cfr.argument(0);
+    if !port.is_port() {
+        return wrong_contract::<()>("put-fasl", "port?", 0, 2, cfr.arguments()).into();
+    }
+
+    let port = port.port();
+
+    port.lock.lock(true);
+
+    check_opened_output_binary_port!(port, "put-fasl", 0, cfr.arguments());
+
+    let mut printer = FASLPrinter::new(port, scm_vm());
+
+    match printer.put(cfr.argument(1)) {
+        Ok(_) => {
+            port.lock.unlock();
+            ScmResult::ok(Value::encode_undefined_value())
+        }
+
+        Err(bad) => {
+            raise_exn!((), Fail, &[], "put-fasl: cannot encode object: {}", bad).into()
+        }
+    }
+}
+
+
 pub(crate) fn init_ports() {
     heap::heap().add_root(SimpleRoot::new("portfun", "ports", |proc| {
         let visitor = proc.visitor();
@@ -2435,6 +2464,7 @@ pub(crate) fn init_ports() {
         read, "read", 0, 1
         write, "write", 1, 2
         display, "display", 1, 2
+        put_fasl, "put-fasl", 2, 2
 
     }
 }

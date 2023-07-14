@@ -7,7 +7,7 @@ use crate::{
         ClosedNativeProcedure, CodeBlock, NativeProcedure, ObjectHeader, Procedure, ScmResult, Type,
     },
     runtime::value::Value,
-    vm::{callframe::CallFrame, scm_vm},
+    vm::{callframe::CallFrame, scm_vm}, op::disassembly,
 };
 
 use super::{
@@ -235,8 +235,9 @@ pub const SCM_PRIM_TYPE_STRUCT_PROP_GETTER: i32 = 64 | 128;
 pub const SCM_PRIM_STRUCT_TYPE_STRUCT_PROP_PRED: i32 = 64 | 128 | 256;
 pub const SCM_PRIM_STRUCT_TYPE_INDEXED_GETTER: i32 = 32;
 pub const SCM_PRIM_STRUCT_TYPE_PRED: i32 = 32 | 64;
-pub const SCM_PRIM_CONTINUATION: i32 = 32 | 64 | 128 | 256;
-
+pub const SCM_PRIM_CONTINUATION: i32 = 32 | 64 | 128 | 256 ;
+pub const SCM_PRIM_ER_MACRO: i32 = 32 | 64 | 128 | 256 | 512;
+pub const SCM_PRIM_ERI_MACRO: i32 = 32 | 64 | 128 | 256 | 512 | 1024;
 
 extern "C" fn apply_with_values(cfr: &mut CallFrame) -> ScmResult {
     if !cfr.argument(0).is_procedure() {
@@ -381,6 +382,21 @@ extern "C" fn apply_proc(cfr: &mut CallFrame) -> ScmResult {
     ScmResult::tail_raw()
 }
 
+extern "C" fn disasm(cfr: &mut CallFrame) -> ScmResult {
+    let proc = cfr.argument(0);
+
+    if !proc.is_vm_procedure() {
+        return wrong_contract::<()>("disasm", "vm-procedure?", 0, 0, cfr.arguments()).into();
+    }
+
+    let proc = proc.procedure();
+    let mut out = termcolor::StandardStream::stdout(termcolor::ColorChoice::Always);
+    disassembly(proc.code, &mut out).unwrap();
+    println!();
+
+    ScmResult::ok(Value::encode_undefined_value())
+}
+
 pub(crate) fn init() {
     let module = scm_scheme_module().module();
 
@@ -398,6 +414,9 @@ pub(crate) fn init() {
 
     let subr = scm_make_subr("apply", apply_proc, 2, MAX_ARITY);
     scm_define(module, "apply".intern(), subr.into()).unwrap();
+
+    let subr = scm_make_subr("disasm", disasm, 1, 1);
+    scm_define(module, "disasm".intern(), subr.into()).unwrap();
 
     let module = scm_internal_module().module();
 
