@@ -1,35 +1,18 @@
-#![allow(unused_imports)]
-use b3::BasicBlockBuilder;
+
 use capy::{
-    bytecode::{
-        disassembler::disassemble,
-        opcodes::{OpAdd, OpEnter, OpReturn, OP_LAST},
-        virtual_register::{
-            virtual_register_for_argument, virtual_register_for_local, VirtualRegister,
-        },
-    },
-    bytecompiler::bytecodegenerator::BytecodeGenerator,
-    compile::{cenv_make_bottom, pass1::pass1, ref_count_lvars},
-    op::Opcode,
+  
+   
     runtime::{
         error::{Exception, EXN_TABLE},
         structure::{is_struct_instance, struct_ref},
     },
     runtime::{
-        fun::make_procedure,
+       
         load::scm_vm_load,
         module::scm_user_module,
-        port::{
-            port_open_file, Port, SCM_PORT_BUFFER_MODE_LINE, SCM_PORT_DIRECTION_IN,
-            SCM_PORT_FILE_OPTION_NONE,
-        },
-        reader::Reader,
-        string::make_string,
+       
     },
-    vm::{engine::vm_entry, scm_vm},
-    Thread,
 };
-use macroassembler::{assembler::link_buffer::LinkBuffer, jit::gpr_info::ARGUMENT_GPR0};
 use rsgc::{prelude::HeapArguments, thread::main_thread};
 use std::path::PathBuf;
 use structopt::StructOpt;
@@ -72,44 +55,7 @@ fn main() {
                     }
                 }
             }
-        } else {
-            let vm = scm_vm();
-            let port = Port::new(vm.mutator());
-            port_open_file(
-                port,
-                make_string(vm.mutator(), "test.scm").into(),
-                SCM_PORT_DIRECTION_IN,
-                SCM_PORT_FILE_OPTION_NONE,
-                SCM_PORT_BUFFER_MODE_LINE,
-                false.into(),
-            )
-            .unwrap();
-
-            let mut r = Reader::new(scm_vm(), port, false);
-
-            loop {
-                let expr = r.read().unwrap();
-                if expr.is_eof_object() {
-                    break;
-                }
-                let mut bc = BytecodeGenerator::new();
-
-                let cenv = cenv_make_bottom(Some(scm_user_module().module()));
-
-                let iform = pass1(expr, cenv).unwrap();
-
-                ref_count_lvars(iform);
-
-                bc.compile_body(&iform);
-
-                let code = bc.finalize();
-                let proc = make_procedure(vm.mutator(), code);
-                unsafe {
-                    let res = vm_entry(vm, proc.into(), &[], Some(scm_user_module().module()));
-                    println!("res: {:?}", res);
-                }
-            }
-        }
+        } 
         #[cfg(feature = "profile-opcodes")]
         {
             capy::vm::interpreter::print_profiles();

@@ -8,7 +8,11 @@
             port-lookup-error-handling-mode-code
             port-reverse-lookup-codec-code
             port-reverse-lookup-eol-style-code
-            port-reverse-lookup-error-handling-mode-code)
+            port-reverse-lookup-error-handling-mode-code
+            file-options)
+
+
+
     (define direction-codes
         '((input . 1) (output . 2) (input/output . 3 )))
 
@@ -39,6 +43,17 @@
 
     (define lookup (lambda (obj alist) (cond ((assq obj alist) => cdr) (else #f))))
     
+    (define-syntax file-options 
+        (er-macro-transformer
+            (lambda (expr rename compare)
+                (match expr 
+                    [(_ options ...)
+                        (or (and (list-of-unique-symbols? options) (for-all port-lookup-file-option-code options))
+                            (error 'file-options "invalid option ~a" options))]
+                    [else (error 'file-options "invalid syntax")]))))
+
+    
+
     (define-syntax port-type 
         (er-macro-transformer 
             (lambda (expr rename compare)

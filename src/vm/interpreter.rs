@@ -3,6 +3,7 @@ use once_cell::sync::Lazy;
 
 use rsgc::prelude::Handle;
 use rsgc::system::arraylist::ArrayList;
+use rsgc::system::collections::hashmap::HashMap;
 use std::cmp::Ordering;
 use std::intrinsics::{likely, unlikely};
 use std::mem::transmute;
@@ -16,7 +17,8 @@ use crate::compaux::{
     scm_identifier_global_ref, scm_identifier_global_set, scm_outermost_identifier,
 };
 use crate::compile::{compile, make_cenv};
-use crate::op::{Opcode, disassembly};
+use crate::op::{disassembly, Opcode};
+use crate::raise_exn;
 use crate::runtime::arith::*;
 use crate::runtime::error::{out_of_range, scm_raise_proc, wrong_contract, wrong_count};
 use crate::runtime::fun::{get_proc_name, make_closed_procedure};
@@ -33,7 +35,6 @@ use crate::runtime::symbol::Intern;
 use crate::runtime::tuple::scm_make_tuple;
 use crate::runtime::value::Value;
 use crate::runtime::vector::{make_vector, make_vector_from_slice};
-use crate::vm::stacktrace::StackTrace;
 
 #[cfg(feature = "profile-opcodes")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -152,6 +153,7 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
     'eval: loop {
         vm.sp = sp;
         vm.top_call_frame = cfr;
+        vm.ip = pc;
         vm.thread.safepoint();
         macro_rules! throw {
             ($err: expr) => {
@@ -163,9 +165,10 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                         unsafe fn prepare_error(
                             mut cfr: *mut CallFrame,
                             mut sp: *mut Value,
+                            pc: *const u8,
                             err: Value,
                         ) -> *mut CallFrame {
-                            let caller = (*cfr).caller;
+                            /*let caller = (*cfr).caller;
                             let return_pc = (*cfr).return_pc;
                             let arg_start = (*cfr)
                                 .args
@@ -187,10 +190,24 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                             });
 
                             cfr = sp.cast();
+                            cfr*/
+                            sp = sp.sub(1);
+                            sp.write(err);
+
+                            sp = sp.cast::<CallFrame>().sub(1).cast();
+                            sp.cast::<CallFrame>().write(CallFrame {
+                                return_pc: pc,
+                                caller: cfr,
+                                code_block: Value::encode_undefined_value(),
+                                argc: Value::encode_int32(1),
+                                callee: scm_raise_proc(),
+                                args: [],
+                            });
+                            cfr = sp.cast();
                             cfr
                         }
 
-                        cfr = prepare_error(cfr, sp, err);
+                        cfr = prepare_error(cfr, sp, pc, err);
                         sp = cfr.cast();
 
                         continue 'eval;
@@ -233,7 +250,9 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
             }
             let psp = sp;
             let pcfr = cfr;
+            let pip = pc;
             vm.sp = sp;
+            vm.ip = pip;
             vm.top_call_frame = cfr;
             let result = if !callee.is_closed_native_procedure() {
                 (proc.callback)(&mut *cfr)
@@ -241,9 +260,10 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 let closed_proc: Handle<ClosedNativeProcedure> = transmute(callee);
                 (closed_proc.callback)(&mut *cfr)
             };
+            vm.ip = pip;
             vm.sp = psp;
             vm.top_call_frame = pcfr;
-            
+
             if result.is_ok() {
                 leave_frame!(=> Ok(result.value()))
             } else if result.is_err() {
@@ -292,34 +312,7 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                     &format!("'{:?}' is not a function", callee),
                 )))*/
 
-                eprintln!("tried to invoke not a function: {:?}", callee);
-
-                let st = StackTrace::new(vm);
-                for frame in st {
-                    let callee = frame.callee();
-                    let ip = frame.return_pc();
-                    let code_block = frame.code_block();
-
-                    let name = get_proc_name(callee);
-
-                    if let Some(name) = name {
-                        eprint!("  at {}", name)
-                    } else {
-                        eprint!("  at <unknown>")
-                    }
-
-                    if !ip.is_null() {
-                        eprint!(":{:p} {}", ip, unsafe {
-                            std::mem::transmute::<_, Opcode>(ip.read())
-                        });
-                    } else {
-                        eprint!("<entrypoint>");
-                    }
-
-                    eprintln!();
-                }
-
-                Err(Value::encode_int32(0))
+                raise_exn!(Fail, &[], "tried to call a non-function value: {}", callee)
             }
 
             throw!(not_a_function(vm, callee));
@@ -328,7 +321,7 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
         // `pc` is initialized here
         debug_assert!(!pc.is_null(), "pc should be initialized at vm_eval entry");
         debug_assert!(sp <= cfr.cast::<Value>());
-        
+
         'interp: loop {
             macro_rules! read1 {
                 () => {{
@@ -373,39 +366,32 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
             let start = std::time::Instant::now();
             read1!();
             match op {
-                Opcode::NoOp => {
-                    
-                }
+                Opcode::NoOp => {}
                 Opcode::NoOp3 => {
-                    
                     read2!();
                 }
                 Opcode::NoOp5 => {
-                    
                     read4!();
                 }
                 Opcode::Enter
                 | Opcode::EnterCompiling
                 | Opcode::EnterBlacklisted
                 | Opcode::EnterJit => {
-                    
+                    vm.ip = pc;
                     vm.sp = sp;
                     vm.top_call_frame = cfr;
                     vm.mutator().safepoint();
                     // TODO: Check for JIT trampoline
                 }
                 Opcode::Pop => {
-                    
                     pop!();
                 }
                 Opcode::Popn => {
-                    
                     let n = read2!();
                     sp = sp.add(n as usize);
                 }
 
                 Opcode::LdArg => {
-                    
                     let n = read2!();
                     let arg = (*cfr).args.as_ptr().add(n as usize).read();
                     let prev = sp;
@@ -414,7 +400,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::Alloc => {
-                    
                     let n = read2!();
 
                     for x in 0..n {
@@ -423,7 +408,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::AllocBelow => {
-                    
                     let top = pop!();
                     let n = read2!();
 
@@ -435,39 +419,32 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::PushUndef => {
-                    
                     push!(Value::encode_undefined_value());
                 }
 
                 Opcode::PushNull => {
-                    
                     push!(Value::encode_null_value());
                 }
 
                 Opcode::PushTrue => {
-                    
                     push!(Value::encode_bool_value(true));
                 }
 
                 Opcode::PushFalse => {
-                    
                     push!(Value::encode_bool_value(false));
                 }
 
                 Opcode::PushInt32 => {
-                    
                     let val = read4!();
                     push!(Value::encode_int32(val as i32));
                 }
 
                 Opcode::PushDouble => {
-                    
                     let val = read8!();
                     push!(Value::encode_untrusted_f64_value(f64::from_bits(val)));
                 }
 
                 Opcode::PushConstant | Opcode::PushProcedure => {
-                    
                     let ix = read4!();
 
                     let val = code_block!()
@@ -480,7 +457,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                     push!(val);
                 }
                 Opcode::StackGet => {
-                    
                     let off = read2!();
 
                     let val = cfr.cast::<Value>().sub(off as usize + 1).read();
@@ -489,7 +465,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::StackSet => {
-                    
                     let off = read2!();
                     let val = pop!();
                     let slot = cfr.cast::<Value>().sub(off as usize + 1);
@@ -498,7 +473,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::TailCall => {
-                    
                     let argc = read2!();
 
                     let callee = pop!();
@@ -550,7 +524,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::Addi => {
-                    
                     let x = pop!();
                     let y = read4!() as i32;
 
@@ -573,7 +546,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::Subi => {
-                    
                     let x = pop!();
                     let y = read4!() as i32;
 
@@ -596,7 +568,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::Muli => {
-                    
                     let x = pop!();
                     let y = read4!() as i32;
 
@@ -619,7 +590,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::Quotienti => {
-                    
                     let x = pop!();
                     let y = read4!() as i32;
 
@@ -648,7 +618,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::Add => {
-                    
                     let y = pop!();
                     let x = pop!();
 
@@ -696,7 +665,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::Sub => {
-                    
                     let y = pop!();
                     let x = pop!();
 
@@ -744,7 +712,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::Quotient => {
-                    
                     let y = pop!();
                     let x = pop!();
 
@@ -791,7 +758,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::Mul => {
-                    
                     let y = pop!();
                     let x = pop!();
 
@@ -839,7 +805,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::NumberEqual => {
-                    
                     let y = pop!();
                     let x = pop!();
 
@@ -883,7 +848,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::Less => {
-                    
                     let y = pop!();
                     let x = pop!();
 
@@ -930,7 +894,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::LessEqual => {
-                    
                     let y = pop!();
                     let x = pop!();
 
@@ -977,7 +940,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::Greater => {
-                    
                     let y = pop!();
                     let x = pop!();
 
@@ -1024,7 +986,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::GreaterEqual => {
-                    
                     let y = pop!();
                     let x = pop!();
 
@@ -1073,7 +1034,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::Call => {
-                    
                     let argc = read2!();
                     let callee = pop!();
 
@@ -1103,7 +1063,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::Return => {
-                    
                     let val = pop!();
 
                     if (*cfr).caller.is_null() {
@@ -1123,7 +1082,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::StackBox => {
-                    
                     let off = read2!();
                     let value = pop!();
 
@@ -1132,7 +1090,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::Box => {
-                    
                     let value = pop!();
 
                     let val = make_box(vm.thread, value);
@@ -1140,19 +1097,18 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::BoxRef => {
-                    
                     let val = pop!();
                     let val = val.box_ref();
                     push!(val);
                 }
 
                 Opcode::BoxSet => {
-                    
                     let val = pop!();
 
                     let value = pop!();
                     if !val.is_object() {
-                        let mut out = termcolor::StandardStream::stderr(termcolor::ColorChoice::Always);
+                        let mut out =
+                            termcolor::StandardStream::stderr(termcolor::ColorChoice::Always);
                         disassembly(code_block!(), &mut out).unwrap();
                         eprintln!();
                         std::process::abort();
@@ -1162,7 +1118,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::MakeClosure => {
-                    
                     let ncaptures = read2!();
 
                     let code_block = pop!();
@@ -1186,7 +1141,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::GlobalRef => {
-                    
                     let ix = read2!() as usize;
 
                     let constant = code_block!().literals.vector_ref(ix as _);
@@ -1206,7 +1160,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::ClosureRefUnbox => {
-                    
                     let ix = read2!();
 
                     let callee = (*cfr).callee.procedure();
@@ -1217,7 +1170,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::ClosureRef => {
-                    
                     let ix = read2!();
 
                     let callee = (*cfr).callee.procedure();
@@ -1226,7 +1178,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::SetArg => {
-                    
                     let val = pop!();
                     let ix = read2!();
 
@@ -1234,12 +1185,9 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                     arg.write(val);
                 }
 
-                Opcode::Reset => {
-                     /* no-op for now */
-                }
+                Opcode::Reset => { /* no-op for now */ }
 
                 Opcode::GlobalSet => {
-                    
                     let ix = read2!() as usize;
 
                     let constant = code_block!().literals.vector_ref(ix as _);
@@ -1259,7 +1207,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::Apply => {
-                    
                     let rator = pop!();
                     let rands = pop!();
                     if unlikely(!scm_is_list(rands)) {
@@ -1297,10 +1244,10 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::AssertArgCount => {
-                    
                     let argc = read2!();
                     if unlikely(argc != (*cfr).argc.get_int32() as u16) {
                         vm.sp = sp;
+                        vm.ip = pc;
                         vm.top_call_frame = cfr;
                         #[cfg(feature = "profile-opcodes")]
                         {
@@ -1321,10 +1268,10 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::AssertMinArgCount => {
-                    
                     let argc = read2!();
                     if unlikely(argc > (*cfr).argc.get_int32() as u16) {
                         vm.sp = sp;
+                        vm.ip = pc;
                         vm.top_call_frame = cfr;
                         #[cfg(feature = "profile-opcodes")]
                         {
@@ -1345,7 +1292,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::ClosureSet => {
-                    
                     let ix = read2!();
                     let val = pop!();
 
@@ -1355,13 +1301,11 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::Branch => {
-                    
                     let offset = read4!();
                     pc = pc.offset(offset as _);
                 }
 
                 Opcode::BranchIf => {
-                    
                     let offset = read4!();
                     let val = pop!();
 
@@ -1371,7 +1315,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::BranchIfNot => {
-                    
                     let offset = read4!();
                     let val = pop!();
 
@@ -1380,7 +1323,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                     }
                 }
                 Opcode::KeepBranchIfNot => {
-                    
                     let val = sp.read();
 
                     if !val.to_bool() {
@@ -1390,42 +1332,34 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::IsNull => {
-                    
                     push!(Value::encode_bool_value(pop!().is_null()));
                 }
 
                 Opcode::IsNumber => {
-                    
                     push!(Value::encode_bool_value(pop!().is_number()));
                 }
 
                 Opcode::IsComplex => {
-                    
                     push!(Value::encode_bool_value(pop!().is_complex()));
                 }
 
                 Opcode::IsReal => {
-                    
                     push!(Value::encode_bool_value(pop!().is_real()));
                 }
 
                 Opcode::IsRational => {
-                    
                     push!(Value::encode_bool_value(pop!().is_rational()));
                 }
 
                 Opcode::IsInteger => {
-                    
                     push!(Value::encode_bool_value(scm_is_integer(pop!())));
                 }
 
                 Opcode::IsExactInteger => {
-                    
                     push!(Value::encode_bool_value(pop!().is_exact_integer()));
                 }
 
                 Opcode::IsExactNonnegativeInteger => {
-                    
                     let n = pop!();
 
                     if n.is_int32() {
@@ -1438,7 +1372,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::IsExactPositiveInteger => {
-                    
                     let n = pop!();
 
                     if n.is_int32() {
@@ -1453,22 +1386,18 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::IsFixnum => {
-                    
                     push!(Value::encode_bool_value(pop!().is_int32()));
                 }
 
                 Opcode::IsInexactReal => {
-                    
                     push!(Value::encode_bool_value(pop!().is_double()));
                 }
 
                 Opcode::IsFlonum => {
-                    
                     push!(Value::encode_bool_value(pop!().is_double()));
                 }
 
                 Opcode::IsExact => {
-                    
                     let val = pop!();
 
                     if let Some(x) = scm_is_exact(val) {
@@ -1476,17 +1405,18 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                     } else {
                         vm.top_call_frame = cfr;
                         vm.sp = sp;
+                        vm.ip = pc;
                         throw!(wrong_contract::<()>("exact?", "number?", 0, 1, &[val]));
                     }
                 }
 
                 Opcode::Car => {
-                    
                     let val = pop!();
 
                     if unlikely(!val.is_pair()) {
                         vm.top_call_frame = cfr;
                         vm.sp = sp;
+                        vm.ip = pc;
                         throw!(wrong_contract::<()>("car", "pair?", 0, 1, &[val]));
                     }
 
@@ -1494,12 +1424,12 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::Cdr => {
-                    
                     let val = pop!();
 
                     if unlikely(!val.is_pair()) {
                         vm.top_call_frame = cfr;
                         vm.sp = sp;
+                        vm.ip = pc;
                         throw!(wrong_contract::<()>("cdr", "pair?", 0, 1, &[val]));
                     }
 
@@ -1507,12 +1437,12 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::SetCar => {
-                    
                     let val = pop!();
                     let cell = pop!();
                     if unlikely(!cell.is_pair()) {
                         vm.top_call_frame = cfr;
                         vm.sp = sp;
+                        vm.ip = pc;
                         throw!(wrong_contract::<()>(
                             "set-car!",
                             "pair?",
@@ -1527,12 +1457,12 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::SetCdr => {
-                    
                     let val = pop!();
                     let cell = pop!();
                     if unlikely(!cell.is_pair()) {
                         vm.top_call_frame = cfr;
                         vm.sp = sp;
+                        vm.ip = pc;
                         throw!(wrong_contract::<()>(
                             "set-cdr!",
                             "pair?",
@@ -1547,7 +1477,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::Cons => {
-                    
                     let cdr = pop!();
                     let car = pop!();
 
@@ -1555,7 +1484,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::List => {
-                    
                     let mut list = Value::encode_null_value();
 
                     for _ in 0..read2!() {
@@ -1566,32 +1494,27 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::IsPair => {
-                    
                     let val = pop!();
 
                     push!(Value::encode_bool_value(val.is_pair()));
                 }
 
                 Opcode::IsList => {
-                    
                     let val = pop!();
                     push!(Value::encode_bool_value(scm_is_list(val)));
                 }
 
                 Opcode::IsVector => {
-                    
                     let val = pop!();
                     push!(Value::encode_bool_value(val.is_vector()));
                 }
 
                 Opcode::IsUndef => {
-                    
                     let val = pop!();
                     push!(Value::encode_bool_value(val.is_undefined()));
                 }
 
                 Opcode::Vector => {
-                    
                     let n = read2!();
 
                     let mut vector = make_vector(vm.thread, n as _);
@@ -1605,7 +1528,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::MakeVector => {
-                    
                     let n = read2!();
                     let fill = pop!();
                     let mut vector = make_vector(vm.thread, n as _);
@@ -1615,7 +1537,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::VectorRefI => {
-                    
                     let n = read2!() as i32;
                     let vector = pop!();
 
@@ -1645,7 +1566,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::VectorSetI => {
-                    
                     let n = read2!() as i32;
                     let vector = pop!();
 
@@ -1681,7 +1601,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::VectorRef => {
-                    
                     let index = pop!();
                     let vector = pop!();
 
@@ -1722,7 +1641,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::VectorSet => {
-                    
                     let index = pop!();
                     let vector = pop!();
 
@@ -1764,7 +1682,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::VectorLength => {
-                    
                     let vector = pop!();
 
                     if unlikely(!vector.is_vector()) {
@@ -1781,7 +1698,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::Define => {
-                    
                     let value = pop!();
                     let ix = read2!();
                     let constant = read1!();
@@ -1802,7 +1718,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::StructPropPred => {
-                    
                     let ix = read2!();
                     let prop = code_block!().literals.vector_ref(ix as _);
                     let v = pop!();
@@ -1825,14 +1740,12 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                     push!(false.into());
                 }
                 Opcode::Dup => {
-                    
                     let val = pop!();
                     push!(val);
                     push!(val);
                 }
 
                 Opcode::Swap => {
-                    
                     let val1 = pop!();
                     let val2 = pop!();
                     push!(val1);
@@ -1840,7 +1753,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::CollectRest => {
-                    
                     let n = read2!();
                     let rest = (*cfr).args.as_mut_ptr().add(n as _);
                     let mut list = Value::encode_null_value();
@@ -1854,7 +1766,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::Flatpack => {
-                    
                     let n = read2!();
                     let mut list = ArrayList::with_capacity(vm.thread, n as _);
 
@@ -1877,7 +1788,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::Pack => {
-                    
                     let n = read2!();
 
                     let mut list = make_vector(vm.thread, n as _);
@@ -1892,8 +1802,8 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::NoMatchingArgCount => {
-                    
                     vm.sp = sp;
+                    vm.ip = pc;
                     vm.top_call_frame = cfr;
                     throw!(Err::<(), _>(
                         make_string(vm.thread, "wrong number of arguments").into()
@@ -1901,13 +1811,11 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::IsTuple => {
-                    
                     let val = pop!();
                     push!(val.is_tuple().into());
                 }
 
                 Opcode::TupleRef => {
-                    
                     let n = pop!();
                     let val = pop!();
 
@@ -1931,7 +1839,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::TupleRefI => {
-                    
                     let n = read2!();
                     let val = pop!();
 
@@ -1949,7 +1856,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::TupleSet => {
-                    
                     let new_val = pop!();
                     let n = pop!();
                     let val = pop!();
@@ -1981,7 +1887,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::TupleSetI => {
-                    
                     let new_val = pop!();
                     let val = pop!();
                     let n = read2!();
@@ -2001,7 +1906,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::Tuple => {
-                    
                     let n = read2!();
 
                     let mut list = scm_make_tuple(vm.mutator(), n as _);
@@ -2057,6 +1961,7 @@ pub unsafe fn _vm_entry_trampoline(
 ) -> Result<Value, Value> {
     let saved = vm.next_entry();
     let sp = vm.sp;
+    let prev_ip = vm.ip;
     let saved_module = vm.module;
     let mut t4 = vm.top_call_frame;
     vm.prev_top_call_frame = t4;
@@ -2092,6 +1997,7 @@ pub unsafe fn _vm_entry_trampoline(
     vm.module = saved_module;
     vm.entry = saved;
     vm.sp = sp;
+    vm.ip = prev_ip;
     match result {
         Ok(val) => val,
         Err(err) => std::panic::resume_unwind(err),
@@ -2106,6 +2012,7 @@ pub unsafe fn _vm_entry_trampoline2(
 ) -> Result<Value, Value> {
     let saved = vm.next_entry();
     let sp = vm.sp;
+    let ip = vm.ip;
     let saved_module = vm.module;
     let mut t4 = vm.top_call_frame;
     vm.prev_top_call_frame = t4;
@@ -2147,6 +2054,7 @@ pub unsafe fn _vm_entry_trampoline2(
     vm.module = saved_module;
     vm.entry = saved;
     vm.sp = sp;
+    vm.ip = ip;
     match result {
         Ok(val) => val,
         Err(err) => std::panic::resume_unwind(err),
@@ -2186,12 +2094,16 @@ pub fn apply_list(rator: Value, rands: Value) -> Result<Value, Value> {
     unsafe { _vm_entry_trampoline2(vm, scm_current_module(), rator, rands) }
 }
 
-pub fn scm_eval(expr: Value, e: Value) -> Result<Value, Value> {
+pub fn scm_eval(
+    expr: Value,
+    e: Value,
+    notes: Option<Handle<HashMap<Value, Value>>>,
+) -> Result<Value, Value> {
     let restore_module = e.is_module();
 
     let vm = scm_vm();
 
-    let v = scm_compile(expr, e)?;
+    let v = scm_compile(expr, e, notes)?;
 
     let orig = vm.module;
     if e.is_module() {
@@ -2207,7 +2119,11 @@ pub fn scm_eval(expr: Value, e: Value) -> Result<Value, Value> {
     res
 }
 
-pub fn scm_compile(expr: Value, e: Value) -> Result<Value, Value> {
+pub fn scm_compile(
+    expr: Value,
+    e: Value,
+    notes: Option<Handle<HashMap<Value, Value>>>,
+) -> Result<Value, Value> {
     let module = if e.is_module() {
         e.module()
     } else {
@@ -2215,7 +2131,7 @@ pub fn scm_compile(expr: Value, e: Value) -> Result<Value, Value> {
     };
     let cenv = make_cenv(module, Value::encode_null_value());
 
-    let code = compile(expr, cenv)?;
+    let code = compile(expr, cenv, notes)?;
 
     Ok(code)
 }

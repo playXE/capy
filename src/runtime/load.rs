@@ -1,3 +1,4 @@
+use std::collections::hash_map::RandomState;
 use std::intrinsics::unlikely;
 use std::mem::MaybeUninit;
 
@@ -15,6 +16,7 @@ use rsgc::heap::heap::heap;
 use rsgc::heap::root_processor::SimpleRoot;
 use rsgc::prelude::{Handle, Object};
 use rsgc::sync::mutex::{Condvar, RawMutex};
+use rsgc::system::collections::hashmap::HashMap;
 use rsgc::thread::Thread;
 
 use super::error::wrong_contract;
@@ -55,7 +57,7 @@ pub fn scm_vm_load(
         SCM_PORT_DIRECTION_IN,
         SCM_PORT_FILE_OPTION_NONE,
         SCM_PORT_BUFFER_MODE_BLOCK,
-        Value::encode_bool_value(false),
+        Value::encode_bool_value(true),
     )?;
 
     scm_load_from_port(port, environment)
@@ -87,15 +89,22 @@ pub fn scm_load_from_port(port: Handle<Port>, environment: Value) -> Result<Valu
         let mut reader = Reader::new(scm_vm(), port, false);
 
         let mut s;
-
+        let note = HashMap::with_hasher_and_capacity(RandomState::new(), 16);
+        let prev = scm_vm().current_notes.take();
+        scm_vm().current_notes = Some(note);
         loop {
-            s = reader.read()?;
+            s = reader.read(Some(note))?;
             if s.is_eof_object() {
                 break;
             }
 
-            last = scm_eval(s, Value::encode_bool_value(false))?;
+            last = scm_eval(s, Value::encode_bool_value(false), Some(note)).map_err(|err| {
+                scm_vm().current_notes = prev;
+                err 
+            })?;
         }
+
+        scm_vm().current_notes = prev;
 
         Ok(last)
     })();
@@ -548,17 +557,14 @@ pub fn scm_require(feature: Value, _flags: i32, _base_module: Handle<Module>) ->
         let providing = scm_assoc_ref(
             loader.providing,
             feature,
-            |x, y| {
-              
-                x.strsym() == y.strsym()
-            },
+            |x, y| x.strsym() == y.strsym(),
             None,
         );
 
         if providing.is_false() {
             break;
         }
-      
+
         let mut p = providing;
 
         if p.cdr().get_int32() == vm.vmid {

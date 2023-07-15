@@ -8,8 +8,9 @@ use crate::{
         identifier_to_symbol, scm_identifier_to_symbol, scm_make_identifier, scm_unwrap_syntax,
     },
     compile::{
-        cenv_extend, cenv_frames, cenv_make_bottom, cenv_module, cenv_set_module, global_call_type,
-        Call, CallFlag, Define, GRef, GSet, GlobalCall, If, LFlag, LRef, LSet, Lambda,
+        cenv_exp_name, cenv_extend, cenv_frames, cenv_make_bottom, cenv_module, cenv_sans_name,
+        cenv_set_exp_name, cenv_set_module, global_call_type, Call, CallFlag, Define, GRef, GSet,
+        GlobalCall, If, LFlag, LRef, LSet, Lambda,
     },
     raise_exn,
     runtime::list::{
@@ -21,7 +22,7 @@ use crate::{
         is_global_identifier_eq, scm_export_symbols, scm_find_module, scm_import_module,
         scm_insert_binding, scm_make_module,
     },
-    runtime::{value::Value, list::scm_is_circular_list},
+    runtime::{list::scm_is_circular_list, value::Value},
     runtime::{
         load::scm_require,
         module::scm_reqbase_module,
@@ -87,15 +88,17 @@ pub fn pass1_call(
     args: Value,
     cenv: Value,
 ) -> Result<Handle<IForm>, Value> {
-    if let IForm::Lambda(_) = &*proc {
+    if let IForm::Lambda(lam) = &*proc {
         let mut alist = ArrayList::with_capacity(Thread::current(), scm_length(args).unwrap());
 
         scm_dolist!(arg, args, {
             alist.push(Thread::current(), pass1(arg, cenv)?);
         });
-
-        expand_inlined_procedure(program, proc, &alist)
-    } else if args.is_null() {
+        if !lam.optarg {
+            return expand_inlined_procedure(program, proc, &alist);
+        }
+    }
+    if args.is_null() {
         Ok(make_iform(IForm::Call(Call {
             origin: program,
             proc,
@@ -104,7 +107,7 @@ pub fn pass1_call(
         })))
     } else {
         let mut alist = ArrayList::with_capacity(Thread::current(), scm_length(args).unwrap());
-
+        let cenv = cenv_sans_name(cenv);
         scm_dolist!(arg, args, {
             alist.push(Thread::current(), pass1(arg, cenv)?);
         });
@@ -132,24 +135,22 @@ pub fn pass1(program: Value, cenv: Value) -> Result<Handle<IForm>, Value> {
         match global_call_type(id, cenv) {
             GlobalCall::Syntax(syntax) => (syntax.callback)(program, cenv),
             GlobalCall::Normal => {
-                let gref = make_iform(IForm::GRef(GRef { id }));
+                let gref = make_iform(IForm::GRef(GRef {
+                    origin: program.car(),
+                    id,
+                }));
                 pass1_call(program, gref, program.cdr(), cenv)
             }
 
             GlobalCall::Macro(m) => {
-                
                 let v = apply(m.r#macro().transformer, &[program, cenv])?;
-                
+
                 let v = pass1(v, cenv)?;
 
                 Ok(v)
             }
 
             GlobalCall::Inliner(proc) => expand_inliner(proc, program, id, cenv),
-            _ => {
-                let gref = make_iform(IForm::GRef(GRef { id }));
-                pass1_call(program, gref, program.cdr(), cenv)
-            }
         }
     }
 
@@ -171,7 +172,10 @@ pub fn pass1(program: Value, cenv: Value) -> Result<Handle<IForm>, Value> {
             h if h.is_wrapped_identifier() => global_call(program, h, cenv),
 
             h if h.is_lvar() => {
-                let lref = make_iform(IForm::LRef(LRef { lvar: h.lvar() }));
+                let lref = make_iform(IForm::LRef(LRef {
+                    origin: program.car(),
+                    lvar: h.lvar(),
+                }));
 
                 pass1_call(program, lref, program.cdr(), cenv)
             }
@@ -180,27 +184,15 @@ pub fn pass1(program: Value, cenv: Value) -> Result<Handle<IForm>, Value> {
 
             h if h.is_macro() => {
                 let transformer = h.r#macro().transformer;
-                
+
                 let res = apply(transformer, &[program, cenv])?;
-                
+
                 pass1(res, cenv)
             }
 
             h if h.is_false() => {
-                let rator = pass1(program.car(), cenv)?;
-                /*let mut alist =
-                    ArrayList::with_capacity(Thread::current(), scm_length(program.cdr()).unwrap());
+                let rator = pass1(program.car(), cenv_sans_name(cenv))?;
 
-                scm_dolist!(arg, program.cdr(), {
-                    alist.push(Thread::current(), pass1(arg, cenv)?);
-                });
-
-                Ok(make_iform(IForm::Call(Call {
-                    origin: program,
-                    proc: rator,
-                    args: alist,
-                    flag: CallFlag::None,
-                })))*/
                 pass1_call(program, rator, program.cdr(), cenv)
             }
 
@@ -215,9 +207,15 @@ pub fn pass1(program: Value, cenv: Value) -> Result<Handle<IForm>, Value> {
     } else if program.is_identifier() {
         let r = cenv_lookup(cenv, program);
         if r.is_lvar() {
-            Ok(make_iform(IForm::LRef(LRef { lvar: r.lvar() })))
+            Ok(make_iform(IForm::LRef(LRef {
+                origin: program,
+                lvar: r.lvar(),
+            })))
         } else if r.is_wrapped_identifier() {
-            Ok(make_iform(IForm::GRef(GRef { id: r })))
+            Ok(make_iform(IForm::GRef(GRef {
+                origin: program,
+                id: r,
+            })))
         } else {
             return Err(make_string(
                 Thread::current(),
@@ -346,7 +344,6 @@ pub fn define_syntax() {
     });
 
     define_syntax!("define", Some("capy"), form, cenv, {
-        
         pass1_define(form, form, false, true, cenv_module(cenv), cenv)
     });
 
@@ -379,11 +376,13 @@ pub fn define_syntax() {
 
             if var.is_lvar() {
                 Ok(make_iform(IForm::LSet(LSet {
+                    origin: form,
                     lvar: var.lvar(),
                     value: val,
                 })))
             } else {
                 Ok(make_iform(IForm::GSet(GSet {
+                    origin: form,
                     id: ensure_identifier(var, cenv),
                     value: val,
                 })))
@@ -461,7 +460,7 @@ pub fn define_syntax() {
         if scm_length(form) == Some(4) {
             Ok(make_iform(IForm::If(If {
                 origin: form,
-                cond: pass1(form.cadr(), cenv)?,
+                cond: pass1(form.cadr(), cenv_sans_name(cenv))?,
                 cons: pass1(form.caddr(), cenv)?,
                 alt: pass1(form.cadddr(), cenv)?,
             })))
@@ -469,7 +468,7 @@ pub fn define_syntax() {
             // (if test then)
             Ok(make_iform(IForm::If(If {
                 origin: form,
-                cond: pass1(form.cadr(), cenv)?,
+                cond: pass1(form.cadr(), cenv_sans_name(cenv))?,
                 cons: pass1(form.caddr(), cenv)?,
                 alt: make_iform(IForm::Const(Value::encode_undefined_value())),
             })))
@@ -610,13 +609,13 @@ pub fn define_syntax() {
                     initval: None,
                     ref_count: 0,
                     set_count: 0,
-                    arg: false
+                    arg: false,
                 });
 
                 args.push(t, lvar);
             });
 
-            let argenv = cenv;
+            let argenv = cenv_sans_name(cenv);
             let env1 = cenv_extend(
                 cenv,
                 scm_list(t, &[scm_cons(Thread::current(), lambda, lvar.into())]),
@@ -661,7 +660,7 @@ pub fn define_syntax() {
 
             let call = make_iform(IForm::Call(Call {
                 origin: form,
-                proc: make_iform(IForm::LRef(LRef { lvar })),
+                proc: make_iform(IForm::LRef(LRef { origin: form, lvar })),
                 args: cargs,
                 flag: CallFlag::None,
             }));
@@ -912,7 +911,7 @@ pub fn define_syntax() {
         };
 
         let sr = scm_compile_syntax_rules(
-            Value::encode_null_value(),
+            cenv_exp_name(cenv),
             form,
             ellipsis.unwrap_or(true.into()),
             literals,
@@ -956,7 +955,10 @@ pub fn define_syntax() {
         if scm_length(form) == Some(3) {
             let name = form.cadr();
             let expr = form.caddr();
-            let transformer = eval_macro_rhs("define-syntax", expr, cenv)?; // apply(super::compile(expr, cenv)?, &[])?;
+            let ncenv = cenv_copy(cenv);
+
+            cenv_set_exp_name(ncenv, name);
+            let transformer = eval_macro_rhs("define-syntax", expr, ncenv)?; // apply(super::compile(expr, cenv)?, &[])?;
 
             let id = if name.is_wrapped_identifier() {
                 rename_toplevel_identifier(name.identifier())
@@ -1197,7 +1199,7 @@ fn pass1_body_rec(
                         )?;*/
 
                         let expanded = apply(head.r#macro().transformer, &[exprs.car(), cenv])?;
-                        
+
                         return pass1_body_rec(
                             scm_list_star(Thread::current(), &[expanded, rest]),
                             mframe,
@@ -1206,7 +1208,6 @@ fn pass1_body_rec(
                         );
                     }
 
-                    
                     head if head.is_pair() && head.car() == make_symbol(":rec", true) => {
                         return pass1_body_finish(exprs, mframe, vframe, cenv)
                     }
@@ -1218,7 +1219,6 @@ fn pass1_body_rec(
                     head if is_global_identifier_eq(head, (*DEFINE).into())
                         || is_global_identifier_eq(head, (*R5RS_DEFINE).into()) =>
                     {
-                        
                         let def = match args {
                             // match ((name . formals) . body)
                             args if args.is_pair() && args.car().is_pair() => {
@@ -1299,16 +1299,19 @@ fn pass1_body_rec(
                             return pass1_body_rec(rest, mframe, vframe, cenv);
                         }
                     }
-                    head if is_global_identifier_eq(head, (*BEGIN).into()) => {
-                        pass1_body_rec(scm_append(Thread::current(), args, rest), mframe, vframe, cenv)
-                    }
+                    head if is_global_identifier_eq(head, (*BEGIN).into()) => pass1_body_rec(
+                        scm_append(Thread::current(), args, rest),
+                        mframe,
+                        vframe,
+                        cenv,
+                    ),
 
                     head if head.is_wrapped_identifier() => {
                         if let Some(gloc) = scm_identifier_to_bound_gloc(head.identifier()) {
                             if gloc.value.is_macro() {
                                 let expanded =
                                     apply(gloc.value.r#macro().transformer, &[exprs.car(), cenv])?;
-                                
+
                                 return pass1_body_rec(
                                     scm_list_star(Thread::current(), &[expanded, rest]),
                                     mframe,
@@ -1420,12 +1423,13 @@ fn pass1_body_rest(exprs: Value, cenv: Value) -> Result<Handle<IForm>, Value> {
         Ok(pass1(exprs.car(), cenv)?)
     } else {
         let t = Thread::current();
+        let stmtenv = cenv_sans_name(cenv);
         let mut seq = ArrayList::with_capacity(t, scm_length(exprs).unwrap());
 
         let mut ls = exprs;
 
         while !ls.is_null() {
-            seq.push(t, pass1(ls.car(), cenv)?);
+            seq.push(t, pass1(ls.car(), stmtenv)?);
             ls = ls.cdr();
         }
 
@@ -1572,7 +1576,10 @@ fn expand_inliner(
     cenv: Value,
 ) -> Result<Handle<IForm>, Value> {
     let Some(proc) = inliner.native_procedure().inliner else {
-        let gref = make_iform(IForm::GRef(GRef { id }));
+        let gref = make_iform(IForm::GRef(GRef {
+            origin: program.car(),
+            id,
+        }));
         return pass1_call(program, gref, program.cdr(), cenv);
     };
 
@@ -1584,7 +1591,10 @@ fn expand_inliner(
     if let Some(iform) = proc(&args, inliner) {
         Ok(iform)
     } else {
-        let gref = make_iform(IForm::GRef(GRef { id }));
+        let gref = make_iform(IForm::GRef(GRef {
+            origin: program.car(),
+            id,
+        }));
         Ok(make_iform(IForm::Call(Call {
             origin: program,
             proc: gref,
@@ -1595,7 +1605,8 @@ fn expand_inliner(
 }
 
 fn eval_macro_rhs(name: &str, expr: Value, cenv: Value) -> Result<Value, Value> {
-    let transformer = apply(super::compile(expr, cenv)?, &[])?;
+    let notes = scm_vm().current_notes;
+    let transformer = apply(super::compile(expr, cenv, notes)?, &[])?;
 
     if transformer.is_macro() {
         Ok(transformer)

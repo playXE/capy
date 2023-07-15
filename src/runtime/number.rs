@@ -9,9 +9,8 @@ use crate::{
 use super::{
     fun::scm_make_subr_inliner,
     module::{scm_define, scm_scheme_module},
-    object::{ScmResult},
     symbol::Intern,
-    value::Value, arith::{scm_is_zero, scm_is_exact}, error::wrong_contract,
+    value::Value, arith::{scm_is_zero, scm_is_exact}, error::wrong_contract, object::ScmResult,
 };
 
 extern "C" fn number_p(cfr: &mut CallFrame) -> ScmResult {

@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 
 use once_cell::sync::Lazy;
 
-use rsgc::prelude::Handle;
+use rsgc::{prelude::Handle, system::collections::hashmap::HashMap};
 
 use crate::{
     raise_exn,
@@ -19,7 +19,7 @@ use super::{
         port_set_port_position, Port, SCM_PORT_UCS4_LF,
     },
     string::make_string,
-    symbol::make_symbol,
+    symbol::{make_symbol, Intern},
     value::Value,
     vector::make_vector,
 };
@@ -40,8 +40,6 @@ pub const UZ_CH: char = 'Z';
 pub const DQ_CH: char = '"';
 pub const BQ_CH: char = '`';
 pub const Q_CH: char = '\'';
-pub const OPENQ_CH: char = '‘';
-pub const CLOSEQ_CH: char = '’';
 pub const DOT_CH: char = '.';
 pub const COMMA_CH: char = ',';
 pub const AT_CH: char = '@';
@@ -158,6 +156,7 @@ pub struct Reader<'a> {
     port: Handle<Port>,
     file: bool,
     foldcase: bool,
+    notes: Option<Handle<HashMap<Value, Value>>>,
 }
 /// Compare `str` with `b`. `b` is zero-terminated.
 fn strcmp(str: &[u8], b: &[u8]) -> Ordering {
@@ -238,7 +237,12 @@ impl<'a> Reader<'a> {
             parsing_line_from: 0,
             parsing_line_to: 0,
             foldcase,
+            notes: None 
         }
+    }
+
+    pub fn put_note(&mut self, key: Value, value: Value) {
+        self.notes.unwrap().put(self.vm.mutator(), key, value);
     }
 
     pub fn done(self) -> Result<(), Value> {
@@ -283,14 +287,14 @@ impl<'a> Reader<'a> {
         let mut message = msg.to_string();
         message.push_str(&format!("\n ... {}:", self.port.name));
         if self.parsing_line_from == self.parsing_line_to {
-            message.push_str(&format!("{}", self.parsing_line_from));
+            message.push_str(&format!("{}:{}", self.parsing_line_from, c));
         } else {
             message.push_str(&format!(
                 "{}-{}",
                 self.parsing_line_from, self.parsing_line_to
             ));
         }
-        println!("message: {}", message);
+       
         raise_exn!(
             FailRead,
             &[make_srcloc(
@@ -299,7 +303,7 @@ impl<'a> Reader<'a> {
                 c,
                 pos as _
             )],
-            "message: {}",
+            "{}",
             message
         )
     }
@@ -1106,11 +1110,11 @@ impl<'a> Reader<'a> {
         let mut lst = Value::encode_null_value();
 
         let line_begin = self.port.line;
-        let mut _column_begin = self.port.column - 1;
-        if _column_begin < 1 {
-            _column_begin = 1;
+        let mut column_begin = self.port.column - 1;
+        if column_begin < 1 {
+            column_begin = 1;
         }
-
+        let pos = self.port.mark;
         loop {
             let token = self.read_token()?;
             if token.is_eof_object() {
@@ -1125,7 +1129,9 @@ impl<'a> Reader<'a> {
                 }
 
                 lst = scm_reverse(self.vm.mutator(), lst);
-
+                if self.notes.is_some() {
+                    self.put_note(lst, make_srcloc(self.port.name, line_begin, column_begin, pos as _));
+                }
                 return Ok(lst);
             }
 
@@ -1137,7 +1143,9 @@ impl<'a> Reader<'a> {
                 }
 
                 lst = scm_reverse(self.vm.mutator(), lst);
-
+                if self.notes.is_some() {
+                    self.put_note(lst, make_srcloc(self.port.name, line_begin, column_begin, pos as _));
+                }
                 return Ok(lst);
             }
 
@@ -1180,6 +1188,9 @@ impl<'a> Reader<'a> {
                     }
 
                     lst = scm_reverse2x(self.vm.mutator(), lst, rest);
+                    if self.notes.is_some() {
+                        self.put_note(lst, make_srcloc(self.port.name, line_begin, column_begin, pos as _));
+                    }
                     return Ok(lst);
                 }
 
@@ -1191,6 +1202,9 @@ impl<'a> Reader<'a> {
                     }
 
                     lst = scm_reverse2x(self.vm.mutator(), lst, rest);
+                    if self.notes.is_some() {
+                        self.put_note(lst, make_srcloc(self.port.name, line_begin, column_begin, pos as _));
+                    }
                     return Ok(lst);
                 }
 
@@ -1202,6 +1216,12 @@ impl<'a> Reader<'a> {
                 }
 
                 return self.lexical_error("more than one item following '.' while reading list");
+            }
+
+            if token.is_pair() {
+                if self.notes.is_some() {
+                    self.put_note(token, make_srcloc(self.port.name, line_begin, column_begin, pos as _));
+                }
             }
 
             lst = scm_cons(self.vm.mutator(), token, lst);
@@ -1222,13 +1242,14 @@ impl<'a> Reader<'a> {
             let Some(mut c) = self.get_char()? else {
                 return Ok(Value::eof_object());
             };
+            self.parsing_line_from = self.port.line;
+            self.parsing_line_to = self.port.line;
+         
             if c.is_whitespace() {
                 continue 'top;
             }
 
-            self.parsing_line_from = self.port.line;
-            self.parsing_line_to = self.port.line;
-
+            
             if c.is_ascii_digit() {
                 self.unget_char();
                 return self.read_number();
@@ -1459,6 +1480,8 @@ impl<'a> Reader<'a> {
     }
 
     pub fn read_expr(&mut self) -> Result<Value, Value> {
+       
+        
         let token = self.read_token()?;
         if token == inherent_symbols()[InherentSymbol::RParen] {
             self.lexical_error("unexpected ')'")
@@ -1473,7 +1496,14 @@ impl<'a> Reader<'a> {
         }
     }
 
-    pub fn read(&mut self) -> Result<Value, Value> {
+    pub fn read(&mut self, note: Option<Handle<HashMap<Value, Value>>>) -> Result<Value, Value> {
+        
+        self.notes = note;
+
+        if self.notes.is_some() {
+            self.put_note(".&SOURCE_PATH".intern().into(), self.port.name);
+        }
+
         let obj = self.read_expr()?;
 
         if obj == inherent_symbols()[InherentSymbol::Dot] {

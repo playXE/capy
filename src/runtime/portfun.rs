@@ -2201,7 +2201,7 @@ extern "C" fn read(cfr: &mut CallFrame) -> ScmResult {
     let mut reader = Reader::new(scm_vm(), port, false);
 
     reader
-        .read()
+        .read(None)
         .and_then(|val| {
             port.lock.unlock();
             Ok(val)

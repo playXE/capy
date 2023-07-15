@@ -813,8 +813,10 @@ impl BytecodeGenerator {
             
             if !exit {
                 let src = if !src.is_none() {
-                    let _c = self.add_constant(Value::encode_undefined_value());
-                    todo!()
+                    let c = self.add_constant(Value::encode_undefined_value());
+                    let dst = self.final_destination(dst, None);
+                    OpMov::new(dst.virtual_register(), VirtualRegister::new_constant(c as _)).write(self);
+                    return (exit, Some(dst));
                 } else {
                     self.mov(dst, src.unwrap())
                 };
@@ -906,6 +908,7 @@ impl BytecodeGenerator {
             name: Value::encode_undefined_value(),
             literals: Value::encode_object_value(literals),
             fragments,
+            ranges: None,
             code_len: self.code.len() as _,
             num_vars: self.num_vars as _,
             mina: 0,

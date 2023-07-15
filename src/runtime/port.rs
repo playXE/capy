@@ -1085,10 +1085,7 @@ pub fn port_get_byte(mut port: Handle<Port>) -> Result<i32, Value> {
                     }
                     port.buf_head = unsafe { port.buf_head.add(1) };
                     port.mark += 1;
-                    if port.track_line_column {
-                        port_update_line_column(port, c as i32);
-                    }
-
+                    
                     return Ok(c as i32);
                 } else {
                     let mut b = 0;

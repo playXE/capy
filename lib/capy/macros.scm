@@ -180,8 +180,7 @@
             (let (
                 [begin. (rename 'begin)]
                 [require. (rename 'require)]
-                [import. (rename 'import)]
-            )
+                [import. (rename 'import)])
                 (list begin. 
                     (list require. (module-name->path (cadr expr)))
                     (list import. (cadr expr)))))))

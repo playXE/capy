@@ -485,3 +485,12 @@
             (raise-argument-error 'for-each "list?" lst1))
         (cond ((apply list-transpose+ lst1 lst2) => (lambda (lst) (for-each-n proc lst)))
               (else (raise-argument-error 'for-each "expected same length proper lists" (cons lst1 lst2)))))))
+
+  (define remove-duplicate-symbols
+    (lambda (lst)
+      (let loop ((lst lst) (ans '()))
+        (if (null? lst)
+            (reverse ans)
+            (if (memq (car lst) ans)
+                (loop (cdr lst) ans)
+                (loop (cdr lst) (cons (car lst) ans)))))))

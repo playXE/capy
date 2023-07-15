@@ -9,6 +9,7 @@ use rsgc::heap::heap::heap;
 use rsgc::heap::root_processor::SimpleRoot;
 use rsgc::prelude::{Allocation, Handle, Object};
 use rsgc::system::arraylist::ArrayList;
+use rsgc::system::collections::hashmap::HashMap;
 use rsgc::thread::Thread;
 
 pub fn scm_error(err: &str) -> ! {
@@ -34,6 +35,7 @@ use crate::runtime::value::Value;
 use self::callframe::CallFrame;
 #[repr(C)]
 pub struct VM {
+    
     pub(crate) sp: *mut Value,
     pub(crate) ip: *const u8,
     /// Trampoline from native to Scheme support
@@ -55,7 +57,7 @@ pub struct VM {
     pub(crate) stack: Box<[Value]>,
     pub(crate) module: Option<Handle<Module>>,
     pub(crate) entry: u64,
-
+    pub(crate) current_notes: Option<Handle<HashMap<Value, Value>>>,
     pub(crate) winders: Option<Handle<Winder>>,
     pub(crate) vmid: i32,
 }
@@ -129,6 +131,7 @@ unsafe impl Object for VM {
         self.tail_rands.trace(visitor);
         self.tail_rator.trace(visitor);
         self.winders.trace(visitor);
+        self.current_notes.trace(visitor);
         let offset = self.sp as usize - self.stack.as_ptr() as usize;
 
         unsafe {
@@ -188,6 +191,7 @@ pub fn scm_init_vm() {
             thread: Thread::current(),
             state: 0,
             vmlock: RawMutex::INIT,
+            current_notes: None,
             cond: Condvar::new(),
             specific: Value::encode_null_value(),
             thunk: Value::encode_null_value(),

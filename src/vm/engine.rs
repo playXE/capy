@@ -74,6 +74,9 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 todo!()
             } else {
                 let callee = vm.tail_rator;
+                if callee.is_native_procedure() {
+                    println!("tail call to native procedure: {} from {}", callee, (*fp).callee);
+                }
                 let caller = (*fp).caller;
                 let return_pc = (*fp).return_pc;
 

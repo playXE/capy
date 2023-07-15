@@ -1,113 +1,98 @@
+use rsgc::prelude::Handle;
 
-use crate::{runtime::{
-    fun::{scm_make_subr, get_proc_name},
-    module::{scm_define, scm_null_module},
-    object::ScmResult,
-    symbol::Intern,
-    value::Value,
-}, op::Opcode};
+use crate::{
+    runtime::{
+        error::{srcloc_column, srcloc_line, srcloc_source},
+        fun::scm_make_subr,
+        module::{scm_define, scm_null_module},
+        object::{CodeBlock, ScmResult},
+        symbol::Intern,
+        value::Value,
+    },
+    vm::scm_vm,
+};
 
-use super::{callframe::CallFrame, scm_vm, VM};
+use super::{callframe::CallFrame, VM};
+
+pub struct Frame {
+    callee: Value,
+    pc: *const u8,
+    code_block: Option<Handle<CodeBlock>>,
+    caller: *mut CallFrame,
+}
 
 pub struct StackTrace<'a> {
-    vm: &'a VM,
-    cfr: *mut CallFrame,
+    vm: &'a mut VM,
 }
 
 impl<'a> StackTrace<'a> {
-    pub fn new(vm: &'a VM) -> Self {
-        Self {
-            vm,
-            cfr: vm.top_call_frame,
-        }
-    }
-}
-
-pub struct Context {
-    cfr: *mut CallFrame,
-}
-
-impl Context {
-    pub fn return_pc(&self) -> *const u8 {
-        unsafe { (*self.cfr).return_pc() }
+    pub fn new(vm: &'a mut VM) -> Self {
+        Self { vm }
     }
 
-    pub fn callee(&self) -> Value {
-        unsafe { (*self.cfr).callee() }
-    }
+    unsafe fn build(&self) -> String {
+        let mut cfr = self.vm.top_call_frame;
 
-    pub fn argument_count(&self) -> usize {
-        unsafe { (*self.cfr).argument_count() }
-    }
+        let mut pc = self.vm.ip;
+        let mut out = String::new();
+        let mut i = 0;
+        out.push_str("Stack trace:\n");
+        'collect: while !cfr.is_null() {
+            let code_block = (*cfr).code_block;
 
-    pub fn arguments(&self) -> &[Value] {
-        unsafe { (*self.cfr).arguments() }
-    }
+            if code_block.is_code_block() {
+                if !pc.is_null() {
+                    if let Some(ranges) = code_block.code_block().ranges.as_ref() {
+                        let off = pc.offset_from(code_block.code_block().code.as_ptr());
+                        for ((start, end), srcloc, _) in ranges.iter().rev() {
+                            let start = *start as isize;
+                            let end = *end as isize;
+                            
+                            if off >= start && off < end {
+                                let srcloc = *srcloc;
+                                let name = code_block.code_block().name;
+                                let source = srcloc_source(srcloc);
+                                let line = srcloc_line(srcloc);
+                                let col = srcloc_column(srcloc);
+                                out.push_str(&format!(
+                                    "  {}  {}\n\tat {}:{}:{}\n",
+                                    i, name, source, line, col
+                                ));
 
-    pub fn code_block(&self) -> Value {
-        unsafe { (*self.cfr).code_block() }
-    }
-}
-
-impl<'a> Iterator for StackTrace<'a> {
-    type Item = Context;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.cfr.is_null() {
-            //self.cfr = self.vm.prev_top_call_frame;
-            if self.cfr.is_null() {
-                return None;
+                                pc = (*cfr).return_pc;
+                                cfr = (*cfr).caller;
+                                i += 1;
+                                continue 'collect;
+                            }
+                        }
+                    }
+                }
             }
+            out.push_str(&format!(
+                "  {}  {}\n\tat unknown location\n",
+                i,
+                (*cfr).callee()
+            ));
+            pc = (*cfr).return_pc;
+            cfr = (*cfr).caller;
+
+            i += 1;
         }
-        unsafe {
-            let cfr = self.cfr;
-          
-            self.cfr = (*cfr).caller();
-            Some(Context { cfr })
-        }
+
+        out
+    }
+
+    pub fn get(&self) -> String {
+        unsafe { self.build() }
     }
 }
 
 pub fn get_stacktrace_str(vm: &mut VM) -> String {
-    let st = StackTrace::new(vm);
-    let mut s = String::new();
-    for frame in st {
-       
-        let callee = frame.callee();
-        let ip = frame.return_pc();
-        let _code_block = frame.code_block();
-        
-        let name = get_proc_name(callee);
-
-        if let Some(name) = name {
-            s.push_str(&format!("  at {}", name));
-        } else {
-            s.push_str("   at <unknown>");
-        }
-
-        if !ip.is_null() {
-            s.push_str(&format!(":{:p} {}", ip, unsafe {
-                std::mem::transmute::<_, Opcode>(ip.read())
-            }));
-        } else {
-            s.push_str(" <native>");
-        }
-
-        s.push('\n');
-    }
-
-    s
+    unsafe { StackTrace::new(vm).build() }
 }
 
 extern "C" fn print_stacktrace(_: &mut CallFrame) -> ScmResult {
-    let vm = scm_vm();
-
-    for ctx in StackTrace::new(vm) {
-        let callee = ctx.callee();
-
-        println!("{:?}", callee);
-    }
-
+    println!("{}", get_stacktrace_str(scm_vm()));
     ScmResult::ok(Value::encode_undefined_value())
 }
 

@@ -30,7 +30,7 @@ use super::{
     string::{do_format, make_string},
     structure::{
         make_simple_struct_instance_from_array, make_struct_instance_, STRUCT_EXPTIME,
-        STRUCT_NO_MAKE_PREFIX, STRUCT_NO_SET,
+        STRUCT_NO_MAKE_PREFIX, STRUCT_NO_SET, struct_ref,
     },
     value::Value,
 };
@@ -318,7 +318,7 @@ pub static EXN_TABLE: Lazy<[ExnRec; Exception::Other as usize]> = Lazy::new(|| {
         Exception::FailRead,
         exn_parent!(Exception::Fail),
         "exn:fail:read",
-        &[],
+        &["srcloc"],
         Value::encode_null_value(),
         Value::encode_bool_value(false)
     );
@@ -327,7 +327,7 @@ pub static EXN_TABLE: Lazy<[ExnRec; Exception::Other as usize]> = Lazy::new(|| {
         Exception::FailReadEof,
         exn_parent!(Exception::FailRead),
         "exn:fail:read:eof",
-        &[],
+        &["srcloc"],
         Value::encode_null_value(),
         Value::encode_bool_value(false)
     );
@@ -336,7 +336,7 @@ pub static EXN_TABLE: Lazy<[ExnRec; Exception::Other as usize]> = Lazy::new(|| {
         Exception::FailReadNonChar,
         exn_parent!(Exception::FailRead),
         "exn:fail:read:non-char",
-        &[],
+        &["srcloc"],
         Value::encode_null_value(),
         Value::encode_bool_value(false)
     );
@@ -765,22 +765,27 @@ pub fn contract_error<'a, T>(name: &str, msg: &str, args: &'a [&'a dyn Any]) -> 
     let mut v_strs: [Option<String>; MAX_MISMATCH_EXTRAS] = [None, None, None, None, None];
 
     let mut cnt = 0;
-
+    let mut i = 0;
     while cnt < MAX_MISMATCH_EXTRAS {
-        if cnt >= args.len() {
+        if i >= args.len() {
             break;
         }
-        let str = args[cnt].downcast_ref::<&str>().unwrap();
+        
+        let str = args[i].downcast_ref::<&str>().unwrap();
+        i += 1;
         strs[cnt] = Some(str);
 
-        if args[cnt + 1].is::<Value>() {
-            vs[cnt + 1] = Some(*args[cnt + 1].downcast_ref::<Value>().unwrap());
-        } else if args[cnt + 1].is::<String>() {
-            v_strs[cnt + 1] = Some(args[cnt + 1].downcast_ref::<String>().unwrap().to_string());
-            vs[cnt + 1] = None;
+        if args[i].is::<Value>() {
+            vs[i] = Some(*args[i].downcast_ref::<Value>().unwrap());
+            i += 1;
+        } else if args[i].is::<String>() {
+            v_strs[i] = Some(args[i].downcast_ref::<String>().unwrap().to_string());
+            vs[i] = None;
+            i += 1;
         } else {
-            v_strs[cnt + 1] = Some(args[cnt + 1].downcast_ref::<&str>().unwrap().to_string());
-            vs[cnt + 1] = None;
+            v_strs[i] = Some(args[i].downcast_ref::<&str>().unwrap().to_string());
+            vs[i] = None;
+            i += 1;
         }
         cnt += 1;
     }
@@ -1245,6 +1250,23 @@ pub static SRCLOC: Lazy<Value> = Lazy::new(|| {
     .unwrap();
     typ
 });
+
+pub fn srcloc_source(srcloc: Value) -> Value {
+    struct_ref(srcloc, 0)
+}
+
+pub fn srcloc_line(srcloc: Value) -> Value {
+    struct_ref(srcloc, 1)
+}
+
+pub fn srcloc_column(srcloc: Value) -> Value {
+    struct_ref(srcloc, 2)
+}
+
+pub fn srcloc_position(srcloc: Value) -> Value {
+    struct_ref(srcloc, 3)
+}
+
 
 pub fn make_srcloc(source: Value, line: i32, column: i32, position: i32) -> Value {
     make_simple_struct_instance_from_array(

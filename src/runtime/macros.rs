@@ -31,7 +31,9 @@ use std::{
 
 use crate::{
     compaux::{scm_identifier_env, scm_make_identifier, scm_unwrap_syntax, scm_wrap_identifier},
-    compile::{cenv_frames, cenv_module, env_lookup_int, make_cenv},
+    compile::{
+        cenv_exp_name, cenv_frames, cenv_module, cenv_set_exp_name, env_lookup_int, make_cenv,
+    },
     runtime::cmp::scm_equal,
     runtime::fun::scm_make_closed_native_procedure,
     runtime::list::{
@@ -40,8 +42,11 @@ use crate::{
     },
     runtime::module::scm_identifier_to_bound_gloc,
     runtime::object::{Identifier, Macro, Module, ObjectHeader, ScmResult, Type},
-    runtime::{value::Value, fun::{SCM_PRIM_ERI_MACRO, SCM_PRIM_ER_MACRO}},
     runtime::{error::scm_raise_proc, string::make_string},
+    runtime::{
+        fun::{SCM_PRIM_ERI_MACRO, SCM_PRIM_ER_MACRO},
+        value::Value,
+    },
     runtime::{symbol::make_symbol, value::scm_box},
     scm_append, scm_append1, scm_for_each,
     vm::callframe::CallFrame,
@@ -725,7 +730,7 @@ pub fn scm_compile_syntax_rules(
     let t = Thread::current();
     let subr = scm_make_closed_native_procedure(t, name, synrule_transform, 2, 2, &[sr]);
 
-    Ok(scm_make_macro(t, subr.into()).into())
+    Ok(scm_make_macro(t, subr.into(), name).into())
 }
 
 #[derive(Debug)]
@@ -1232,9 +1237,10 @@ pub(crate) fn pvref_print(f: &mut std::fmt::Formatter, val: Value) -> std::fmt::
     write!(f, "#<pvref {}.{}>", pv.level, pv.count)
 }
 
-pub fn scm_make_macro(t: &mut Thread, transformer: Value) -> Handle<Macro> {
+pub fn scm_make_macro(t: &mut Thread, transformer: Value, name: Value) -> Handle<Macro> {
     t.allocate(Macro {
         header: ObjectHeader::new(Type::Macro),
+        name,
         transformer,
     })
 }
@@ -1290,7 +1296,7 @@ fn er_rename(form: Value, dict: Value, module: Value, env: Value) -> (Value, Val
     } else if form.is_pair() {
         let (a, dict) = er_rename(form.car(), dict, module, env);
         let (d, dict) = er_rename(form.cdr(), dict, module, env);
-        
+
         if a == form.car() && d == form.cdr() {
             (form, dict)
         } else {
@@ -1365,7 +1371,7 @@ pub fn make_er_transformer<const HAS_INJECT: bool>(xformer: Value, def_env: Valu
                     let (id, dict_) = er_rename(sym, dict.box_ref(), def_module, def_frames);
                     Thread::current().write_barrier(dict.r#box());
                     dict.box_set(dict_);
-                    
+
                     ScmResult::ok(id)
                 }
                 rename
@@ -1447,7 +1453,12 @@ pub fn make_er_transformer<const HAS_INJECT: bool>(xformer: Value, def_env: Valu
     } else {
         SCM_PRIM_ER_MACRO
     } as u32;
-    scm_make_macro(Thread::current(), transformer.into()).into()
+    scm_make_macro(
+        Thread::current(),
+        transformer.into(),
+        cenv_exp_name(def_env),
+    )
+    .into()
 }
 
 pub fn make_er_transformer_toplevel<const HAS_INJECT: bool>(
@@ -1455,10 +1466,9 @@ pub fn make_er_transformer_toplevel<const HAS_INJECT: bool>(
     def_module: Value,
     _def_name: Value,
 ) -> Value {
-    make_er_transformer::<HAS_INJECT>(
-        xformer,
-        make_cenv(def_module.module(), Value::encode_null_value()),
-    )
+    let cenv = make_cenv(def_module.module(), Value::encode_null_value());
+    cenv_set_exp_name(cenv, _def_name);
+    make_er_transformer::<HAS_INJECT>(xformer, cenv)
 }
 
 extern "C" fn make_er_transformer_toplevel_proc(cfr: &mut CallFrame) -> ScmResult {
@@ -1535,8 +1545,6 @@ extern "C" fn identifier_p(cfr: &mut CallFrame) -> ScmResult {
     ScmResult::ok(val.is_identifier())
 }
 
-
-
 pub(crate) fn init_macros() {
     let module = scm_capy_module().module();
 
@@ -1545,7 +1553,6 @@ pub(crate) fn init_macros() {
 
     let subr = scm_make_subr("unwrap-syntax", unwrap_syntax, 2, 2);
     scm_define(module, "unwrap-syntax".intern(), subr).unwrap();
-
 
     let subr = scm_make_subr("identifier?", identifier_p, 1, 1);
     scm_define(module, "identifier?".intern(), subr).unwrap();

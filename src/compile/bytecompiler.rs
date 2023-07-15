@@ -63,11 +63,14 @@ pub struct ByteCompiler {
     code: Vec<u8>,
     literals: ArrayList<Value>,
     fragments: ArrayList<Handle<CodeBlock>>,
+    pub note: Option<Handle<rsgc::system::collections::hashmap::HashMap<Value, Value>>>,
+    pub ranges: Option<ArrayList<((u32, u32), Value, Value)>>,
 }
 
 impl ByteCompiler {
     pub fn new(thread: &mut Thread) -> Self {
         Self {
+            note: None,
             captures: CaptureGroup {
                 captures: Vec::new(),
             },
@@ -77,6 +80,7 @@ impl ByteCompiler {
             num_locals: 0,
             max_locals: 0,
             parent: None,
+            ranges: Some(ArrayList::with_capacity(thread, 4)),
             group: Box::new(BindingGroup {
                 bindings: HashMap::new(),
                 parent: None,
@@ -198,6 +202,7 @@ impl ByteCompiler {
             mina: 0,
             stack_size: 0,
             maxa: 0,
+            ranges: self.ranges.take(),
             code: [],
         };
 
@@ -231,9 +236,11 @@ impl ByteCompiler {
 
     pub fn compile_lambda(&mut self, thread: &mut Thread, lam: &Lambda) {
         let mut closure_compiler = ByteCompiler {
+            note: self.note,
             captures: CaptureGroup {
                 captures: Vec::new(),
             },
+            ranges: Some(ArrayList::with_capacity(thread, 4)),
             code: Vec::new(),
             literals: ArrayList::with_capacity(thread, 16),
             fragments: ArrayList::with_capacity(thread, 4),
@@ -282,28 +289,12 @@ impl ByteCompiler {
             closure_compiler.bind(lvar, ix);
         }
 
-        /*let patch_alloc_ip = self.code.len();
-
-        closure_compiler.emit_simple(Opcode::NoOp);
-        closure_compiler.emit_simple(Opcode::NoOp);
-        closure_compiler.emit_simple(Opcode::NoOp);
-
-        if !closure_compiler.compile_iform(Thread::current(), lam.body, true) {
-            closure_compiler.emit_simple(Opcode::Return);
-        }
-
-        if self.max_locals > lam.lvars.len() {
-            let n = ((closure_compiler.max_locals - lam.lvars.len()) as u16).to_le_bytes();
-
-            closure_compiler.code[patch_alloc_ip] = Opcode::Alloc as _;
-            closure_compiler.code[patch_alloc_ip + 1] = n[0];
-            closure_compiler.code[patch_alloc_ip + 2] = n[1];
-        }*/
-
         closure_compiler.compile_body(thread, lam.body, lam.lvars.len());
         let mut code = closure_compiler.finalize(thread);
         code.name = if lam.name.is_wrapped_identifier() {
             scm_unwrap_identifier(lam.name.identifier()).into()
+        } else if lam.name.is_symbol() {
+            lam.name
         } else {
             Value::encode_null_value()
         };
@@ -421,13 +412,16 @@ impl ByteCompiler {
     }
 
     pub fn compile_iform(&mut self, thread: &mut Thread, iform: Handle<IForm>, tail: bool) -> bool {
-        match &*iform {
+        let start = self.code.len();
+        let mut origin = Value::encode_undefined_value();
+        let exit = match &*iform {
             IForm::Const(x) => {
                 self.emit_load(thread, *x);
                 false
             }
 
             IForm::Define(def) => {
+                origin = def.origin;
                 self.compile_iform(thread, def.value, false);
                 self.emit_simple(Opcode::Define);
                 assert!(!def.name.is_empty());
@@ -438,6 +432,7 @@ impl ByteCompiler {
             }
 
             IForm::Call(x) => {
+                origin = x.origin;
                 for arg in x.args.iter().rev() {
                     self.compile_iform(thread, *arg, false);
                 }
@@ -454,6 +449,7 @@ impl ByteCompiler {
             }
 
             IForm::Seq(x) => {
+                origin = x.origin;
                 let mut exit = false;
                 for i in 0..x.body.len() {
                     if i > 0 {
@@ -466,10 +462,12 @@ impl ByteCompiler {
                 exit
             }
             IForm::Lambda(lam) => {
+                origin = lam.origin;
                 self.compile_lambda(thread, lam);
                 false
             }
             IForm::GRef(x) => {
+                origin = x.origin;
                 let c = self.add_constant(thread, x.id);
                 self.emit_simple(Opcode::GlobalRef);
                 self.code.extend_from_slice(&(c as u16).to_le_bytes());
@@ -477,6 +475,7 @@ impl ByteCompiler {
             }
 
             IForm::GSet(x) => {
+                origin = x.origin;
                 self.compile_iform(thread, x.value, false);
                 let c = self.add_constant(thread, x.id);
                 self.emit_simple(Opcode::GlobalSet);
@@ -486,11 +485,13 @@ impl ByteCompiler {
                 false
             }
             IForm::LRef(x) => {
+                origin = x.origin;
                 self.resolve_local(x.lvar, true);
                 false
             }
 
             IForm::LSet(x) => {
+                origin = x.origin;
                 self.compile_iform(thread, x.value, false);
                 self.set_local(x.lvar, true);
                 self.emit_simple(Opcode::PushUndef);
@@ -498,6 +499,7 @@ impl ByteCompiler {
             }
 
             IForm::Let(var) => {
+                origin = var.origin;
                 let mut group = Box::new(BindingGroup {
                     parent: None,
                     bindings: HashMap::new(),
@@ -604,6 +606,7 @@ impl ByteCompiler {
             }
 
             IForm::If(cond) => {
+                origin = cond.origin;
                 self.compile_iform(thread, cond.cond, false);
 
                 let cons = cond.cons;
@@ -624,40 +627,52 @@ impl ByteCompiler {
                     self.code[else_jump_ip + 2] = n[1];
                     self.code[else_jump_ip + 3] = n[2];
                     self.code[else_jump_ip + 4] = n[3];
-                    return self.compile_iform(thread, cons, true);
+                    self.compile_iform(thread, cons, true)
+                } else {
+                    let exit_jump_ip = self.code.len();
+
+                    self.emit_simple(Opcode::NoOp5);
+                    for _ in 0..4 {
+                        self.code.push(0);
+                    }
+                    self.code[else_jump_ip] = Opcode::BranchIf as u8;
+                    let diff = (self.code.len() - else_jump_ip) as i32 - 5;
+                    let n = diff.to_le_bytes();
+                    self.code[else_jump_ip + 1] = n[0];
+                    self.code[else_jump_ip + 2] = n[1];
+                    self.code[else_jump_ip + 3] = n[2];
+                    self.code[else_jump_ip + 4] = n[3];
+
+                    if self.compile_iform(thread, cons, tail) {
+                        self.code[exit_jump_ip] = Opcode::Return as u8;
+                        true
+                    } else {
+                        self.code[exit_jump_ip] = Opcode::Branch as u8;
+                        let diff = (self.code.len() - exit_jump_ip) as i32 - 5;
+                        let n = diff.to_le_bytes();
+                        self.code[exit_jump_ip + 1] = n[0];
+                        self.code[exit_jump_ip + 2] = n[1];
+                        self.code[exit_jump_ip + 3] = n[2];
+                        self.code[exit_jump_ip + 4] = n[3];
+
+                        false
+                    }
                 }
-
-                let exit_jump_ip = self.code.len();
-
-                self.emit_simple(Opcode::NoOp5);
-                for _ in 0..4 {
-                    self.code.push(0);
-                }
-                self.code[else_jump_ip] = Opcode::BranchIf as u8;
-                let diff = (self.code.len() - else_jump_ip) as i32 - 5;
-                let n = diff.to_le_bytes();
-                self.code[else_jump_ip + 1] = n[0];
-                self.code[else_jump_ip + 2] = n[1];
-                self.code[else_jump_ip + 3] = n[2];
-                self.code[else_jump_ip + 4] = n[3];
-
-                if self.compile_iform(thread, cons, tail) {
-                    self.code[exit_jump_ip] = Opcode::Return as u8;
-                    return true;
-                }
-
-                self.code[exit_jump_ip] = Opcode::Branch as u8;
-                let diff = (self.code.len() - exit_jump_ip) as i32 - 5;
-                let n = diff.to_le_bytes();
-                self.code[exit_jump_ip + 1] = n[0];
-                self.code[exit_jump_ip + 2] = n[1];
-                self.code[exit_jump_ip + 3] = n[2];
-                self.code[exit_jump_ip + 4] = n[3];
-
-                false
             }
             _ => todo!(),
+        };
+
+        let end = self.code.len();
+        if let (Some(ref mut ranges), Some(note)) = (self.ranges.as_mut(), self.note) {
+            let note = note
+                .get(&origin)
+                .copied()
+                .unwrap_or(Value::encode_null_value());
+            if !note.is_null() {
+                ranges.push(thread, ((start as _, end as _), note, origin));
+            }
         }
+        exit
     }
 
     pub fn compile_body(&mut self, thread: &mut Thread, expr: Handle<IForm>, argc: usize) {

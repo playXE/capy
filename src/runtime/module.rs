@@ -499,11 +499,12 @@ fn search_binding(
 
         scm_for_each!(mp, elt.module().mpl, {
             let m = mp.car();
-
+            
             if !prefixed && searched.is_visited(m.module()) {
+                mp = mp.cdr();
                 continue;
             }
-
+            
             if m.module().prefix.is_xtype(Type::Symbol) {
                 sym = scm_symbol_sans_prefix(sym.symbol(), m.module().prefix.symbol());
 

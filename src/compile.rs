@@ -18,7 +18,7 @@ use pretty::{BoxAllocator, DocAllocator, DocBuilder};
 use r7rs_parser::expr::{Expr, NoIntern};
 use rsgc::{
     prelude::{Allocation, Handle, Object},
-    system::arraylist::ArrayList,
+    system::{arraylist::ArrayList, collections::hashmap::HashMap},
     thread::Thread,
 };
 use termcolor::{Color, ColorSpec, WriteColor};
@@ -169,24 +169,28 @@ unsafe impl Object for Let {
 unsafe impl Allocation for Let {}
 
 pub struct LSet {
+    pub origin: Value,
     pub lvar: Handle<LVar>,
     pub value: Handle<IForm>,
 }
 
 unsafe impl Object for LSet {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
+        self.origin.trace(visitor);
         self.lvar.trace(visitor);
         self.value.trace(visitor);
     }
 }
 
 pub struct LRef {
+    pub origin: Value,
     pub lvar: Handle<LVar>,
 }
 
 unsafe impl Object for LRef {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.lvar.trace(visitor);
+        self.origin.trace(visitor);
     }
 }
 
@@ -194,6 +198,7 @@ unsafe impl Allocation for LRef {}
 unsafe impl Allocation for LSet {}
 
 pub struct GSet {
+    pub origin: Value,
     pub id: Value,
     pub value: Handle<IForm>,
 }
@@ -202,16 +207,19 @@ unsafe impl Object for GSet {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.id.trace(visitor);
         self.value.trace(visitor);
+        self.origin.trace(visitor);
     }
 }
 
 pub struct GRef {
+    pub origin: Value,
     pub id: Value,
 }
 
 unsafe impl Object for GRef {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.id.trace(visitor);
+        self.origin.trace(visitor);
     }
 }
 
@@ -428,7 +436,7 @@ pub fn make_cenv(module: Handle<Module>, frames: Value) -> Value {
         make_symbol("cenv", true).into(),
         module.into(),
         frames,
-        Value::encode_null_value(),
+        Value::encode_bool_value(false),
         Value::encode_null_value(),
         Value::encode_null_value()
     ))
@@ -450,6 +458,16 @@ pub fn cenv_frames(cenv: Value) -> Value {
 
 pub fn cenv_exp_name(cenv: Value) -> Value {
     cenv.vector_ref(3)
+}
+
+pub fn cenv_sans_name(cenv: Value) -> Value {
+    if cenv_exp_name(cenv).is_false() {
+        cenv 
+    } else {
+        let cenv = cenv_copy(cenv);
+        cenv_set_exp_name(cenv, Value::encode_bool_value(false));
+        cenv
+    }
 }
 
 pub fn cenv_current_proc(cenv: Value) -> Value {
@@ -959,14 +977,14 @@ pub fn ref_count_lvars(mut iform: Handle<IForm>) {
 }
 
 /// Compiles a single expression into procedure
-pub fn compile(expr: Value, cenv: Value) -> Result<Value, Value> {
+pub fn compile(expr: Value, cenv: Value, notes: Option<Handle<HashMap<Value, Value>>>) -> Result<Value, Value> {
     let thread = Thread::current();
 
     let iform = pass1::pass1(expr, cenv)?;
     ref_count_lvars(iform);
     
     let mut bc = bytecompiler::ByteCompiler::new(thread);
-
+    bc.note = notes;
     bc.compile_body(thread, iform, 0);
 
     let code_block = bc.finalize(thread);
@@ -974,16 +992,7 @@ pub fn compile(expr: Value, cenv: Value) -> Result<Value, Value> {
     Ok(make_procedure(thread, code_block).into())
 }
 
-pub fn compile_r7rs_expr(
-    expr: &Expr<NoIntern>,
-    filename: Value,
-    cenv: Value,
-) -> Result<Value, Value> {
-    let thread = Thread::current();
-    let expr = r7rs_to_value(thread, filename, expr);
 
-    compile(expr, cenv)
-}
 
 pub fn is_global_eq(var: Value, id: Value, cenv: Value) -> bool {
     if var.is_identifier() {

@@ -9,7 +9,7 @@ use std::{
 use once_cell::sync::Lazy;
 use rsgc::{
     heap::{heap, root_processor::SimpleRoot},
-    utils::bitfield::BitField, sync::mutex::RawMutex,
+    utils::bitfield::BitField, sync::mutex::RawMutex, system::arraylist::ArrayList,
 };
 use rsgc::{
     prelude::{Allocation, Handle, Object},
@@ -576,6 +576,10 @@ pub struct CodeBlock {
     pub name: Value,
     /// vector of constants
     pub literals: Value,
+    /// Vector of source ranges for debugging.
+    /// 
+    /// Maps (start, end) to the srcloc structure.
+    pub ranges: Option<ArrayList<((u32, u32), Value, Value)>>,
     /// vector of code blocks
     pub fragments: Handle<Array<Handle<CodeBlock>>>,
     pub(crate) mina: u32,
@@ -852,6 +856,7 @@ pub fn make_box(t: &mut Thread, value: Value) -> Value {
 #[repr(C)]
 pub struct Macro {
     pub(crate) header: ObjectHeader,
+    pub(crate) name: Value,
     pub(crate) transformer: Value,
 }
 
