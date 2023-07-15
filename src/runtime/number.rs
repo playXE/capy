@@ -7,10 +7,13 @@ use crate::{
 };
 
 use super::{
+    arith::{scm_is_exact, scm_is_zero},
+    error::wrong_contract,
     fun::scm_make_subr_inliner,
     module::{scm_define, scm_scheme_module},
+    object::ScmResult,
     symbol::Intern,
-    value::Value, arith::{scm_is_zero, scm_is_exact}, error::wrong_contract, object::ScmResult,
+    value::Value,
 };
 
 extern "C" fn number_p(cfr: &mut CallFrame) -> ScmResult {
@@ -317,7 +320,6 @@ pub(crate) fn init_number() {
     scm_define(module, "exact?".intern(), proc).unwrap();
 }
 
-
 pub fn scm_nonnegative_exact_integer(val: Value) -> bool {
     if val.is_int32() {
         val.get_int32() >= 0
@@ -398,6 +400,30 @@ pub fn scm_negative(val: Value) -> Option<bool> {
 
         return scm_negative(cn.r);
     }
+
+    None
+}
+
+pub fn scm_to_usize(val: Value) -> Option<usize> {
+    if val.is_int32() {
+        let v = val.get_int32();
+
+        if v >= 0 {
+            return Some(v as usize);
+        } else {
+            return None;
+        }
+    }
+
+    if val.is_bignum() {
+        let v = val.bignum();
+
+        if let Some(v) = v.u64() {
+            return Some(v as usize);
+        } else {
+            return None;
+        }
+    } 
 
     None
 }

@@ -23,6 +23,7 @@ murmur3 = "0.5"
 cfg-if = "1.0"
 naked-function = "0.1"
 structopt = "0.3"
+libffi = "3.2"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = [

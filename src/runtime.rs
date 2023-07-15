@@ -21,7 +21,9 @@ pub mod complex;
 pub mod cont;
 pub mod date;
 pub mod error;
+pub mod foreign;
 pub mod fun;
+pub mod gc;
 pub mod io;
 pub mod load;
 pub mod macros;
@@ -36,6 +38,7 @@ pub mod reader;
 pub mod string;
 pub mod structure;
 pub mod symbol;
+pub mod bytevector;
 pub mod sync;
 pub mod tuple;
 pub mod value;
@@ -58,6 +61,9 @@ pub(crate) fn init() {
     cont::init_cont();
     crate::vm::stacktrace::init_stacktrace();
     date::init_date();
+    foreign::init_foreign();
+    gc::init_gc();
+    bytevector::init_bytevector();
     //crate::vm::jit::baseline::init_baseline();
     // load necessary files
     let t = Thread::current();

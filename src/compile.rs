@@ -617,7 +617,6 @@ pub fn global_call_type(id: Value, _cenv: Value) -> GlobalCall {
         } else if gval.is_native_procedure() && gval.native_procedure().inliner.is_some() {
             GlobalCall::Inliner(gval)
         } else {
-            // TODO: Macros
             GlobalCall::Normal
         }
     } else {

@@ -1103,3 +1103,11 @@ pub fn scm_int(x: i64) -> Value {
         BigInt::from_i64(Thread::current(), x).into()
     }
 }
+
+pub fn scm_uint(x: u64) -> Value {
+    if x as i32 as u32 as u64 == x {
+        Value::encode_int32(x as _)
+    } else {
+        BigInt::from_u64(Thread::current(), x).into()
+    }
+}

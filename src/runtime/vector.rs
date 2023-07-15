@@ -1,4 +1,4 @@
-use rsgc::{prelude::Handle, thread::Thread};
+use rsgc::{prelude::Handle, thread::Thread, system::array::Array};
 
 use crate::runtime::{
     object::{Bytevector, ObjectHeader, Type, Vector},
@@ -46,27 +46,32 @@ pub fn make_vector_from_slice(thread: &mut Thread, slice: &[Value]) -> Handle<Ve
 }
 
 pub fn make_bytevector(thread: &mut Thread, size: usize) -> Handle<Bytevector> {
-    let mut vec = thread.allocate_varsize::<Bytevector>(size);
+    // Array will be traced conservatively inside Bytevector::trace.
+    let mut contents = Array::zeroed(thread, size);
 
-    unsafe {
-        let v = vec.assume_init_mut();
-        v.object = ObjectHeader::new(Type::Bytevector);
-        v.data.as_mut_ptr().write_bytes(0, size);
-        vec.assume_init()
-    }
+    thread.allocate(Bytevector {
+        object: ObjectHeader::new(Type::Bytevector),
+        length: size as _,
+        contents: &mut contents[0]
+    })
 }
 
 pub fn make_bytevector_from_slice(thread: &mut Thread, slice: &[u8]) -> Handle<Bytevector> {
-    let mut vec = thread.allocate_varsize::<Bytevector>(slice.len());
+    let mut contents = Array::<u8>::copy_from(thread, slice);
 
-    unsafe {
-        let v = vec.assume_init_mut();
-        v.object = ObjectHeader::new(Type::Bytevector);
-        v.data
-            .as_mut_ptr()
-            .copy_from_nonoverlapping(slice.as_ptr(), slice.len());
-        vec.assume_init()
-    }
+    thread.allocate(Bytevector {
+        object: ObjectHeader::new(Type::Bytevector),
+        length: slice.len() as _,
+        contents: &mut contents[0]
+    })
+}
+
+pub unsafe fn make_bytevector_from_raw_parts(thread: &mut Thread, contents: *mut u8, length: usize) -> Handle<Bytevector> {
+    thread.allocate(Bytevector {
+        object: ObjectHeader::new(Type::Bytevector),
+        length: length as _,
+        contents
+    })
 }
 
 pub fn make_values(thread: &mut Thread, values: &[Value]) -> Handle<Vector> {
@@ -107,3 +112,4 @@ pub fn scm_vector_copy(thread: &mut Thread, v: Handle<Vector>) -> Handle<Vector>
         vec.assume_init()
     }
 }
+

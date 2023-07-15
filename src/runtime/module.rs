@@ -103,7 +103,9 @@ pub(crate) fn init_modules() {
                 KEYWORD_MODULE.trace(v);
                 CKEYWORD_MODULE.trace(v);
                 REQBASE_MODULE.trace(v);
+                FOREIGN_MODULE.trace(v);
             }
+
         },
     ));
     let mut mpl = Value::encode_null_value();
@@ -145,7 +147,7 @@ pub(crate) fn init_modules() {
 
         mpl = DEFAULT_MPL;
     }
-
+    init_mod!(FOREIGN_MODULE, "capy.foreign", None);
     init_mod!(INTERNAL_MODULE, "capy.internal", None);
     init_mod!(REQBASE_MODULE, "capy.require-base", None);
 
@@ -202,7 +204,8 @@ def_mod! {
     USER_MODULE,
     KEYWORD_MODULE,
     CKEYWORD_MODULE,
-    REQBASE_MODULE
+    REQBASE_MODULE,
+    FOREIGN_MODULE
 }
 
 pub fn scm_default_parents() -> Value {
@@ -251,6 +254,10 @@ pub fn scm_ckeyword_module() -> Value {
 
 pub fn scm_reqbase_module() -> Value {
     unsafe { REQBASE_MODULE }
+}
+
+pub fn scm_foreign_module() -> Value {
+    unsafe { FOREIGN_MODULE }
 }
 
 fn _make_module(

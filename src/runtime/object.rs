@@ -102,6 +102,7 @@ pub enum Type {
     EofObject,
     Mutex,
     Condition,
+    Pointer,
 }
 
 #[repr(C)]
@@ -169,19 +170,19 @@ unsafe impl Allocation for Vector {
 pub struct Bytevector {
     pub(crate) object: ObjectHeader,
     pub(crate) length: u32,
-    pub(crate) _pad: u32,
-    pub(crate) data: [u8; 0],
+    pub(crate) contents: *mut u8,
 }
 
-unsafe impl Object for Bytevector {}
+unsafe impl Object for Bytevector {
+    fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
+        unsafe {
+            visitor.visit_conservative(&self.contents as *const *mut u8 as _, 1);
+        }
+    }
+}
 
 unsafe impl Allocation for Bytevector {
-    const VARSIZE: bool = true;
-    const VARSIZE_ITEM_SIZE: usize = size_of::<u8>();
-    const VARSIZE_NO_HEAP_PTRS: bool = true;
-    const VARSIZE_OFFSETOF_CAPACITY: usize = offset_of!(Bytevector, length);
-    const VARSIZE_OFFSETOF_LENGTH: usize = offset_of!(Bytevector, length);
-    const VARSIZE_OFFSETOF_VARPART: usize = offset_of!(Bytevector, data);
+
 }
 
 #[repr(C)]
@@ -349,7 +350,7 @@ impl Deref for Bytevector {
 
     fn deref(&self) -> &Self::Target {
         unsafe {
-            let ptr = self.data.as_ptr();
+            let ptr = self.contents;
             let len = self.length as usize;
             std::slice::from_raw_parts(ptr, len)
         }
@@ -365,7 +366,7 @@ impl AsRef<[u8]> for Bytevector {
 impl DerefMut for Bytevector {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe {
-            let ptr = self.data.as_mut_ptr();
+            let ptr = self.contents;
             let len = self.length as usize;
             std::slice::from_raw_parts_mut(ptr, len)
         }
