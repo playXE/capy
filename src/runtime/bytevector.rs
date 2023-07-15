@@ -1,9 +1,17 @@
-use crate::{raise_exn, vm::{callframe::CallFrame, scm_vm}};
+use crate::{
+    raise_exn,
+    vm::{callframe::CallFrame, scm_vm},
+};
 
 use super::{
     error::{out_of_range, wrong_contract},
+    fun::scm_make_subr,
+    module::{scm_capy_module, scm_define},
     number::scm_to_usize,
-    object::ScmResult, value::Value, module::{scm_capy_module, scm_define}, fun::scm_make_subr, symbol::Intern, vector::make_bytevector_from_slice,
+    object::ScmResult,
+    symbol::Intern,
+    value::Value,
+    vector::make_bytevector_from_slice,
 };
 
 extern "C" fn bytevector_copy_x(cfr: &mut CallFrame) -> ScmResult {
@@ -14,7 +22,7 @@ extern "C" fn bytevector_copy_x(cfr: &mut CallFrame) -> ScmResult {
     let len = cfr.argument(4);
 
     if !source.is_bytevector() {
-        return wrong_contract(
+        return wrong_contract::<()>(
             "bytevector-copy!",
             "bytevector?",
             0,
@@ -25,7 +33,7 @@ extern "C" fn bytevector_copy_x(cfr: &mut CallFrame) -> ScmResult {
     }
 
     if !target.is_bytevector() {
-        return wrong_contract(
+        return wrong_contract::<()>(
             "bytevector-copy!",
             "bytevector?",
             2,
@@ -36,7 +44,7 @@ extern "C" fn bytevector_copy_x(cfr: &mut CallFrame) -> ScmResult {
     }
 
     let c_source_start = scm_to_usize(source_start).ok_or_else(|| {
-        wrong_contract(
+        wrong_contract::<()>(
             "bytevector-copy!",
             "exact-positive-integer?",
             1,
@@ -47,7 +55,7 @@ extern "C" fn bytevector_copy_x(cfr: &mut CallFrame) -> ScmResult {
     })?;
 
     let c_target_start = scm_to_usize(target_start).ok_or_else(|| {
-        wrong_contract(
+        wrong_contract::<()>(
             "bytevector-copy!",
             "exact-positive-integer?",
             3,
@@ -58,7 +66,7 @@ extern "C" fn bytevector_copy_x(cfr: &mut CallFrame) -> ScmResult {
     })?;
 
     let c_len = scm_to_usize(len).ok_or_else(|| {
-        wrong_contract(
+        wrong_contract::<()>(
             "bytevector-copy!",
             "exact-positive-integer?",
             4,
@@ -76,27 +84,32 @@ extern "C" fn bytevector_copy_x(cfr: &mut CallFrame) -> ScmResult {
 
     if c_source_len < c_source_start || c_source_len.wrapping_sub(c_source_start) < c_len {
         return raise_exn!(
+            (),
             Fail,
             &[],
             "bytevector-copy!: source start is out of range: {}",
             c_source_start
-        );
+        )
+        .into();
     }
 
     if c_target_len < c_target_start || c_target_len.wrapping_sub(c_target_start) < c_len {
         return raise_exn!(
+            (),
             Fail,
             &[],
             "bytevector-copy!: target start is out of range: {}",
             c_target_start
-        );
+        )
+        .into();
     }
 
     unsafe {
         std::ptr::copy(
             c_source.add(c_source_start),
             c_target.add(c_target_start),
-            c_len);
+            c_len,
+        );
     }
 
     ScmResult::ok(Value::encode_undefined_value())
@@ -115,10 +128,10 @@ extern "C" fn bytevector_copy(cfr: &mut CallFrame) -> ScmResult {
         )
         .into();
     }
-   
+
     let bv = make_bytevector_from_slice(scm_vm().mutator(), &bv.bytevector());
 
-    ScmResult::ok(bv) 
+    ScmResult::ok(bv)
 }
 
 scm_symbol!(SYM_LITTLE_ENDIAN, "little-endian");
@@ -215,5 +228,4 @@ pub(crate) fn init_bytevector() {
     }
 
     integer_ops!((s16, i16, 16, "bytevector-u16-ref"));
-
 }
