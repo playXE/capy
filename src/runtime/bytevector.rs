@@ -150,7 +150,7 @@ pub(crate) fn init_bytevector() {
                         let endianess = cfr.argument(2);
 
                         let k = scm_to_usize(k).ok_or_else(|| {
-                            wrong_contract(
+                            wrong_contract::<()>(
                                 $literal,
                                 "exact-positive-integer?",
                                 1,
@@ -161,7 +161,7 @@ pub(crate) fn init_bytevector() {
                         })?;
 
                         if !bv.is_bytevector() {
-                            return wrong_contract(
+                            return wrong_contract::<()>(
                                 $literal,
                                 "bytevector?",
                                 0,
@@ -172,7 +172,7 @@ pub(crate) fn init_bytevector() {
                         }
 
                         if !endianess.is_symbol() {
-                            return wrong_contract(
+                            return wrong_contract::<()>(
                                 $literal,
                                 "symbol?",
                                 2,
@@ -188,13 +188,13 @@ pub(crate) fn init_bytevector() {
 
                         if bv_len < k
                             || bv_len.wrapping_sub(k) < ($len / 8) {
-                            return raise_exn!(
+                            return raise_exn!((),
                                 Fail,
                                 &[],
                                 "{}: index out of range: {}",
                                 $literal,
                                 k
-                            );
+                            ).into();
                         }
 
                         unsafe {
