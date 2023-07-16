@@ -102,6 +102,7 @@ dependencies = [
  "pretty",
  "rsgc",
  "structopt",
+ "target-lexicon",
  "termcolor",
  "tinyvec",
  "winapi",
@@ -905,6 +906,12 @@ dependencies = [
  "quote",
  "unicode-ident",
 ]
+
+[[package]]
+name = "target-lexicon"
+version = "0.12.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df8e77cb757a61f51b947ec4a7e3646efd825b73561db1c232a8ccb639e611a0"
 
 [[package]]
 name = "termcolor"

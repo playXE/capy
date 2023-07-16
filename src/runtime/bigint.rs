@@ -1275,6 +1275,65 @@ impl BigInt {
 
         remainder as i32
     }
+
+    pub fn shift_left(self: Handle<Self>, thr: &mut Thread, x: i32) -> Handle<Self> {
+        let swords = x.wrapping_div(32);
+        let sbits = x.wrapping_rem(32);
+
+        let mut res = vec![];
+        res.reserve(self.uwords().len() + swords as usize);
+
+        for _ in 0..swords {
+            res.push(0);
+        }
+
+        let mut carry = 0u32;
+
+        for word in self.uwords().iter().copied() {
+            res.push((word << sbits) | carry);
+            carry = word >> (32 - sbits);
+        }
+
+        if carry != 0 {
+            res.push(carry);
+        }
+
+        BigInt::from_list(thr, &res, self.negative)
+    }
+
+    pub fn shift_right(self: Handle<Self>, thr: &mut Thread, x: i32) -> Handle<Self> {
+        let swords = x.wrapping_div(32);
+        let sbits = x.wrapping_rem(32);
+
+        let mut res = vec![];
+        res.reserve(self.uwords().len() - swords as usize);
+
+        let mut carry = 0u32;
+
+        for word in self.uwords().iter().rev().copied() {
+            res.push((word >> sbits) | carry);
+            carry = word << (32 - sbits);
+        }
+
+        if carry != 0 {
+            res.push(carry);
+        }
+
+        res.reverse();
+
+        BigInt::from_list(thr, &res, self.negative)
+    }
+
+    pub fn shift(self: Handle<Self>, thr: &mut Thread, n: i32) -> Handle<Self> {
+        if n < 0 {
+            self.shift_right(thr, -n)
+        } else if n > 0 {
+            self.shift_left(thr, n)
+        } else {
+            self
+        }
+    }
+    
 }
 
 pub struct BigIntBase<'a> {

@@ -1,3 +1,4 @@
+
 use rsgc::prelude::{Allocation, Handle, Object};
 use rsgc::system::array::Array;
 use rsgc::utils::round_up;
@@ -28,7 +29,7 @@ use super::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum ForeignType {
-    Void,
+    Void = 0,
     Float,
     Double,
     Uint8,
@@ -54,6 +55,7 @@ pub struct PointerWFinalizer {
     pub(crate) finalizer: extern "C" fn(*mut ()),
 }
 
+
 impl Drop for PointerWFinalizer {
     fn drop(&mut self) {
         (self.finalizer)(self.pointer);
@@ -67,7 +69,16 @@ unsafe impl Object for Pointer {
         }
     }
 }
-unsafe impl Allocation for Pointer {}
+unsafe impl Allocation for Pointer {
+    const FINALIZE: bool = false;
+    const DESTRUCTIBLE: bool = true;
+}
+
+impl Drop for Pointer {
+    fn drop(&mut self) {
+
+    }
+}
 
 unsafe impl Object for PointerWFinalizer {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
@@ -622,20 +633,20 @@ unsafe impl Allocation for CIF {
 
 impl Drop for CIF {
     fn drop(&mut self) {
-        println!("CIF is dead");
+        
     }
 }
 
 fn foreign_call_stub(nargs: u32) -> Handle<CodeBlock> {
     let mut code = vec![];
-
+    code.push(Opcode::EnterBlacklisted as u8); 
     code.push(Opcode::AssertArgCount as u8);
     code.extend_from_slice(&(nargs as u16).to_le_bytes());
     code.push(Opcode::ForeignCall as u8);
     code.extend_from_slice(&(0u16).to_le_bytes());
     code.extend_from_slice(&(1u16).to_le_bytes());
     code.push(Opcode::Return as u8);
-
+    
     let mut cb = scm_vm().mutator().allocate_varsize::<CodeBlock>(code.len());
 
     unsafe {
@@ -649,12 +660,12 @@ fn foreign_call_stub(nargs: u32) -> Handle<CodeBlock> {
             maxa: nargs,
             mina: nargs,
             mcode: null(),
-            name: Value::encode_null_value(),
+            name: "<foreign-call-stub>".intern().into(),
             num_vars: 0,
             stack_size: 0,
             code: [],
         });
-
+        (*cb_ptr).code.as_mut_ptr().copy_from_nonoverlapping(code.as_ptr(), code.len());
         cb.assume_init()
     }
 }
@@ -942,7 +953,6 @@ pub(crate) fn scm_foreign_call(cif: Value, pointer: Value, cfr: &mut CallFrame) 
             unpack((*raw).arg_types.add(i).read(), cfr.argument(i), args[i] as *mut (), false)?;
             off = args[i] - data_ptr as usize + (*(*raw).arg_types.add(i).read()).size;
         }
-
         /* Prepare space for the return value.  On some platforms, such as
         `armv5tel-*-linux-gnueabi', the return value has to be at least
         word-aligned, even if its type doesn't have any alignment requirement as is
@@ -996,4 +1006,27 @@ pub fn init_foreign() {
 
     let subr = scm_make_subr("pointer->procedure", pointer_to_procedure, 3, 3);
     scm_define(module, "pointer->procedure".intern(), subr).unwrap();
+
+    macro_rules! def_syms {
+        ($($name: literal => $ty: path),*) => {
+            $(
+                let val = Value::encode_int32($ty as i32);
+                scm_define(module, $name.intern(), val).unwrap();
+            )*
+        }
+    }
+
+    def_syms!(
+        "void" => ForeignType::Void,
+        "float" => ForeignType::Float,
+        "double" => ForeignType::Double,
+        "uint8" => ForeignType::Uint8,
+        "sint8" => ForeignType::Int8,
+        "uint16" => ForeignType::Uint16,
+        "sint16" => ForeignType::Int16,
+        "uint32" => ForeignType::Uint32,
+        "sint32" => ForeignType::Int32,
+        "uint64" => ForeignType::Uint64,
+        "sint64" => ForeignType::Int64
+    );
 }

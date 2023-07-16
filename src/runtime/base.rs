@@ -10,7 +10,7 @@ use crate::{
     compile::{make_iform, Asm, AsmOperand, IForm},
     op::Opcode,
     raise_exn,
-    vm::callframe::CallFrame,
+    vm::{callframe::CallFrame, scm_vm},
 };
 
 use super::{
@@ -1144,6 +1144,90 @@ extern "C" fn string_append(cfr: &mut CallFrame) -> ScmResult {
     ScmResult::ok(make_string(Thread::current(), &string))
 }
 
+extern "C" fn string_contains(cfr: &mut CallFrame) -> ScmResult {
+    let string = cfr.argument(0);
+
+    if !string.is_string() {
+        return wrong_contract::<()>(
+            "string-contains?",
+            "string?",
+            0,
+            cfr.argument_count() as i32,
+            cfr.arguments(),
+        )
+        .into();
+    }
+
+    for i in 1..cfr.argument_count() {
+        let arg = cfr.argument(i);
+
+        if !arg.is_string() {
+            return wrong_contract::<()>(
+                "string-contains?",
+                "string?",
+                i as i32,
+                cfr.argument_count() as i32,
+                cfr.arguments(),
+            )
+            .into();
+        }
+
+        if string.strsym().contains(arg.strsym()) {
+            return ScmResult::ok(Value::encode_bool_value(true));
+        }
+    }
+
+    ScmResult::ok(Value::encode_bool_value(false))
+}
+
+extern "C" fn string_split(cfr: &mut CallFrame) -> ScmResult {
+    let string = cfr.argument(0);
+
+    if !string.is_string() {
+        return wrong_contract::<()>(
+            "string-split",
+            "string?",
+            0,
+            cfr.argument_count() as i32,
+            cfr.arguments(),
+        )
+        .into();
+    }
+
+    let sep = if cfr.argument_count() > 1 {
+        cfr.argument(1)
+    } else {
+        Value::encode_char(' ')
+    };
+
+    if !sep.is_char() && !sep.is_string() {
+        return wrong_contract::<()>(
+            "string-split",
+            "(or/c string? char?)",
+            1,
+            cfr.argument_count() as i32,
+            cfr.arguments(),
+        )
+        .into();
+    }
+
+    let mut list = Value::encode_null_value();
+    let split = if sep.is_char() {
+        sep.get_char().to_string()
+    } else {
+        sep.strsym().to_string()
+    };
+    for s in string.strsym().split(&split) {
+        list = scm_cons(
+            Thread::current(),
+            make_string(Thread::current(), s).into(),
+            list,
+        );
+    }
+
+    ScmResult::ok(list)
+}
+
 extern "C" fn vector_p(cfr: &mut CallFrame) -> ScmResult {
     let arg = cfr.argument(0);
 
@@ -1710,9 +1794,70 @@ extern "C" fn type_of(cfr: &mut CallFrame) -> ScmResult {
     ScmResult::ok(val.get_type() as i32)
 }
 
+extern "C" fn host_architecture(_cfr: &mut CallFrame) -> ScmResult {
+    let arch = target_lexicon::HOST.architecture;
+
+    ScmResult::ok(make_string(scm_vm().mutator(), arch.to_string()))
+}
+
+extern "C" fn host_vendor(_cfr: &mut CallFrame) -> ScmResult {
+    let vendor = target_lexicon::HOST.vendor;
+
+    ScmResult::ok(make_string(scm_vm().mutator(), vendor.to_string()))
+}
+
+extern "C" fn host_os(_cfr: &mut CallFrame) -> ScmResult {
+    let os = target_lexicon::HOST.operating_system;
+
+    ScmResult::ok(make_string(scm_vm().mutator(), os.to_string()))
+}
+
+extern "C" fn host_env(_cfr: &mut CallFrame) -> ScmResult {
+    let env = target_lexicon::HOST.environment;
+
+    ScmResult::ok(make_string(scm_vm().mutator(), env.to_string()))
+}
+
+extern "C" fn host_binary_format(_cfr: &mut CallFrame) -> ScmResult {
+    let format = target_lexicon::HOST.binary_format;
+
+    ScmResult::ok(make_string(scm_vm().mutator(), format.to_string()))
+}
+
+extern "C" fn getenv(cfr: &mut CallFrame) -> ScmResult {
+    let name = cfr.argument(0);
+    if !name.is_string() {
+        return wrong_contract::<()>("getenv", "string?", 0, 1, &[name]).into();
+    }
+  
+    let value = std::env::var(name.strsym());
+    match value {
+        Ok(x) => ScmResult::ok(make_string(scm_vm().mutator(), x)),
+        Err(_) => ScmResult::ok(false),
+    }
+}
+
 pub(crate) fn init_base() {
     let module = scm_capy_module().module();
     init_vector();
+
+    let subr = scm_make_subr("getenv", getenv, 1, 1);
+    scm_define(module, "getenv".intern(), subr.into()).unwrap();
+
+    let subr = scm_make_subr("%host-architecture", host_architecture, 0, 0);
+    scm_define(module, "%host-architecture".intern(), subr.into()).unwrap();
+
+    let subr = scm_make_subr("%host-vendor", host_vendor, 0, 0);
+    scm_define(module, "%host-vendor".intern(), subr.into()).unwrap();
+
+    let subr = scm_make_subr("%host-os", host_os, 0, 0);
+    scm_define(module, "%host-os".intern(), subr.into()).unwrap();
+
+    let subr = scm_make_subr("%host-env", host_env, 0, 0);
+    scm_define(module, "%host-env".intern(), subr.into()).unwrap();
+
+    let subr = scm_make_subr("%host-binary-format", host_binary_format, 0, 0);
+    scm_define(module, "%host-binary-format".intern(), subr.into()).unwrap();
 
     let subr = scm_make_subr("eq-hash", eq_hash, 1, 1);
     scm_define(module, "eq-hash".intern(), subr.into()).unwrap();
@@ -1818,6 +1963,12 @@ pub(crate) fn init_base() {
 
     let subr = scm_make_subr("string-append", string_append, 0, MAX_ARITY);
     scm_define(module, "string-append".intern(), subr.into()).unwrap();
+
+    let subr = scm_make_subr("string-contains?", string_contains, 1, MAX_ARITY);
+    scm_define(module, "string-contains?".intern(), subr.into()).unwrap();
+
+    let subr = scm_make_subr("string-split", string_split, 2, 2);
+    scm_define(module, "string-split".intern(), subr.into()).unwrap();
 
     let subr = scm_make_subr("type-of", type_of, 1, 1);
     scm_define(module, "type-of".intern(), subr.into()).unwrap();

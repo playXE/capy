@@ -458,8 +458,15 @@ impl<'a> Printer<'a> {
 
             self.puts(")")
         } else if obj.is_values() {
-            self.puts("#<values>")?;
-            Ok(())
+            self.puts("#<values ")?;
+            for i in 0..obj.values().len() {
+                if i != 0 {
+                    self.puts(" ")?;
+                }
+                self._write(ht, obj.values_ref(i))?;
+            }
+
+            self.puts(">")
         } else if obj.is_procedure() {
             match obj.get_type() {
                 Type::Procedure => {

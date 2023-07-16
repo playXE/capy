@@ -20,6 +20,7 @@ pub mod dload;
 pub mod bytevector;
 pub mod cmp;
 pub mod complex;
+pub mod file;
 pub mod cont;
 pub mod date;
 pub mod error;
@@ -44,6 +45,7 @@ pub mod sync;
 pub mod tuple;
 pub mod value;
 pub mod values;
+pub mod bitwise;
 
 pub(crate) fn init() {
     base::init_base();
@@ -56,15 +58,18 @@ pub(crate) fn init() {
     structure::initialize_struct();
     string::init_string();
     macros::init_macros();
+    file::init_file();
     portfun::init_ports();
     sync::init_sync();
     arithfun::init_arith();
+    bitwise::init_bitwise();
     cont::init_cont();
     crate::vm::stacktrace::init_stacktrace();
     date::init_date();
     foreign::init_foreign();
     gc::init_gc();
     bytevector::init_bytevector();
+    dload::init_dload();
     //crate::vm::jit::baseline::init_baseline();
     // load necessary files
     let t = Thread::current();

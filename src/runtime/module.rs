@@ -146,7 +146,7 @@ pub(crate) fn init_modules() {
 
         mpl = DEFAULT_MPL;
     }
-    init_mod!(FOREIGN_MODULE, "capy.foreign", None);
+    init_mod!(FOREIGN_MODULE, "capy.foreign.internal", None);
     init_mod!(INTERNAL_MODULE, "capy.internal", None);
     init_mod!(REQBASE_MODULE, "capy.require-base", None);
 

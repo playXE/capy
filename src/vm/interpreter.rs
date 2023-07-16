@@ -150,7 +150,7 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
             transmute::<_, Handle<CodeBlock>>((*cfr).code_block)
         };
     }
-
+    
     'eval: loop {
         vm.sp = sp;
         vm.top_call_frame = cfr;
@@ -194,7 +194,7 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                             cfr*/
                             sp = sp.sub(1);
                             sp.write(err);
-
+                            
                             sp = sp.cast::<CallFrame>().sub(1).cast();
                             sp.cast::<CallFrame>().write(CallFrame {
                                 return_pc: pc,
@@ -322,8 +322,9 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
         // `pc` is initialized here
         debug_assert!(!pc.is_null(), "pc should be initialized at vm_eval entry");
         debug_assert!(sp <= cfr.cast::<Value>());
-
+        
         'interp: loop {
+            
             macro_rules! read1 {
                 () => {{
                     let val = pc.read();
@@ -366,6 +367,7 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
             #[cfg(feature = "profile-opcodes")]
             let start = std::time::Instant::now();
             read1!();
+           
             match op {
                 Opcode::NoOp => {}
                 Opcode::NoOp3 => {
@@ -474,6 +476,7 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::TailCall => {
+                    vm.mutator().safepoint();
                     let argc = read2!();
 
                     let callee = pop!();
@@ -516,6 +519,7 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                         PROFILE[opcode as usize].time += start.elapsed().as_nanos() as u64;
                     }
                     if callee.is_vm_procedure() {
+                       
                         (*cfr).code_block = callee.procedure().code.into();
                         pc = callee.procedure().code.start_ip();
                         continue 'interp;
@@ -1064,6 +1068,7 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::Return => {
+                    vm.mutator().safepoint();
                     let val = pop!();
 
                     if (*cfr).caller.is_null() {
@@ -1921,10 +1926,11 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::ForeignCall => {
+                    vm.mutator().safepoint();
                     let cif = read2!();
                     let ptr = read2!();
-                    let cif = code_block!().literals.vector_ref(cif as usize);
-                    let ptr = code_block!().literals.vector_ref(ptr as usize);
+                    let cif = (*cfr).callee().procedure().captures.as_ptr().add(cif as _).read();
+                    let ptr = (*cfr).callee().procedure().captures.as_ptr().add(ptr as _).read();
                     let val = catch!(scm_foreign_call(cif, ptr, &mut*cfr));
                     push!(val);
                 }

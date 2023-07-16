@@ -2,14 +2,18 @@ use std::cmp::Ordering;
 
 use rsgc::thread::Thread;
 
-use crate::{raise_exn, runtime::object::Type, vm::VM};
+use crate::{
+    raise_exn,
+    runtime::object::Type,
+    vm::{scm_vm, VM},
+};
 
 use super::{
     bigint::BigInt,
     error::wrong_contract,
     number::{scm_negative, scm_real_valued},
     object::{make_complex, make_rational},
-    value::{scm_int, Value},
+    value::{scm_int, scm_uint, Value},
 };
 
 pub fn scm_is_even(val: Value) -> Option<bool> {
@@ -1630,6 +1634,271 @@ pub fn arith_remainder(vm: &mut VM, lhs: Value, rhs: Value) -> Option<Value> {
 
     None
 }
+
+pub fn arith_bitcount(lhs: Value) -> Option<Value> {
+    if lhs.is_int32() {
+        let n = lhs.get_int32();
+        if n == 0 {
+            return Some(Value::encode_int32(0));
+        } else if n > 0 {
+            return Some(Value::encode_int32((n as u32).count_ones() as i32));
+        } else {
+            return Some(Value::encode_int32((!(n as u32)).count_ones() as i32));
+        }
+    }
+
+    if lhs.is_bignum() {
+        let n = lhs.bignum();
+
+        return Some(scm_int(n.bit_count() as _));
+    }
+
+    None
+}
+
+pub fn arith_bitlength(value: Value) -> Option<Value> {
+    if value.is_int32() {
+        let n = value.get_int32();
+        if n == 0 {
+            return Some(Value::encode_int32(0));
+        }
+
+        let n2 = if n < 0 { !n } else { n };
+
+        return Some(Value::encode_int32(32 - n2.leading_zeros() as i32));
+    }
+
+    if value.is_bignum() {
+        let n = value.bignum();
+
+        if n.is_zero() {
+            return Some(Value::encode_int32(0));
+        }
+        if !n.is_negative() {
+            return Some(scm_int(n.bit_size() as _));
+        }
+        let x = n.not(scm_vm().mutator());
+        return Some(scm_int(x.bit_size() as _));
+    }
+
+    None
+}
+
+pub fn arith_lognot(vm: &mut VM, val: Value) -> Option<Value> {
+    if val.is_int32() {
+        let n = !(val.get_int32() as i64);
+        if n >= i32::MIN as i64 && n <= i32::MAX as i64 {
+            return Some(Value::encode_int32(n as i32));
+        }
+
+        return Some(scm_int(n));
+    }
+
+    if val.is_bignum() {
+        let n = val.bignum();
+
+        return Some(Value::encode_object_value(n.not(vm.mutator())).normalized());
+    }
+
+    None
+}
+
+pub fn arith_logand(vm: &mut VM, lhs: Value, rhs: Value) -> Option<Value> {
+    if lhs.is_int32() {
+        if rhs.is_int32() {
+            return Some(Value::encode_int32(lhs.get_int32() & rhs.get_int32()));
+        }
+
+        if rhs.is_bignum() {
+            let rhs = rhs.bignum();
+
+            return Some(
+                rhs.and32(vm.mutator(), lhs.get_int32() as u32, lhs.get_int32() < 0)
+                    .into(),
+            );
+        }
+    }
+
+    if lhs.is_bignum() {
+        if rhs.is_int32() {
+            let lhs = lhs.bignum();
+
+            return Some(
+                lhs.and32(vm.mutator(), rhs.get_int32() as u32, rhs.get_int32() < 0)
+                    .into(),
+            );
+        }
+
+        if rhs.is_bignum() {
+            return Some(
+                Value::encode_object_value(lhs.bignum().and(vm.mutator(), rhs.bignum()))
+                    .normalized(),
+            );
+        }
+    }
+
+    None
+}
+
+pub fn arith_logior(vm: &mut VM, lhs: Value, rhs: Value) -> Option<Value> {
+    if lhs.is_int32() {
+        if rhs.is_int32() {
+            return Some(Value::encode_int32(lhs.get_int32() | rhs.get_int32()));
+        }
+
+        if rhs.is_bignum() {
+            let rhs = rhs.bignum();
+
+            return Some(
+                rhs.or32(vm.mutator(), lhs.get_int32() as u32, lhs.get_int32() < 0)
+                    .into(),
+            );
+        }
+    }
+
+    if lhs.is_bignum() {
+        if rhs.is_int32() {
+            let lhs = lhs.bignum();
+
+            return Some(
+                lhs.or32(vm.mutator(), rhs.get_int32() as u32, rhs.get_int32() < 0)
+                    .into(),
+            );
+        }
+
+        if rhs.is_bignum() {
+            return Some(
+                Value::encode_object_value(lhs.bignum().or(vm.mutator(), rhs.bignum()))
+                    .normalized(),
+            );
+        }
+    }
+
+    None
+}
+
+pub fn arith_logxor(vm: &mut VM, lhs: Value, rhs: Value) -> Option<Value> {
+    if lhs.is_int32() {
+        if rhs.is_int32() {
+            return Some(Value::encode_int32(lhs.get_int32() ^ rhs.get_int32()));
+        }
+
+        if rhs.is_bignum() {
+            let rhs = rhs.bignum();
+
+            return Some(
+                rhs.xor32(vm.mutator(), lhs.get_int32() as u32, lhs.get_int32() < 0)
+                    .into(),
+            );
+        }
+    }
+
+    if lhs.is_bignum() {
+        if rhs.is_int32() {
+            let lhs = lhs.bignum();
+
+            return Some(
+                lhs.xor32(vm.mutator(), rhs.get_int32() as u32, rhs.get_int32() < 0)
+                    .into(),
+            );
+        }
+
+        if rhs.is_bignum() {
+            return Some(
+                Value::encode_object_value(lhs.bignum().xor(vm.mutator(), rhs.bignum()))
+                    .normalized(),
+            );
+        }
+    }
+
+    None
+}
+
+pub fn arith_logash(vm: &mut VM, lhs: Value, rhs: Value) -> Option<Value> {
+    let shift = rhs.get_int32();
+
+    if lhs.is_int32() {
+        if shift <= 32 {
+            let mut n = lhs.get_int32() as i64;
+            if shift > 0 {
+                n = n << shift;
+            } else {
+                n = n >> -shift;
+            }
+
+            if n >= i32::MIN as i64 && n <= i32::MAX as i64 {
+                return Some(Value::encode_int32(n as i32));
+            }
+
+            return Some(scm_int(n));
+        } else {
+            let bn = BigInt::from_i64(vm.mutator(), lhs.get_int32() as i64);
+            return Some(bn.shift(vm.mutator(), shift).into());
+        }
+    }
+
+    if lhs.is_bignum() {
+        let bn = lhs.bignum();
+
+        return Some(bn.shift(vm.mutator(), shift).into());
+    }
+
+    None
+}
+
+pub fn arith_first_bit_set(val: Value) -> Option<Value> {
+    if val.is_int32() {
+        let n = val.get_int32();
+
+        if n == 0 {
+            return Some(Value::encode_int32(-1));
+        }
+
+        let bit = n.trailing_zeros() as i32;
+
+        return Some(Value::encode_int32(bit));
+    }
+
+    if val.is_bignum() {
+        let bn = val.bignum();
+
+        return Some(
+            bn.first_bit_set()
+                .map(|x| scm_uint(x as _))
+                .unwrap_or(scm_int(-1)),
+        );
+    }
+
+    None
+}
+
+pub fn arith_last_bit_set(val: Value) -> Option<Value> {
+    if val.is_int32() {
+        let n = val.get_int32();
+
+        if n == 0 {
+            return Some(Value::encode_int32(-1));
+        }
+
+        let bit = 31 - n.leading_zeros() as i32;
+
+        return Some(Value::encode_int32(bit));
+    }
+
+    if val.is_bignum() {
+        let bn = val.bignum();
+
+        return Some(
+            bn.last_bit_set()
+                .map(|x| scm_uint(x as _))
+                .unwrap_or(scm_int(-1)),
+        );
+    }
+
+    None
+}
+
+
 
 fn parse_negate(vm: &mut VM, val: Value) -> Value {
     if val.is_int32() {
