@@ -29,8 +29,8 @@ use super::{
     print::Printer,
     string::{do_format, make_string},
     structure::{
-        make_simple_struct_instance_from_array, make_struct_instance_, STRUCT_EXPTIME,
-        STRUCT_NO_MAKE_PREFIX, STRUCT_NO_SET, struct_ref,
+        make_simple_struct_instance_from_array, make_struct_instance_, struct_ref, STRUCT_EXPTIME,
+        STRUCT_NO_MAKE_PREFIX, STRUCT_NO_SET,
     },
     value::Value,
 };
@@ -770,7 +770,7 @@ pub fn contract_error<'a, T>(name: &str, msg: &str, args: &'a [&'a dyn Any]) -> 
         if i >= args.len() {
             break;
         }
-        
+
         let str = args[i].downcast_ref::<&str>().unwrap();
         i += 1;
         strs[cnt] = Some(str);
@@ -1266,7 +1266,6 @@ pub fn srcloc_column(srcloc: Value) -> Value {
 pub fn srcloc_position(srcloc: Value) -> Value {
     struct_ref(srcloc, 3)
 }
-
 
 pub fn make_srcloc(source: Value, line: i32, column: i32, position: i32) -> Value {
     make_simple_struct_instance_from_array(

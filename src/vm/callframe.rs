@@ -1,4 +1,4 @@
-use std::{mem::size_of, marker::PhantomData};
+use std::{marker::PhantomData, mem::size_of};
 
 use crate::runtime::value::Value;
 
@@ -64,9 +64,7 @@ pub struct CallFrame {
 impl CallFrame {
     pub fn argument(&self, index: usize) -> Value {
         debug_assert!(index < self.argc.get_int32() as usize);
-        unsafe {
-            *self.args.as_ptr().add(index)
-        }
+        unsafe { *self.args.as_ptr().add(index) }
     }
 
     pub fn argument_count(&self) -> usize {
@@ -84,15 +82,13 @@ impl CallFrame {
     pub fn code_block(&self) -> Value {
         self.code_block
     }
-    
+
     pub fn caller(&self) -> *mut CallFrame {
         self.caller
     }
 
     pub fn arguments(&self) -> &[Value] {
-        unsafe {
-            std::slice::from_raw_parts(self.args.as_ptr(), self.argc.get_int32() as usize)
-        }
+        unsafe { std::slice::from_raw_parts(self.args.as_ptr(), self.argc.get_int32() as usize) }
     }
 
     pub fn arguments_mut(&mut self) -> &mut [Value] {

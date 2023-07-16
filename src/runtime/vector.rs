@@ -1,4 +1,4 @@
-use rsgc::{prelude::Handle, thread::Thread, system::array::Array};
+use rsgc::{prelude::Handle, system::array::Array, thread::Thread};
 
 use crate::runtime::{
     object::{Bytevector, ObjectHeader, Type, Vector},
@@ -52,7 +52,7 @@ pub fn make_bytevector(thread: &mut Thread, size: usize) -> Handle<Bytevector> {
     thread.allocate(Bytevector {
         object: ObjectHeader::new(Type::Bytevector),
         length: size as _,
-        contents: &mut contents[0]
+        contents: &mut contents[0],
     })
 }
 
@@ -62,15 +62,19 @@ pub fn make_bytevector_from_slice(thread: &mut Thread, slice: &[u8]) -> Handle<B
     thread.allocate(Bytevector {
         object: ObjectHeader::new(Type::Bytevector),
         length: slice.len() as _,
-        contents: &mut contents[0]
+        contents: &mut contents[0],
     })
 }
 
-pub unsafe fn make_bytevector_from_raw_parts(thread: &mut Thread, contents: *mut u8, length: usize) -> Handle<Bytevector> {
+pub unsafe fn make_bytevector_from_raw_parts(
+    thread: &mut Thread,
+    contents: *mut u8,
+    length: usize,
+) -> Handle<Bytevector> {
     thread.allocate(Bytevector {
         object: ObjectHeader::new(Type::Bytevector),
         length: length as _,
-        contents
+        contents,
     })
 }
 
@@ -94,7 +98,10 @@ pub fn make_values_n(thread: &mut Thread, n: usize) -> Handle<Vector> {
         let v = vec.assume_init_mut();
         v.object = ObjectHeader::new(Type::Values);
         for i in 0..n {
-            v.data.as_mut_ptr().add(i).write(Value::encode_undefined_value());
+            v.data
+                .as_mut_ptr()
+                .add(i)
+                .write(Value::encode_undefined_value());
         }
         vec.assume_init()
     }
@@ -112,4 +119,3 @@ pub fn scm_vector_copy(thread: &mut Thread, v: Handle<Vector>) -> Handle<Vector>
         vec.assume_init()
     }
 }
-

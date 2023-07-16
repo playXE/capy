@@ -1,8 +1,21 @@
 use rsgc::{prelude::Handle, thread::Thread};
 
-use crate::{runtime::object::{ObjectHeader, Str, Type}, raise_exn, vm::{scm_vm, callframe::CallFrame}};
+use crate::{
+    raise_exn,
+    runtime::object::{ObjectHeader, Str, Type},
+    vm::{callframe::CallFrame, scm_vm},
+};
 
-use super::{port::{Port, port_puts, port_open_bytevector, SCM_PORT_DIRECTION_OUT, port_extract_string}, value::Value, error::{wrong_contract, contract_error, make_args_string}, print::Printer, object::{ScmResult, MAX_ARITY}, symbol::Intern, module::{scm_scheme_module, scm_define}, fun::scm_make_subr};
+use super::{
+    error::{contract_error, make_args_string, wrong_contract},
+    fun::scm_make_subr,
+    module::{scm_define, scm_scheme_module},
+    object::{ScmResult, MAX_ARITY},
+    port::{port_extract_string, port_open_bytevector, port_puts, Port, SCM_PORT_DIRECTION_OUT},
+    print::Printer,
+    symbol::Intern,
+    value::Value,
+};
 
 pub fn make_string(thread: &mut Thread, s: impl AsRef<str>) -> Handle<Str> {
     let string = rsgc::system::string::String::from_str(thread, s.as_ref());
@@ -172,7 +185,7 @@ pub fn do_format(
 
                     b'c' | b'C' | b'a' | b'A' => {
                         printer.escape = false;
-                        
+
                         printer.write(args[used])?;
                         //port.display(args[used]).map_err(map_io_error)?;
                         used += 1;
@@ -209,14 +222,28 @@ pub fn do_format(
 extern "C" fn format(cfr: &mut CallFrame) -> ScmResult {
     let vm = scm_vm();
     let port = Port::new(vm.mutator());
-    port_open_bytevector(port, "format".intern().into(), SCM_PORT_DIRECTION_OUT, false.into(), false.into());
+    port_open_bytevector(
+        port,
+        "format".intern().into(),
+        SCM_PORT_DIRECTION_OUT,
+        false.into(),
+        false.into(),
+    );
 
-    match do_format("format", port, None, 0, 1, cfr.argument_count(), cfr.arguments()) {
+    match do_format(
+        "format",
+        port,
+        None,
+        0,
+        1,
+        cfr.argument_count(),
+        cfr.arguments(),
+    ) {
         Ok(_) => match port_extract_string(port) {
             Ok(s) => ScmResult::ok(s),
-            Err(e) =>  return Err::<(), _>(e).into(),
-        }
-        Err(e) =>  return Err::<(), _>(e).into(),
+            Err(e) => return Err::<(), _>(e).into(),
+        },
+        Err(e) => return Err::<(), _>(e).into(),
     }
 }
 

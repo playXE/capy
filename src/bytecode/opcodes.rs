@@ -197,7 +197,7 @@ macro_rules! decl_opcodes {
 
 macro_rules! decl_constants {
     (($name: ident, $str: literal, {$($field: ident : $t: ty),*}) $($rest:tt)*) => {
-        
+
         paste::paste! { pub const [<$name:upper>]:  u8 = 0; }
         decl_constants!(@parse 1, $($rest)*);
     };
@@ -238,4 +238,3 @@ macro_rules! disassemble {
 }
 
 for_each_opcode!(disassemble);
-

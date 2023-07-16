@@ -1033,8 +1033,6 @@ pub fn scm_assoc_ref(
     mut eq: impl FnMut(Value, Value) -> bool,
     default: Option<Value>,
 ) -> Value {
-    
-
     scm_for_each!(cp, list, {
         let entry = cp.car();
 

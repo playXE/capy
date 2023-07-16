@@ -35,7 +35,6 @@ use crate::runtime::value::Value;
 use self::callframe::CallFrame;
 #[repr(C)]
 pub struct VM {
-    
     pub(crate) sp: *mut Value,
     pub(crate) ip: *const u8,
     /// Trampoline from native to Scheme support
@@ -135,10 +134,12 @@ unsafe impl Object for VM {
         let offset = self.sp as usize - self.stack.as_ptr() as usize;
 
         unsafe {
+
             visitor.visit_conservative(
                 self.stack.as_ptr().add(offset / 8).cast(),
                 self.stack.len() - offset / 8,
             );
+
         }
     }
 }
@@ -238,11 +239,11 @@ pub fn scm_set_current_module(module: Option<Handle<Module>>) {
 }
 
 pub mod callframe;
+pub mod engine;
 pub mod interpreter;
 pub mod jit;
 pub mod setjmp;
 pub mod stacktrace;
-pub mod engine;
 //#[cfg(llint)]
 //pub mod llint;
 

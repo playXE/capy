@@ -21,7 +21,8 @@ use crate::{
     compile::{make_iform, Asm, AsmOperand, IForm},
     op::Opcode,
     raise_exn,
-    vm::{callframe::CallFrame, interpreter::apply, scm_vm}, runtime::fun::check_arity,
+    runtime::fun::check_arity,
+    vm::{callframe::CallFrame, interpreter::apply, scm_vm},
 };
 use rsgc::{
     prelude::{Allocation, Handle, Object},
@@ -1267,7 +1268,7 @@ fn guard_property(prop: Value, v: Value, t: Handle<StructType>) -> Result<Value,
         get_struct_type_info(&[t.into()], &mut info);
 
         let l = scm_list(Thread::current(), &info);
-        
+
         return apply(p.guard, &[v, l]);
     } else {
         Ok(v)
@@ -1489,7 +1490,7 @@ fn _make_struct_type(
                 }
                 j += 1;
             }
-           
+
             if j < num_props {
                 if can_override.get(&prop) == Some(&false) {
                     if propv != pa[j] {
@@ -1526,7 +1527,7 @@ fn _make_struct_type(
     }
 
     if !guard.is_false() {
-        if !guard.is_procedure() || !check_arity(guard, struct_type.num_islots + 1, false)  {
+        if !guard.is_procedure() || !check_arity(guard, struct_type.num_islots + 1, false) {
             return raise_exn!(
                 FailContract,
                 &[],

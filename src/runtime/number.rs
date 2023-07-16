@@ -13,7 +13,7 @@ use super::{
     module::{scm_define, scm_scheme_module},
     object::ScmResult,
     symbol::Intern,
-    value::Value,
+    value::{scm_int, scm_uint, Value},
 };
 
 extern "C" fn number_p(cfr: &mut CallFrame) -> ScmResult {
@@ -423,7 +423,145 @@ pub fn scm_to_usize(val: Value) -> Option<usize> {
         } else {
             return None;
         }
-    } 
+    }
 
     None
+}
+
+pub fn scm_s16(val: Value) -> Option<i16> {
+    let val = val.normalized();
+    if !val.is_int32() {
+        return None;
+    }
+
+    let x = val.get_int32();
+
+    if x > i16::MAX as i32 || x < i16::MIN as i32 {
+        return None;
+    }
+
+    Some(x as i16)
+}
+
+pub fn scm_s32(val: Value) -> Option<i32> {
+    let val = val.normalized();
+    if !val.is_int32() {
+        return None;
+    }
+
+    let x = val.get_int32();
+
+    Some(x)
+}
+
+pub fn scm_s64(val: Value) -> Option<i64> {
+    val.get_int64()
+}
+
+pub fn scm_u16(val: Value) -> Option<u16> {
+    let val = val.normalized();
+
+    if !val.is_int32() {
+        return None;
+    }
+
+    let x = val.get_int32();
+
+    if x < u16::MIN as i32 || x > u16::MAX as i32 {
+        return None;
+    }
+
+    Some(x as _)
+}
+
+pub fn scm_u32(val: Value) -> Option<u32> {
+    let val = val.normalized();
+
+    if val.is_int32() {
+        let x = val.get_int32();
+
+        if x < 0 {
+            return None;
+        }
+
+        return Some(x as _);
+    }
+
+    if val.is_bignum() {
+        if let Some(x) = val.bignum().u32() {
+            return Some(x);
+        }
+    }
+
+    None
+}
+
+pub fn scm_u64(val: Value) -> Option<u64> {
+    let val = val.normalized();
+
+    if val.is_int32() {
+        let x = val.get_int32();
+
+        if x < 0 {
+            return None;
+        }
+
+        return Some(x as _);
+    }
+
+    if val.is_bignum() {
+        if let Some(x) = val.bignum().u64() {
+            return Some(x);
+        }
+    }
+
+    None
+}
+
+pub fn scm_make_s16(mut val: i16, native_endian: bool) -> Value {
+    if !native_endian {
+        val = val.swap_bytes();
+    }
+
+    Value::encode_int32(val as _)
+}
+
+pub fn scm_make_s32(mut val: i32, native_endian: bool) -> Value {
+    if !native_endian {
+        val = val.swap_bytes();
+    }
+
+    Value::encode_int32(val)
+}
+
+pub fn scm_make_s64(mut val: i64, native_endian: bool) -> Value {
+    if !native_endian {
+        val = val.swap_bytes();
+    }
+
+    scm_int(val)
+}
+
+pub fn scm_make_u16(mut val: u16, native_endian: bool) -> Value {
+    if !native_endian {
+        val = val.swap_bytes();
+    }
+
+    Value::encode_int32(val as _)
+}
+
+pub fn scm_make_u32(mut val: u32, native_endian: bool) -> Value {
+    if !native_endian {
+        val = val.swap_bytes();
+    }
+
+    scm_uint(val as _)
+}
+
+pub fn scm_make_u64(mut val: u64, native_endian: bool) -> Value {
+    if !native_endian {
+        val = val.swap_bytes();
+    }
+
+    scm_uint(val)
 }

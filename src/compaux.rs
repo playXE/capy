@@ -146,7 +146,7 @@ impl UnwrapCtx {
                         .into();
                     *entry.get_mut() = v;
                 }
-                
+
                 return *entry.get();
             }
 
@@ -162,7 +162,7 @@ impl UnwrapCtx {
 
                 return form;
             }
-           
+
             let p = scm_cons(Thread::current(), ca, cd);
 
             Self::fill_history(self.history.entry(form), p);
@@ -218,14 +218,13 @@ pub fn scm_unwrap_syntax(form: Value, immutable: bool) -> Value {
         refs: HashMap::with_hasher_and_capacity(RandomState::new(), 16),
         immutable,
     };
-   
+
     let form = ctx.unwrap_rec(form);
 
     ctx.patch_locations();
-    
+
     form
 }
-
 
 pub fn scm_identifier_global_binding(id: Handle<Identifier>) -> Option<Handle<GLOC>> {
     let z = scm_outermost_identifier(id);
@@ -240,7 +239,6 @@ pub fn scm_identifier_global_ref(id: Handle<Identifier>) -> Result<(Value, Handl
         return Ok((gloc.value, gloc));
     }
 
-  
     Err(make_string(
         Thread::current(),
         &format!("unbound variable: {}", scm_unwrap_identifier(id)),
@@ -248,22 +246,34 @@ pub fn scm_identifier_global_ref(id: Handle<Identifier>) -> Result<(Value, Handl
     .into())
 }
 
-pub fn scm_identifier_global_set(id: Handle<Identifier>, val: Value) -> Result<Handle<GLOC>, Value> {
+pub fn scm_identifier_global_set(
+    id: Handle<Identifier>,
+    val: Value,
+) -> Result<Handle<GLOC>, Value> {
     let z = scm_outermost_identifier(id);
 
-    let gloc = scm_find_binding(z.module.module(), z.name.symbol(), SCM_BINDING_STAY_IN_MODULE);
+    let gloc = scm_find_binding(
+        z.module.module(),
+        z.name.symbol(),
+        SCM_BINDING_STAY_IN_MODULE,
+    );
 
     if gloc.is_none() {
         if let Some(gloc) = scm_find_binding(z.module.module(), z.name.symbol(), 0) {
             return Err(make_string(
                 Thread::current(),
-                &format!("Can't mutate binding of '{:?}' which is in another module", gloc.name),
-            ).into());
+                &format!(
+                    "Can't mutate binding of '{:?}' which is in another module",
+                    gloc.name
+                ),
+            )
+            .into());
         } else {
             return Err(make_string(
                 Thread::current(),
                 &format!("unbound variable: {}", scm_unwrap_identifier(id)),
-            ).into());
+            )
+            .into());
         }
     }
 

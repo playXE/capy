@@ -2,20 +2,15 @@ use crate::{
     compaux::{scm_identifier_env, scm_identifier_global_binding, scm_make_identifier},
     op::Opcode,
     runtime::fun::make_procedure,
-    runtime::list::{scm_acons, scm_cons, scm_econs},
+    runtime::list::scm_acons,
+    runtime::module::is_global_identifier_eq,
     runtime::object::{Module, ObjectHeader, Syntax, Type},
-    runtime::string::make_string,
-    runtime::{bigint::BigInt, value::Value},
-    runtime::{error::make_srcloc, symbol::make_symbol},
-    runtime::{
-        module::is_global_identifier_eq,
-        vector::{make_bytevector_from_slice, make_vector},
-    },
+    runtime::symbol::make_symbol,
+    runtime::value::Value,
     scm_dolist, scm_for_each,
     vm::scm_current_module,
 };
 use pretty::{BoxAllocator, DocAllocator, DocBuilder};
-use r7rs_parser::expr::{Expr, NoIntern};
 use rsgc::{
     prelude::{Allocation, Handle, Object},
     system::{arraylist::ArrayList, collections::hashmap::HashMap},
@@ -462,7 +457,7 @@ pub fn cenv_exp_name(cenv: Value) -> Value {
 
 pub fn cenv_sans_name(cenv: Value) -> Value {
     if cenv_exp_name(cenv).is_false() {
-        cenv 
+        cenv
     } else {
         let cenv = cenv_copy(cenv);
         cenv_set_exp_name(cenv, Value::encode_bool_value(false));
@@ -477,7 +472,6 @@ pub fn cenv_current_proc(cenv: Value) -> Value {
 pub fn cenv_source_path(cenv: Value) -> Value {
     cenv.vector_ref(5)
 }
-
 
 pub fn cenv_set_module(cenv: Value, module: Handle<Module>) {
     cenv.vector_set(1, module.into());
@@ -606,7 +600,7 @@ pub enum GlobalCall {
 pub fn global_call_type(id: Value, _cenv: Value) -> GlobalCall {
     if let Some(gloc) = scm_identifier_global_binding(id.identifier()) {
         let gval = gloc.value;
-        
+
         if gval.is_empty() {
             return GlobalCall::Normal;
         }
@@ -838,66 +832,6 @@ impl IForm {
         Ok(())
     }
 }
-fn r7rs_to_value_k(
-    thread: &mut Thread,
-    filename: Value,
-    expr: &Expr<NoIntern>,
-    cont: &mut dyn FnMut(Value),
-) {
-    match expr {
-        Expr::Bool(x) => cont(Value::encode_bool_value(*x)),
-        Expr::Fixnum(i) => cont(Value::encode_int32(*i)),
-        Expr::Float(f) => cont(Value::encode_f64_value(*f)),
-        Expr::Pair(car, cdr) => r7rs_to_value_k(thread, filename, car, &mut |car| {
-            r7rs_to_value_k(Thread::current(), filename, cdr, &mut |cdr| {
-                cont(scm_cons(Thread::current(), car, cdr))
-            })
-        }),
-
-        Expr::ByteVector(x) => cont(make_bytevector_from_slice(thread, x).into()),
-        Expr::Str(x) => cont(make_string(thread, x).into()),
-        Expr::Symbol(x) => cont(make_symbol(x, true)),
-        Expr::GrowableVector(x) | Expr::ImmutableVector(x) => {
-            let vec = make_vector(thread, x.len());
-            for (i, e) in x.iter().enumerate() {
-                r7rs_to_value_k(thread, filename, e, &mut move |e| {
-                    let mut vec = vec;
-                    Thread::current().write_barrier(vec);
-                    vec[i] = e;
-                });
-            }
-            cont(vec.into())
-        }
-
-        Expr::Null => cont(Value::encode_null_value()),
-        Expr::Syntax(loc, e) => {
-            if let Expr::Pair(car, cdr) = &**e {
-                let srcloc = make_srcloc(filename, loc.line as i32, loc.col as i32, 0);
-                let car = r7rs_to_value(thread, filename, car);
-                let cdr = r7rs_to_value(thread, filename, cdr);
-                let p = scm_econs(thread, srcloc.into(), car, cdr).into();
-
-                cont(p)
-            } else {
-                r7rs_to_value_k(thread, filename, e, cont)
-            }
-        }
-        Expr::BigInt(x) => cont(
-            BigInt::from_str(thread, &x.to_str_radix(10), &BigInt::DEC_BASE)
-                .unwrap()
-                .into(),
-        ),
-
-        Expr::Char(x) => cont(Value::encode_char(*x)),
-        _ => unsafe { std::hint::unreachable_unchecked() },
-    }
-}
-
-pub fn r7rs_to_value(thread: &mut Thread, filename: Value, expr: &Expr<NoIntern>) -> Value {
-    let mut ret = Value::encode_null_value();
-    r7rs_to_value_k(thread, filename, expr, &mut |x| ret = x);
-    ret
-}
 
 pub fn ref_count_lvars(mut iform: Handle<IForm>) {
     match &mut *iform {
@@ -971,17 +905,21 @@ pub fn ref_count_lvars(mut iform: Handle<IForm>) {
 
         IForm::Const(_) => (),
         IForm::GRef(_) => (),
-        _ => ()
+        _ => (),
     }
 }
 
 /// Compiles a single expression into procedure
-pub fn compile(expr: Value, cenv: Value, notes: Option<Handle<HashMap<Value, Value>>>) -> Result<Value, Value> {
+pub fn compile(
+    expr: Value,
+    cenv: Value,
+    notes: Option<Handle<HashMap<Value, Value>>>,
+) -> Result<Value, Value> {
     let thread = Thread::current();
 
     let iform = pass1::pass1(expr, cenv)?;
     ref_count_lvars(iform);
-    
+
     let mut bc = bytecompiler::ByteCompiler::new(thread);
     bc.note = notes;
     bc.compile_body(thread, iform, 0);
@@ -990,8 +928,6 @@ pub fn compile(expr: Value, cenv: Value, notes: Option<Handle<HashMap<Value, Val
 
     Ok(make_procedure(thread, code_block).into())
 }
-
-
 
 pub fn is_global_eq(var: Value, id: Value, cenv: Value) -> bool {
     if var.is_identifier() {

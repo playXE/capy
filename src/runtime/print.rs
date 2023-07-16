@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 use std::collections::hash_map::RandomState;
 
-use r7rs_parser::lexer::scanner::is_digit;
 use rsgc::prelude::Handle;
 use rsgc::system::collections::hashmap::HashMap;
 
@@ -10,6 +9,7 @@ use crate::compaux::scm_outermost_identifier;
 use super::bigint::BigInt;
 use super::fun::SCM_PRIM_TYPE_PARAMETER;
 use super::port::*;
+use super::reader::is_digit;
 use super::{object::*, value::*};
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -503,6 +503,8 @@ impl<'a> Printer<'a> {
             let macro_transformer = obj.r#macro().transformer;
             self._write(ht, macro_transformer)?;
             self.puts(">")
+        } else if obj.is_foreign_pointer() {
+            self.puts(&format!("#<pointer {:p}>", obj.foreign_pointer_value()))
         } else {
             self.puts(&format!(
                 "#<unknown {:?}@{:x}>",

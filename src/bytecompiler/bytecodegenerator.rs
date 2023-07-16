@@ -235,15 +235,15 @@ impl BytecodeGenerator {
     }
 
     pub fn reclaim_free_registers(&mut self) {
-       while !self.callee_locals.is_empty() && self.callee_locals.last().unwrap().refcnt() == 0 {
+        while !self.callee_locals.is_empty() && self.callee_locals.last().unwrap().refcnt() == 0 {
             self.callee_locals.pop();
-       }
+        }
     }
 
     pub fn new_temporary(&mut self) -> RegisterRef {
         self.reclaim_free_registers();
         let mut result = self.new_register();
-        
+
         result.set_temporary(true);
         result
     }
@@ -335,8 +335,6 @@ impl BytecodeGenerator {
             }
         }
     }
-
-
 
     pub fn variable(&mut self, lvar: Handle<LVar>) -> Var {
         let this: *mut BytecodeGenerator = self as *mut Self;
@@ -456,7 +454,7 @@ impl BytecodeGenerator {
         let arguments = CallArguments::new(self, Some(&call.args));
         let mut i = 0;
         for arg in call.args.iter() {
-            
+
             let (_, _arg) = self.emit_iform(arg, false, Some(arguments.argument(i)));
             i += 1;
         }
@@ -493,7 +491,6 @@ impl BytecodeGenerator {
 
         let mut i = 0;
         for arg in call.args.iter() {
-            
             let (_, _arg) = self.emit_iform(arg, false, Some(arguments.argument(i)));
             i += 1;
         }
@@ -522,7 +519,6 @@ impl BytecodeGenerator {
             .write(self);
             (false, Some(return_value))
         }
-
     }
 
     fn emit_let(
@@ -570,9 +566,7 @@ impl BytecodeGenerator {
         let (exit, res) = self.emit_iform(&var.body, tail, dst);
 
         self.pop_lexical_scope();
-        let res = res.and_then(|src| {
-            self.mov(dst, src)
-        });
+        let res = res.and_then(|src| self.mov(dst, src));
 
         (exit, res)
     }
@@ -786,8 +780,7 @@ impl BytecodeGenerator {
         let consequent = cond.cons;
         let alternative = cond.alt;
         let test = cond.cond;
-        
- 
+
         let cond = self.emit_iform(&test, false, None).1.unwrap();
 
         let else_jump_ip = self.code.len();
@@ -796,10 +789,10 @@ impl BytecodeGenerator {
         }
 
         let (exit, _src) = self.emit_iform(&alternative, tail, None);
-        
+
         if exit {
             self.code[else_jump_ip] = OP_BRANCH_IF;
-            
+
             let reg = cond.virtual_register().0.to_le_bytes();
             self.code[else_jump_ip + 1] = reg[0];
             self.code[else_jump_ip + 2] = reg[1];
@@ -810,12 +803,16 @@ impl BytecodeGenerator {
             self.code[else_jump_ip + 6] = off[3];
 
             let (exit, src) = self.emit_iform(&consequent, tail, None);
-            
+
             if !exit {
                 let src = if !src.is_none() {
                     let c = self.add_constant(Value::encode_undefined_value());
                     let dst = self.final_destination(dst, None);
-                    OpMov::new(dst.virtual_register(), VirtualRegister::new_constant(c as _)).write(self);
+                    OpMov::new(
+                        dst.virtual_register(),
+                        VirtualRegister::new_constant(c as _),
+                    )
+                    .write(self);
                     return (exit, Some(dst));
                 } else {
                     self.mov(dst, src.unwrap())
@@ -856,7 +853,7 @@ impl BytecodeGenerator {
         self.code[exit_jump_ip + 2] = off[1];
         self.code[exit_jump_ip + 3] = off[2];
         self.code[exit_jump_ip + 4] = off[3];
-        
+
         (false, dst)
     }
 

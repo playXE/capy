@@ -47,7 +47,7 @@ impl<'a> StackTrace<'a> {
                         for ((start, end), srcloc, _) in ranges.iter().rev() {
                             let start = *start as isize;
                             let end = *end as isize;
-                            
+
                             if off >= start && off < end {
                                 let srcloc = *srcloc;
                                 let name = code_block.code_block().name;

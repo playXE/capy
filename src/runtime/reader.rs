@@ -191,7 +191,6 @@ static CHAR_MAP: Lazy<[u8; 100]> = Lazy::new(|| {
     for i in 1..map.len() as u8 {
         map[i as usize] =
             if (i as char).is_alphanumeric() || ".!?*+-/:<=>$%&@^_~".contains(i as char) {
-              
                 CHAR_MAP_SYMBOL
             } else {
                 0
@@ -237,7 +236,7 @@ impl<'a> Reader<'a> {
             parsing_line_from: 0,
             parsing_line_to: 0,
             foldcase,
-            notes: None 
+            notes: None,
         }
     }
 
@@ -294,7 +293,7 @@ impl<'a> Reader<'a> {
                 self.parsing_line_from, self.parsing_line_to
             ));
         }
-       
+
         raise_exn!(
             FailRead,
             &[make_srcloc(
@@ -1125,12 +1124,15 @@ impl<'a> Reader<'a> {
                 if bracketed {
                     self.parsing_line_from = line_begin;
                     self.parsing_line_to = self.port.line;
-                    return self.lexical_error("bracketed list terminated by parenthesis")
+                    return self.lexical_error("bracketed list terminated by parenthesis");
                 }
 
                 lst = scm_reverse(self.vm.mutator(), lst);
                 if self.notes.is_some() {
-                    self.put_note(lst, make_srcloc(self.port.name, line_begin, column_begin, pos as _));
+                    self.put_note(
+                        lst,
+                        make_srcloc(self.port.name, line_begin, column_begin, pos as _),
+                    );
                 }
                 return Ok(lst);
             }
@@ -1139,12 +1141,15 @@ impl<'a> Reader<'a> {
                 if !bracketed {
                     self.parsing_line_from = line_begin;
                     self.parsing_line_to = self.port.line;
-                    return self.lexical_error("parenthesized list terminated by bracket")
+                    return self.lexical_error("parenthesized list terminated by bracket");
                 }
 
                 lst = scm_reverse(self.vm.mutator(), lst);
                 if self.notes.is_some() {
-                    self.put_note(lst, make_srcloc(self.port.name, line_begin, column_begin, pos as _));
+                    self.put_note(
+                        lst,
+                        make_srcloc(self.port.name, line_begin, column_begin, pos as _),
+                    );
                 }
                 return Ok(lst);
             }
@@ -1184,12 +1189,15 @@ impl<'a> Reader<'a> {
                     if bracketed {
                         self.parsing_line_from = line_begin;
                         self.parsing_line_to = self.port.line;
-                        return self.lexical_error("bracketed list terminated by parenthesis")
+                        return self.lexical_error("bracketed list terminated by parenthesis");
                     }
 
                     lst = scm_reverse2x(self.vm.mutator(), lst, rest);
                     if self.notes.is_some() {
-                        self.put_note(lst, make_srcloc(self.port.name, line_begin, column_begin, pos as _));
+                        self.put_note(
+                            lst,
+                            make_srcloc(self.port.name, line_begin, column_begin, pos as _),
+                        );
                     }
                     return Ok(lst);
                 }
@@ -1198,12 +1206,15 @@ impl<'a> Reader<'a> {
                     if !bracketed {
                         self.parsing_line_from = line_begin;
                         self.parsing_line_to = self.port.line;
-                        return self.lexical_error("parenthesized list terminated by bracket")
+                        return self.lexical_error("parenthesized list terminated by bracket");
                     }
 
                     lst = scm_reverse2x(self.vm.mutator(), lst, rest);
                     if self.notes.is_some() {
-                        self.put_note(lst, make_srcloc(self.port.name, line_begin, column_begin, pos as _));
+                        self.put_note(
+                            lst,
+                            make_srcloc(self.port.name, line_begin, column_begin, pos as _),
+                        );
                     }
                     return Ok(lst);
                 }
@@ -1220,7 +1231,10 @@ impl<'a> Reader<'a> {
 
             if token.is_pair() {
                 if self.notes.is_some() {
-                    self.put_note(token, make_srcloc(self.port.name, line_begin, column_begin, pos as _));
+                    self.put_note(
+                        token,
+                        make_srcloc(self.port.name, line_begin, column_begin, pos as _),
+                    );
                 }
             }
 
@@ -1244,12 +1258,11 @@ impl<'a> Reader<'a> {
             };
             self.parsing_line_from = self.port.line;
             self.parsing_line_to = self.port.line;
-         
+
             if c.is_whitespace() {
                 continue 'top;
             }
 
-            
             if c.is_ascii_digit() {
                 self.unget_char();
                 return self.read_number();
@@ -1480,15 +1493,13 @@ impl<'a> Reader<'a> {
     }
 
     pub fn read_expr(&mut self) -> Result<Value, Value> {
-       
-        
         let token = self.read_token()?;
         if token == inherent_symbols()[InherentSymbol::RParen] {
             self.lexical_error("unexpected ')'")
         } else if token == inherent_symbols()[InherentSymbol::RBrack] {
             self.lexical_error("unexpected ']'")
         } else if token == inherent_symbols()[InherentSymbol::LParen] {
-            self.read_list(false, false)        
+            self.read_list(false, false)
         } else if token == inherent_symbols()[InherentSymbol::LBrack] {
             self.read_list(true, false)
         } else {
@@ -1497,7 +1508,6 @@ impl<'a> Reader<'a> {
     }
 
     pub fn read(&mut self, note: Option<Handle<HashMap<Value, Value>>>) -> Result<Value, Value> {
-        
         self.notes = note;
 
         if self.notes.is_some() {

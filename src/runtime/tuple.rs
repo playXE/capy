@@ -161,10 +161,8 @@ pub(crate) fn init_tuple() {
         }
         match &*iforms[1] {
             IForm::Const(x) => {
-               
                 if x.is_int32() {
                     if x.get_int32() < u16::MAX as i32 && x.get_int32() >= 0 {
-                       
                         return Some(make_iform(IForm::Asm(Asm {
                             op: Opcode::TupleSetI,
                             args: ArrayList::from_slice(Thread::current(), &[iforms[0], iforms[2]]),

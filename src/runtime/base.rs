@@ -1704,6 +1704,12 @@ extern "C" fn eq_hash(cfr: &mut CallFrame) -> ScmResult {
     ScmResult::ok(Value::encode_int32(hash as i32))
 }
 
+extern "C" fn type_of(cfr: &mut CallFrame) -> ScmResult {
+    let val = cfr.argument(0);
+
+    ScmResult::ok(val.get_type() as i32)
+}
+
 pub(crate) fn init_base() {
     let module = scm_capy_module().module();
     init_vector();
@@ -1812,4 +1818,7 @@ pub(crate) fn init_base() {
 
     let subr = scm_make_subr("string-append", string_append, 0, MAX_ARITY);
     scm_define(module, "string-append".intern(), subr.into()).unwrap();
+
+    let subr = scm_make_subr("type-of", type_of, 1, 1);
+    scm_define(module, "type-of".intern(), subr.into()).unwrap();
 }

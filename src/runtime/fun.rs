@@ -3,17 +3,18 @@ use rsgc::{prelude::Handle, thread::Thread};
 use crate::{
     compaux::scm_unwrap_identifier,
     compile::IForm,
+    op::disassembly,
     runtime::object::{
         ClosedNativeProcedure, CodeBlock, NativeProcedure, ObjectHeader, Procedure, ScmResult, Type,
     },
     runtime::value::Value,
-    vm::{callframe::CallFrame, scm_vm}, op::disassembly,
+    vm::{callframe::CallFrame, scm_vm},
 };
 
 use super::{
     error::wrong_contract,
     list::scm_length,
-    module::{scm_define, scm_scheme_module, scm_internal_module},
+    module::{scm_define, scm_internal_module, scm_scheme_module},
     object::MAX_ARITY,
     symbol::{make_symbol, Intern},
     vector::{make_values, make_values_n},
@@ -235,7 +236,7 @@ pub const SCM_PRIM_TYPE_STRUCT_PROP_GETTER: i32 = 64 | 128;
 pub const SCM_PRIM_STRUCT_TYPE_STRUCT_PROP_PRED: i32 = 64 | 128 | 256;
 pub const SCM_PRIM_STRUCT_TYPE_INDEXED_GETTER: i32 = 32;
 pub const SCM_PRIM_STRUCT_TYPE_PRED: i32 = 32 | 64;
-pub const SCM_PRIM_CONTINUATION: i32 = 32 | 64 | 128 | 256 ;
+pub const SCM_PRIM_CONTINUATION: i32 = 32 | 64 | 128 | 256;
 pub const SCM_PRIM_ER_MACRO: i32 = 32 | 64 | 128 | 256 | 512;
 pub const SCM_PRIM_ERI_MACRO: i32 = 32 | 64 | 128 | 256 | 512 | 1024;
 
@@ -312,7 +313,7 @@ pub fn get_proc_name<'a>(val: Value) -> Option<&'a str> {
             if val.native_procedure().name.is_string() || val.native_procedure().name.is_symbol() {
                 return Some(val.native_procedure().name.strsym());
             } else {
-                return None
+                return None;
             }
         } else {
             None

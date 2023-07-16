@@ -21,6 +21,7 @@ use crate::op::{disassembly, Opcode};
 use crate::raise_exn;
 use crate::runtime::arith::*;
 use crate::runtime::error::{out_of_range, scm_raise_proc, wrong_contract, wrong_count};
+use crate::runtime::foreign::scm_foreign_call;
 use crate::runtime::fun::{get_proc_name, make_closed_procedure};
 use crate::runtime::list::{scm_cons, scm_is_list, scm_list};
 use crate::runtime::module::{
@@ -1791,7 +1792,7 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                     let n = read2!();
 
                     let mut list = make_vector(vm.thread, n as _);
-
+                    list.object.typ = Type::Values;
                     for i in 0..n {
                         let e = pop!();
                         vm.thread.write_barrier(list);
@@ -1917,6 +1918,15 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                     }
 
                     push!(Value::encode_object_value(list));
+                }
+
+                Opcode::ForeignCall => {
+                    let cif = read2!();
+                    let ptr = read2!();
+                    let cif = code_block!().literals.vector_ref(cif as usize);
+                    let ptr = code_block!().literals.vector_ref(ptr as usize);
+                    let val = catch!(scm_foreign_call(cif, ptr, &mut*cfr));
+                    push!(val);
                 }
 
                 opcode => {

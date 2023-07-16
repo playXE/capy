@@ -1,6 +1,13 @@
 use crate::vm::callframe::CallFrame;
 
-use super::{error::wrong_contract, object::ScmResult, value::Value, module::{scm_capy_module, scm_define}, fun::scm_make_subr, symbol::Intern};
+use super::{
+    error::wrong_contract,
+    fun::scm_make_subr,
+    module::{scm_capy_module, scm_define},
+    object::ScmResult,
+    symbol::Intern,
+    value::Value,
+};
 
 extern "C" fn acquire(cfr: &mut CallFrame) -> ScmResult {
     let obj = cfr.argument(0);

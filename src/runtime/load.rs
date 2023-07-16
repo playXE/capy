@@ -100,7 +100,7 @@ pub fn scm_load_from_port(port: Handle<Port>, environment: Value) -> Result<Valu
 
             last = scm_eval(s, Value::encode_bool_value(false), Some(note)).map_err(|err| {
                 scm_vm().current_notes = prev;
-                err 
+                err
             })?;
         }
 

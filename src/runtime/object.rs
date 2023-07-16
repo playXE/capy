@@ -9,7 +9,9 @@ use std::{
 use once_cell::sync::Lazy;
 use rsgc::{
     heap::{heap, root_processor::SimpleRoot},
-    utils::bitfield::BitField, sync::mutex::RawMutex, system::arraylist::ArrayList,
+    sync::mutex::RawMutex,
+    system::arraylist::ArrayList,
+    utils::bitfield::BitField,
 };
 use rsgc::{
     prelude::{Allocation, Handle, Object},
@@ -39,7 +41,11 @@ pub struct ObjectHeader {
 impl ObjectHeader {
     #[inline(always)]
     pub(crate) const fn new(typ: Type) -> Self {
-        Self { typ, lock: RawMutex::INIT, flags: 0 }
+        Self {
+            typ,
+            lock: RawMutex::INIT,
+            flags: 0,
+        }
     }
 
     #[inline(always)]
@@ -103,6 +109,8 @@ pub enum Type {
     Mutex,
     Condition,
     Pointer,
+    CIF,
+    Dynlib
 }
 
 #[repr(C)]
@@ -143,7 +151,6 @@ unsafe impl Allocation for Pair {}
 pub struct Vector {
     pub(crate) object: ObjectHeader,
     pub(crate) length: u32,
-    pub(crate) _pad: u32,
     pub(crate) data: [Value; 0],
 }
 
@@ -181,9 +188,7 @@ unsafe impl Object for Bytevector {
     }
 }
 
-unsafe impl Allocation for Bytevector {
-
-}
+unsafe impl Allocation for Bytevector {}
 
 #[repr(C)]
 pub struct Identifier {
@@ -578,7 +583,7 @@ pub struct CodeBlock {
     /// vector of constants
     pub literals: Value,
     /// Vector of source ranges for debugging.
-    /// 
+    ///
     /// Maps (start, end) to the srcloc structure.
     pub ranges: Option<ArrayList<((u32, u32), Value, Value)>>,
     /// vector of code blocks
@@ -794,7 +799,7 @@ impl ScmResult {
             tag: Self::ERR,
             value: value.into(),
         }
-    }   
+    }
     #[allow(dead_code)]
     pub(crate) fn jit_err(value: impl Into<Value>) -> Self {
         Self {
@@ -890,7 +895,6 @@ impl Try for ScmResult {
             value: output,
         }
     }
-
 }
 
 impl FromResidual<Value> for ScmResult {

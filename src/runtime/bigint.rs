@@ -678,8 +678,8 @@ impl BigInt {
             (rhs, self)
         } else {
             (self, rhs)
-        };      
-       
+        };
+
         b1.times_generic(thr, b2)
     }
 

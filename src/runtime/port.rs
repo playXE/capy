@@ -2,8 +2,6 @@ use std::ffi::CString;
 use std::mem::MaybeUninit;
 use std::ptr::*;
 
-use r7rs_parser::expr::NoIntern;
-use r7rs_parser::parser::{ParseError, Parser};
 use rsgc::prelude::Handle;
 use rsgc::thread::Thread;
 use rsgc::{
@@ -11,12 +9,10 @@ use rsgc::{
     sync::mutex::RawMutex,
 };
 
-use crate::compile::r7rs_to_value;
 use crate::raise_exn;
 use crate::runtime::error::make_srcloc;
 use crate::vm::interpreter::apply;
 
-use super::list::{scm_cons, scm_reverse};
 use super::object::Type;
 use super::string::make_string;
 use super::vector::make_bytevector;
@@ -1085,7 +1081,7 @@ pub fn port_get_byte(mut port: Handle<Port>) -> Result<i32, Value> {
                     }
                     port.buf_head = unsafe { port.buf_head.add(1) };
                     port.mark += 1;
-                    
+
                     return Ok(c as i32);
                 } else {
                     let mut b = 0;
@@ -2133,72 +2129,6 @@ pub fn port_put_string(port: Handle<Port>, s: &str) -> Result<(), Value> {
         }
     }
 }
-
-pub fn port_read(mut port: Handle<Port>) -> Result<Value, Value> {
-    if port.parsed.is_undefined() {
-        let mut res = String::new();
-
-        loop {
-            let c = port_get_char(port)?;
-
-            if c.is_eof_object() {
-                break;
-            }
-
-            let c = c.get_char();
-
-            res.push(c);
-        }
-        let mut interner = NoIntern;
-        let mut parser = Parser::new(&mut interner, &res, false);
-
-        let mut toplevel = Value::encode_null_value();
-        while !parser.finished() {
-            let expr = match parser.parse(true) {
-                Ok(expr) => expr,
-                Err(e) => match e {
-                    ParseError::Syntax(pos, err) => {
-                        let srcloc = make_srcloc(
-                            port.name,
-                            pos.line as _,
-                            pos.col as _,
-                            port_position(port)? as _,
-                        );
-
-                        return raise_exn!(FailRead, &[srcloc], "syntax error: {}", err);
-                    }
-                    ParseError::Lexical(pos, err) => {
-                        let srcloc = make_srcloc(
-                            port.name,
-                            pos.line as _,
-                            pos.col as _,
-                            port_position(port)? as _,
-                        );
-
-                        return raise_exn!(FailRead, &[srcloc], "lexical error: {}", err);
-                    }
-                },
-            };
-
-            let val = r7rs_to_value(Thread::current(), port.name, &expr);
-            toplevel = scm_cons(Thread::current(), val, toplevel);
-        }
-
-        let toplevel = scm_reverse(Thread::current(), toplevel);
-
-        port.parsed = toplevel;
-    }
-
-    if port.parsed.is_null() {
-        Ok(Value::eof_object())
-    } else {
-        let ret = port.parsed.car();
-        Thread::current().write_barrier(port);
-        port.parsed = port.parsed.cdr();
-        Ok(ret)
-    }
-}
-
 pub fn cnvt_ucs4_to_utf8(ucs4: u32, utf8: &mut [u8]) -> usize {
     if ucs4 < 0x80 {
         utf8[0] = ucs4 as u8;

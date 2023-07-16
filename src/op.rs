@@ -152,6 +152,8 @@ pub enum Opcode {
 
     Not,
 
+    ForeignCall,
+
     Count,
     Wide = 255,
 }
@@ -207,13 +209,13 @@ pub fn disassembly(
 
         let op = unsafe { std::mem::transmute::<u8, Opcode>(op) };
         write!(out, "({:p}) {:04}: ", &code[ip], ip)?;
-        
+
         out.set_color(&ColorSpec::new().set_fg(Some(termcolor::Color::Blue)))?;
         write!(out, "{}", op)?;
         out.reset()?;
         ip += 1;
         match op {
-            | Opcode::NoOp3
+            Opcode::NoOp3
             | Opcode::Alloc
             | Opcode::AllocBelow
             | Opcode::LdArg
@@ -242,13 +244,17 @@ pub fn disassembly(
             | Opcode::Tuple
             | Opcode::MakeVector
             | Opcode::VectorRefI
-            | Opcode::TupleSetI 
+            | Opcode::TupleSetI
             | Opcode::TupleRefI
             | Opcode::VectorSetI => {
                 let n = read2!();
                 writeln!(out, " {}", n)?;
             }
-
+            Opcode::ForeignCall => {
+                let cif_idx = read2!();
+                let ptr_idx = read2!();
+                writeln!(out, " cif={}, ptr={}", cif_idx, ptr_idx)?;
+            }
             Opcode::Unpack => {
                 let n = read2!() as u16;
                 let overflow = code[ip] != 0;
@@ -281,7 +287,11 @@ pub fn disassembly(
                 writeln!(out, " {}, {}; => {}", argc, n, ip as i32 + n,)?;
             }
 
-            Opcode::PushConstant | Opcode::Addi | Opcode::Subi | Opcode::Quotienti | Opcode::Muli => {
+            Opcode::PushConstant
+            | Opcode::Addi
+            | Opcode::Subi
+            | Opcode::Quotienti
+            | Opcode::Muli => {
                 let n = read4!();
                 writeln!(out, " {}", n)?;
             }
@@ -309,9 +319,6 @@ pub fn disassembly(
                 writeln!(out, "")?;
             }
         }
-
-       
-
     }
 
     Ok(())

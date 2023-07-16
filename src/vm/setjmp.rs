@@ -23,7 +23,6 @@ cfg_if::cfg_if! {
     }
 }
 
-
 #[allow(non_camel_case_types)]
 type __jmp_buf = [u64; 15];
 

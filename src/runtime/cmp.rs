@@ -1,6 +1,11 @@
 use crate::{compaux::scm_unwrap_identifier, runtime::value::Value, vm::callframe::CallFrame};
 
-use super::{object::ScmResult, module::{scm_scheme_module, scm_define}, fun::scm_make_subr, symbol::Intern};
+use super::{
+    fun::scm_make_subr,
+    module::{scm_define, scm_scheme_module},
+    object::ScmResult,
+    symbol::Intern,
+};
 
 pub fn scm_eq(x: Value, y: Value) -> bool {
     x == y
@@ -80,7 +85,6 @@ pub fn scm_equal(x: Value, y: Value) -> bool {
 
     x == y
 }
-
 
 extern "C" fn eq(cfr: &mut CallFrame) -> ScmResult {
     ScmResult::ok(cfr.argument(0) == cfr.argument(1))

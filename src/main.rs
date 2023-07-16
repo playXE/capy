@@ -1,17 +1,9 @@
-
 use capy::{
-  
-   
     runtime::{
         error::{Exception, EXN_TABLE},
         structure::{is_struct_instance, struct_ref},
     },
-    runtime::{
-       
-        load::scm_vm_load,
-        module::scm_user_module,
-       
-    },
+    runtime::{load::scm_vm_load, module::scm_user_module},
 };
 use rsgc::{prelude::HeapArguments, thread::main_thread};
 use std::path::PathBuf;
@@ -55,7 +47,7 @@ fn main() {
                     }
                 }
             }
-        } 
+        }
         #[cfg(feature = "profile-opcodes")]
         {
             capy::vm::interpreter::print_profiles();

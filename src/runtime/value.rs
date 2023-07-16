@@ -11,13 +11,16 @@ use crate::{
         NativeProcedure, ObjectHeader, Pair, Procedure, ReaderReference, Str, Symbol, Syntax, Type,
         Vector, GLOC,
     },
-    vm::scm_vm, 
+    vm::scm_vm,
 };
 
 use super::{
     bigint::BigInt,
-    object::{Tuple, Rational, CodeBlock, },
-    port::{port_extract_string, port_open_bytevector, Port, SCM_PORT_DIRECTION_OUT, SCM_PORT_DIRECTION_IN},
+    object::{CodeBlock, Rational, Tuple},
+    port::{
+        port_extract_string, port_open_bytevector, Port, SCM_PORT_DIRECTION_IN,
+        SCM_PORT_DIRECTION_OUT,
+    },
     print::Printer,
     pure_nan::*,
     symbol::Intern,
@@ -131,7 +134,7 @@ impl Value {
     pub const UNDEFINED: Value = Self::encode_undefined_value();
 
     #[inline(always)]
-    pub fn encode_empty_value() -> Self {
+    pub const fn encode_empty_value() -> Self {
         Self(EncodedValueDescriptor {
             as_int64: Self::VALUE_EMPTY,
         })
@@ -329,7 +332,6 @@ impl<T: Object> Into<Value> for Handle<T> {
 unsafe impl Object for Value {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         if self.is_object() && !self.is_empty() {
-            
             self.get_object().trace(visitor);
         }
     }
@@ -432,7 +434,7 @@ impl Value {
     pub fn bytevector(self) -> Handle<Bytevector> {
         debug_assert!(self.is_xtype(Type::Bytevector));
         unsafe { std::mem::transmute(self.0.ptr) }
-    }   
+    }
     #[inline(always)]
     pub fn string(self) -> Handle<Str> {
         debug_assert!(self.is_xtype(Type::Str));
@@ -461,7 +463,7 @@ impl Value {
         {
             (*self.pair()).cdr
         }
-    }   
+    }
     #[inline(always)]
     pub fn extended_pair_attr(self) -> Value {
         debug_assert!(self.is_extended_pair());
@@ -535,9 +537,7 @@ impl Value {
     #[inline(always)]
     pub fn vector_ref(self, idx: usize) -> Value {
         debug_assert!(self.is_xtype(Type::Vector));
-        unsafe {
-            self.vector().data.as_ptr().add(idx).read()
-        }
+        unsafe { self.vector().data.as_ptr().add(idx).read() }
     }
     #[inline(always)]
     pub fn vector_set(self, idx: usize, val: Value) {
@@ -665,7 +665,7 @@ impl Value {
     }
 
     #[inline(always)]
-    pub fn object_header_ref<'a> (self) -> &'a ObjectHeader {
+    pub fn object_header_ref<'a>(self) -> &'a ObjectHeader {
         debug_assert!(self.is_object());
         unsafe {
             let ptr = self.get_raw() as usize;
@@ -866,7 +866,6 @@ impl Value {
         unsafe { std::mem::transmute(self) }
     }
 
-
     pub fn is_tuple(self) -> bool {
         self.is_xtype(Type::Tuple)
     }
@@ -925,7 +924,7 @@ impl Value {
 
         if self.is_int32() {
             return Some(self.get_int32() as i64);
-        } 
+        }
 
         let bignum = self.bignum();
         bignum.i64()
@@ -936,7 +935,7 @@ impl Value {
             if let Some(x) = self.bignum().i32() {
                 Self::encode_int32(x)
             } else {
-                self 
+                self
             }
         } else if self.is_rational() {
             let d = self.rational().den;
@@ -945,16 +944,16 @@ impl Value {
                 if d.get_int32() == 1 {
                     self.rational().num.normalized()
                 } else {
-                    self 
+                    self
                 }
             } else if d.is_bignum() {
                 if d.bignum().is_one() {
                     self.rational().num.normalized()
                 } else {
-                    self 
+                    self
                 }
             } else {
-                self 
+                self
             }
         } else {
             self
@@ -1088,12 +1087,13 @@ impl fmt::Display for Value {
     }
 }
 
-
 pub fn scm_box(val: Value) -> Value {
-    Thread::current().allocate(Box {
-        header: ObjectHeader::new(Type::Box),
-        value: val,
-    }).into()
+    Thread::current()
+        .allocate(Box {
+            header: ObjectHeader::new(Type::Box),
+            value: val,
+        })
+        .into()
 }
 
 pub fn scm_int(x: i64) -> Value {

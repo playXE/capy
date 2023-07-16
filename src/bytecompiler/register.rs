@@ -1,6 +1,6 @@
 use std::backtrace;
 
-use crate::bytecode::virtual_register::{VirtualRegister, virtual_register_for_local};
+use crate::bytecode::virtual_register::{virtual_register_for_local, VirtualRegister};
 
 pub struct RegisterAllocator {
     registers: Vec<bool>,
@@ -45,7 +45,8 @@ impl RegisterAllocator {
 
             self.first_free = loop {
                 if i >= self.registers.len() as u16 {
-                    self.registers.resize((self.registers.len() as f64 * 1.3) as _, false);
+                    self.registers
+                        .resize((self.registers.len() as f64 * 1.3) as _, false);
                     break i;
                 }
 
@@ -63,7 +64,11 @@ impl RegisterAllocator {
     }
 
     pub fn free(&mut self, register: VirtualRegister) {
-        println!("free {} {}",register,  std::backtrace::Backtrace::force_capture());
+        println!(
+            "free {} {}",
+            register,
+            std::backtrace::Backtrace::force_capture()
+        );
         if register.to_local() as u16 + 1 == self.stack_top {
             self.pop_to(register.to_local() as _);
         } else {
@@ -74,13 +79,14 @@ impl RegisterAllocator {
 
     pub fn push(&mut self, size: u16) -> Option<VirtualRegister> {
         if size == 0 {
-            None 
+            None
         } else {
             let rbegin = self.stack_top;
             if rbegin + size > self.registers.len() as u16 {
-                self.registers.resize(((rbegin + size) as f64 * 1.3) as usize, false);
+                self.registers
+                    .resize(((rbegin + size) as f64 * 1.3) as usize, false);
             }
-            for i in rbegin..rbegin+size {
+            for i in rbegin..rbegin + size {
                 self.registers[i as usize] = true;
             }
 

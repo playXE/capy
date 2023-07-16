@@ -75,7 +75,11 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
             } else {
                 let callee = vm.tail_rator;
                 if callee.is_native_procedure() {
-                    println!("tail call to native procedure: {} from {}", callee, (*fp).callee);
+                    println!(
+                        "tail call to native procedure: {} from {}",
+                        callee,
+                        (*fp).callee
+                    );
                 }
                 let caller = (*fp).caller;
                 let return_pc = (*fp).return_pc;
@@ -175,7 +179,7 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                     (*new_fp).caller = fp.cast();
                     (*new_fp).return_pc = pc;
                     sp = new_fp.cast();
-                    
+
                     if callee.is_vm_procedure() {
                         let cb = callee.procedure().code;
                         (*new_fp).code_block = cb.into();
@@ -211,7 +215,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                         to = to.sub(1);
                         from = from.sub(1);
                         to.write(from.read());
-                        
                     }
 
                     sp = to;

@@ -1,12 +1,12 @@
-use rsgc::prelude::{Object, Allocation, Handle};
+use rsgc::prelude::{Allocation, Handle, Object};
 
-use super::{value::Value, object::ObjectHeader};
+use super::{object::ObjectHeader, value::Value};
 
 pub fn scm_complex_is_exact(c: Value) -> bool {
     if c.is_complex() {
         let c = c.complex();
 
-        return !c.r.is_double() && !c.i.is_double()
+        return !c.r.is_double() && !c.i.is_double();
     }
 
     false
@@ -16,7 +16,7 @@ pub fn scm_complex_is_exact(c: Value) -> bool {
 pub struct Complex {
     pub(crate) object: ObjectHeader,
     pub r: Value,
-    pub i: Value
+    pub i: Value,
 }
 
 unsafe impl Object for Complex {
@@ -31,8 +31,6 @@ unsafe impl Allocation for Complex {}
 impl Value {
     pub fn complex(self) -> Handle<Complex> {
         debug_assert!(self.is_complex());
-        unsafe {
-            std::mem::transmute(self)
-        }
+        unsafe { std::mem::transmute(self) }
     }
 }

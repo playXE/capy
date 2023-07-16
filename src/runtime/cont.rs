@@ -14,7 +14,7 @@ use super::{
     error::wrong_contract,
     fun::{scm_make_subr, SCM_PRIM_CONTINUATION},
     list::scm_cons,
-    module::{scm_capy_module, scm_define, scm_internal_module, scm_find_binding},
+    module::{scm_capy_module, scm_define, scm_find_binding, scm_internal_module},
     object::{ObjectHeader, ScmResult, Type},
     symbol::Intern,
     value::Value,
@@ -210,7 +210,6 @@ extern "C" fn dynamic_winders(cfr: &mut CallFrame) -> ScmResult {
     ScmResult::ok(res)
 }
 
-
 use rsgc::{heap::stack::approximate_stack_pointer, prelude::Allocation, thread::Thread};
 use rsgc::{
     heap::stack::StackBounds,
@@ -270,7 +269,6 @@ unsafe impl Allocation for Cont {
 impl Drop for Cont {
     fn drop(&mut self) {
         unsafe {
-           
             libc::free(self.cstack.cast());
         }
     }
@@ -491,5 +489,6 @@ pub fn with_exception_handler_subr() -> Value {
     let module = scm_capy_module().module();
     let subr = scm_find_binding(module, ".@with-exception-handler".intern(), 0);
 
-    subr.map(|x| x.value).unwrap_or(Value::encode_bool_value(false))
+    subr.map(|x| x.value)
+        .unwrap_or(Value::encode_bool_value(false))
 }

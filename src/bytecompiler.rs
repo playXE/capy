@@ -25,6 +25,6 @@ use std::{collections::HashMap, fmt::Display, ptr::null};
 
 use self::register::RegisterAllocator;
 
-pub mod register;
 pub mod bytecodegenerator;
+pub mod register;
 pub mod register_id;

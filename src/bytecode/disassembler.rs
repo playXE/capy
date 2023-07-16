@@ -76,7 +76,6 @@ pub fn disassemble<T: std::fmt::Write>(code: &[u8], f: &mut T) -> std::fmt::Resu
             writeln!(
                 f,
                 "{:0w$}: {:<24} {}",
-                
                 start_read_ix,
                 bytes,
                 tmp,

@@ -2237,28 +2237,57 @@ extern "C" fn write(cfr: &mut CallFrame) -> ScmResult {
         check_opened_output_textual_port!(port, "write", 1, cfr.arguments());
     }
     if !port.transcoder.is_false() {
-        
-        do_format("write", port, Some("~s"), 0, 0, cfr.argument_count(), cfr.arguments()).map_err(|e| {
+        do_format(
+            "write",
+            port,
+            Some("~s"),
+            0,
+            0,
+            cfr.argument_count(),
+            cfr.arguments(),
+        )
+        .map_err(|e| {
             port.lock.unlock();
             e
         })?;
     } else {
         let vm = scm_vm();
         let buf = Port::new(vm.mutator());
-        port_open_bytevector(port, "string".intern().into(), SCM_PORT_DIRECTION_OUT, Value::encode_bool_value(false), Value::encode_bool_value(true));
+        port_open_bytevector(
+            port,
+            "string".intern().into(),
+            SCM_PORT_DIRECTION_OUT,
+            Value::encode_bool_value(false),
+            Value::encode_bool_value(true),
+        );
         buf.lock.lock(true);
 
-        do_format("write", buf, Some("~s"), 0, 0, cfr.argument_count(), cfr.arguments()).map_err(|e| {
+        do_format(
+            "write",
+            buf,
+            Some("~s"),
+            0,
+            0,
+            cfr.argument_count(),
+            cfr.arguments(),
+        )
+        .map_err(|e| {
             port.lock.unlock();
             buf.lock.unlock();
             e
         })?;
 
-        port_put_string(port, port_extract_string(buf).map_err(|e| {
-            port.lock.unlock();
-            buf.lock.unlock();
-            e
-        })?.strsym()).map_err(|e| {
+        port_put_string(
+            port,
+            port_extract_string(buf)
+                .map_err(|e| {
+                    port.lock.unlock();
+                    buf.lock.unlock();
+                    e
+                })?
+                .strsym(),
+        )
+        .map_err(|e| {
             port.lock.unlock();
             buf.lock.unlock();
             e
@@ -2302,28 +2331,57 @@ extern "C" fn display(cfr: &mut CallFrame) -> ScmResult {
         check_opened_output_textual_port!(port, "write", 1, cfr.arguments());
     }
     if !port.transcoder.is_false() {
-        
-        do_format("write", port, Some("~a"), 0, 0, cfr.argument_count(), cfr.arguments()).map_err(|e| {
+        do_format(
+            "write",
+            port,
+            Some("~a"),
+            0,
+            0,
+            cfr.argument_count(),
+            cfr.arguments(),
+        )
+        .map_err(|e| {
             port.lock.unlock();
             e
         })?;
     } else {
         let vm = scm_vm();
         let buf = Port::new(vm.mutator());
-        port_open_bytevector(port, "string".intern().into(), SCM_PORT_DIRECTION_OUT, Value::encode_bool_value(false), Value::encode_bool_value(true));
+        port_open_bytevector(
+            port,
+            "string".intern().into(),
+            SCM_PORT_DIRECTION_OUT,
+            Value::encode_bool_value(false),
+            Value::encode_bool_value(true),
+        );
         buf.lock.lock(true);
 
-        do_format("write", buf, Some("~a"), 0, 0, cfr.argument_count(), cfr.arguments()).map_err(|e| {
+        do_format(
+            "write",
+            buf,
+            Some("~a"),
+            0,
+            0,
+            cfr.argument_count(),
+            cfr.arguments(),
+        )
+        .map_err(|e| {
             port.lock.unlock();
             buf.lock.unlock();
             e
         })?;
 
-        port_put_string(port, port_extract_string(buf).map_err(|e| {
-            port.lock.unlock();
-            buf.lock.unlock();
-            e
-        })?.strsym()).map_err(|e| {
+        port_put_string(
+            port,
+            port_extract_string(buf)
+                .map_err(|e| {
+                    port.lock.unlock();
+                    buf.lock.unlock();
+                    e
+                })?
+                .strsym(),
+        )
+        .map_err(|e| {
             port.lock.unlock();
             buf.lock.unlock();
             e
@@ -2342,7 +2400,6 @@ extern "C" fn display(cfr: &mut CallFrame) -> ScmResult {
 
     ScmResult::ok(Value::encode_undefined_value())
 }
-
 
 extern "C" fn put_fasl(cfr: &mut CallFrame) -> ScmResult {
     let port = cfr.argument(0);
@@ -2364,12 +2421,9 @@ extern "C" fn put_fasl(cfr: &mut CallFrame) -> ScmResult {
             ScmResult::ok(Value::encode_undefined_value())
         }
 
-        Err(bad) => {
-            raise_exn!((), Fail, &[], "put-fasl: cannot encode object: {}", bad).into()
-        }
+        Err(bad) => raise_exn!((), Fail, &[], "put-fasl: cannot encode object: {}", bad).into(),
     }
 }
-
 
 pub(crate) fn init_ports() {
     heap::heap().add_root(SimpleRoot::new("portfun", "ports", |proc| {

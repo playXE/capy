@@ -105,7 +105,6 @@ pub(crate) fn init_modules() {
                 REQBASE_MODULE.trace(v);
                 FOREIGN_MODULE.trace(v);
             }
-
         },
     ));
     let mut mpl = Value::encode_null_value();
@@ -179,7 +178,6 @@ pub(crate) fn init_modules() {
 
         let subr = scm_make_subr("module-export", module_export, 2, 2);
         scm_define(module, "module-export".intern(), subr).unwrap();
-
     }
 }
 
@@ -506,12 +504,12 @@ fn search_binding(
 
         scm_for_each!(mp, elt.module().mpl, {
             let m = mp.car();
-            
+
             if !prefixed && searched.is_visited(m.module()) {
                 mp = mp.cdr();
                 continue;
             }
-            
+
             if m.module().prefix.is_xtype(Type::Symbol) {
                 sym = scm_symbol_sans_prefix(sym.symbol(), m.module().prefix.symbol());
 

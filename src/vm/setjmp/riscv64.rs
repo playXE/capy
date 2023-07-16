@@ -37,10 +37,9 @@ pub unsafe extern "C" fn setjmp(_: *mut JmpBuf) -> i32 {
     )
 }
 
-
 #[naked_function::naked]
 pub unsafe extern "C" fn longjmp(_: *mut JmpBuf, _: i32) -> ! {
-    asm!( 
+    asm!(
         "
         ld s0,    0(a0)
         ld s1,    8(a0)
