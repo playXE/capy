@@ -872,6 +872,16 @@ pub fn define_syntax() {
         Ok(make_iform(IForm::Const(Value::encode_undefined_value())))
     });
 
+    define_syntax!("export-all", Some("capy"), form, cenv, {
+        if !form.cdr().is_null() {
+            return raise_exn!(Fail, &[], "export-all: invalid syntax");
+        }
+
+        let mut module = cenv_module(cenv);
+        module.export_all = true;
+        Ok(make_iform(IForm::Const(Value::encode_undefined_value())))
+    });
+
     define_syntax!("import", Some("capy"), form, cenv, {
         fn ensure(m: Value) -> Result<Handle<Module>, Value> {
             let o = m;

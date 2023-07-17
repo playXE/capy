@@ -562,6 +562,9 @@ extern "C" fn bytevector_s8_set(cfr: &mut CallFrame) -> ScmResult {
     ScmResult::ok(Value::encode_undefined_value())
 }
 
+
+
+
 scm_symbol!(SYM_LITTLE_ENDIAN, "little");
 scm_symbol!(SYM_BIG_ENDIAN, "big");
 
@@ -661,6 +664,7 @@ pub(crate) fn init_bytevector() {
 
                         if bv_len < k
                             || bv_len.wrapping_sub(k) < ($len / 8) {
+                            println!("{} {} {}", bv_len, bv_len.wrapping_sub(k), ($len / 8));
                             return raise_exn!((),
                                 Fail,
                                 &[],
@@ -777,5 +781,175 @@ pub(crate) fn init_bytevector() {
         (u32, u32, 32),
         (s64, i64, 64),
         (u64, u64, 64)
+    );
+
+    macro_rules! float_ops {
+        ($(($name: ident, $t:ty, $len: expr)),*) => {
+            paste::paste! {
+                $(
+                    extern "C" fn [<bytevector_ $name _ref>]<const NATIVE: bool>(cfr: &mut CallFrame) -> ScmResult {
+                        let bv = cfr.argument(0);
+                        let k = cfr.argument(1);
+                        let endianess = if NATIVE {
+                            scm_native_byteorder()
+                        } else { cfr.argument(2) };
+                        const LIT: &'static str = concat!("bytevector-", stringify!($name),"-ref");
+
+                        let k = scm_to_usize(k).ok_or_else(|| {
+                            wrong_contract::<()>(
+                                LIT,
+                                "exact-positive-integer?",
+                                1,
+                                cfr.argument_count() as _,
+                                cfr.arguments(),
+                            )
+                            .unwrap_err()
+                        })?;
+
+                        if !bv.is_bytevector() {
+                            return wrong_contract::<()>(
+                                LIT,
+                                "bytevector?",
+                                0,
+                                cfr.argument_count() as _,
+                                cfr.arguments(),
+                            )
+                            .into();
+                        }
+
+                        if !endianess.is_symbol() {
+                            return wrong_contract::<()>(
+                                LIT,
+                                "symbol?",
+                                2,
+                                cfr.argument_count() as _,
+                                cfr.arguments(),
+                            )
+                            .into();
+                        }
+
+                        let bv = bv.bytevector();
+
+                        let bv_len = bv.length as usize;
+
+                        if bv_len < k
+                            || bv_len.wrapping_sub(k) < ($len / 8) {
+                            return raise_exn!((),
+                                Fail,
+                                &[],
+                                "{}: index out of range: {}",
+                                LIT,
+                                k
+                            ).into();
+                        }
+
+                        unsafe {
+                            let v: $t = bv.contents.add(k).cast::<$t>().read_unaligned();
+
+                            ScmResult::ok(Value::encode_untrusted_f64_value(v as _))
+                        }
+                    }
+
+                    extern "C" fn [<bytevector_ $name _set>]<const NATIVE: bool>(cfr: &mut CallFrame) -> ScmResult {
+                        let bv = cfr.argument(0);
+                        let k = cfr.argument(1);
+                        let endianess = if NATIVE {
+                            scm_native_byteorder()
+                        } else {
+                            cfr.argument(2)
+                        };
+
+                        let value = if NATIVE {
+                            cfr.argument(2)
+                        } else {
+                            cfr.argument(3)
+                        };
+
+                        const LIT: &'static str = concat!("bytevector-", stringify!($name), "-set!");
+
+                        let k = scm_to_usize(k).ok_or_else(|| {
+                            wrong_contract::<()>(
+                                LIT,
+                                "exact-positive-integer?",
+                                1,
+                                cfr.argument_count() as _,
+                                cfr.arguments(),
+                            )
+                            .unwrap_err()
+                        })?;
+
+                        if !bv.is_bytevector() {
+                            return wrong_contract::<()>(
+                                LIT,
+                                "bytevector?",
+                                0,
+                                cfr.argument_count() as _,
+                                cfr.arguments(),
+                            )
+                            .into();
+                        }
+
+                        if !endianess.is_symbol() {
+                            return wrong_contract::<()>(
+                                LIT,
+                                "symbol?",
+                                2,
+                                cfr.argument_count() as _,
+                                cfr.arguments(),
+                            )
+                            .into();
+                        }
+
+
+                        let bv = bv.bytevector();
+
+                        let bv_len = bv.length as usize;
+
+                        if bv_len < k
+                            || bv_len.wrapping_sub(k) < ($len / 8) {
+                            return raise_exn!((),
+                                Fail,
+                                &[],
+                                "{}: index out of range: {}",
+                                LIT,
+                                k
+                            ).into();
+                        }
+                        if !value.is_double() {
+                            return wrong_contract::<()>(
+                                LIT,
+                                "real?",
+                                2,
+                                cfr.argument_count() as _,
+                                cfr.arguments(),
+                            )
+                            .into();
+                        }
+                        let val = value.get_double();
+
+                        unsafe {
+                            bv.contents.add(k).cast::<$t>().write_unaligned(val as _);
+                        }
+                        ScmResult::ok(Value::encode_undefined_value())
+                    }
+
+                    let subr = scm_make_subr(concat!("bytevector-", stringify!($name),"-ref"),  [<bytevector_ $name _ref>]::<false>, 3, 3);
+                    scm_define(module, concat!("bytevector-", stringify!($name),"-ref").intern(), subr).unwrap();
+                    let subr = scm_make_subr(concat!("bytevector-", stringify!($name),"-native-ref"),  [<bytevector_ $name _ref>]::<true>, 2, 2);
+                    scm_define(module, concat!("bytevector-", stringify!($name),"-native-ref").intern(), subr).unwrap();
+
+                    let subr = scm_make_subr(concat!("bytevector-", stringify!($name),"-set!"),  [<bytevector_ $name _set>]::<false>, 4, 4);
+                    scm_define(module, concat!("bytevector-", stringify!($name),"-set!").intern(), subr).unwrap();
+                    let subr = scm_make_subr(concat!("bytevector-", stringify!($name),"-native-set!"),  [<bytevector_ $name _set>]::<true>, 3, 3);
+                    scm_define(module, concat!("bytevector-", stringify!($name),"-native-set!").intern(), subr).unwrap();
+
+                )*
+            }
+        };
+    }
+
+    float_ops!(
+        (f32, f32, 32),
+        (f64, f64, 64)
     );
 }

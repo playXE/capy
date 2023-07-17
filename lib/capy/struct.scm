@@ -12,6 +12,7 @@
 
                 (match expr 
                     [(_ (? identifier? id) (? identifier? super-id) fields . config)
+                        
                         (if (not (config-has-name? config))
                             `(define-struct/derived ,expr (,id ,super-id) ,fields #:constructor-name ,id . ,config)
                             `(define-struct/derived ,expr (,id ,super-id) ,fields . ,config))]
@@ -59,11 +60,11 @@
                                     (when mutable? 
                                         (error 'struct "redundant ~a for field ~a" (car ps) id))
                                     (loop (cdr ps) def-val auto? #t)]
-                                [(eq? #:default (car ps))
+                                [(eq? '#:default (car ps))
                                     (when def-val
                                         (error 'struct "multiple ~a for field ~a" (car ps) id))
                                     (loop (cdr ps) (cadr ps) auto? mutable?)]
-                                [(eq? #:auto (car ps))
+                                [(eq? '#:auto (car ps))
                                     (when auto? 
                                         (error 'struct "redundant ~a for field ~a" (car ps) id))
                                     (loop (cdr ps) def-val #t mutable?)]
@@ -198,10 +199,10 @@
                                                   [sels (map (lambda (f)
                                                                 (build-name id "-" (field-id f))) fields)]
                                                   [super-struct: 
-                                                        (and super-expr `(let ([the-super ,super-expr])
+                                                        (or (and super-expr `(let ([the-super ,super-expr])
                                                             (if (,(rename 'struct-type?) the-super)
                                                                 the-super 
-                                                                (check-struct-type ,fm the-super))))])
+                                                                (check-struct-type ,fm the-super)))) super-id)])
                                                 (let-values ([(sets sets-auto-count)
                                                     (let loop ([fields fields])
                                                         (cond 
@@ -217,7 +218,7 @@
                                                                         (values (cons this-set other-sets) count*)))]
                                                         ))
                                                 ])
-                                                    
+                                                   
                                                     `(,(rename 'define-values) (,struct: ,make- ,? ,@sels ,@sets)
                                                         (let-values ([(struct: make- ? -ref -set!)
                                                             (make-struct-type ',struct:

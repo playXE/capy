@@ -235,8 +235,13 @@ impl Value {
     pub fn get_number(self) -> f64 {
         if self.is_int32() {
             return self.get_int32() as _;
+        } else if self.is_double() {
+            self.get_double()
+        } else if self.is_bignum() {
+            self.bignum().f64()
+        } else {
+            pure_nan()
         }
-        self.get_double()
     }
     #[inline(always)]
     pub fn get_double(self) -> f64 {

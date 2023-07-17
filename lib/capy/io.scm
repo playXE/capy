@@ -96,3 +96,9 @@
 (define-module capy.io
     (import capy.io.support)
 )
+
+(select-module capy)
+    (define in-vicinity
+        (case (%host-os)
+            [(windows) (lambda (dir path) (string-append dir "\\" path))]
+            [else (lambda (dir path) (string-append dir "/" path))]))

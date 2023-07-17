@@ -494,3 +494,22 @@
             (if (memq (car lst) ans)
                 (loop (cdr lst) ans)
                 (loop (cdr lst) (cons (car lst) ans)))))))
+
+(define (assv-ref alist key)
+  (let ((pair (assv key alist)))
+    (if pair
+        (cdr pair)
+        #f)))
+
+    (define fold-1
+      (lambda (proc seed lst)
+        (if (null? lst) seed (fold-1 proc (proc (car lst) seed) (cdr lst)))))
+
+    (define fold-n
+      (lambda (proc seed lst)
+        (if (null? lst) seed (fold-n proc (apply proc (append (car lst) (list seed))) (cdr lst)))))
+
+
+(define fold
+      (lambda (proc seed lst1 . lst2)
+        (if (null? lst2) (fold-1 proc seed lst1) (fold-n proc seed (apply list-transpose* lst1 lst2)))))

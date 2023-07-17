@@ -448,7 +448,7 @@ pub fn finish_exn_impl<T>(
 
     reargs[0] = make_string(Thread::current(), msg).into();
     reargs[1] = make_string(Thread::current(), &get_stacktrace_str(scm_vm())).into(); // cmark
-
+    
     if let Some(errno) = errno_val {
         if id == Exception::FailFilesystem {
             id = Exception::FailFilesystemErrno;
@@ -464,7 +464,7 @@ pub fn finish_exn_impl<T>(
             id = Exception::FailUnsupported;
         }
     }
-
+    
     let instance = make_struct_instance_(EXN_TABLE[id as usize].typ, &reargs[0..c])?;
 
     Err(instance)

@@ -15,6 +15,7 @@ use crate::{
     vm::{callframe::CallFrame, scm_vm},
 };
 
+use super::number::scm_s32;
 use super::{
     arith::scm_is_exact_positive_integer,
     fun::scm_make_subr,
@@ -817,19 +818,20 @@ unsafe fn unpack(typ: *mut ffi_type, val: Value, loc: *mut (), return_value: boo
     }
 
     if t == types::float.type_ {
-        if !val.is_double() {
+        if !val.is_number() {
             return raise_exn!(Fail, &[], "wrong type of argument for CIF float: {}", val);
         }
 
-        loc.cast::<f32>().write(val.get_double() as f32);
+        let val = val.get_number();
+        loc.cast::<f32>().write(val as f32);
     }
 
     if t == types::double.type_ {
-        if !val.is_double() {
+        if !val.is_number() {
             return raise_exn!(Fail, &[], "wrong type of argument for CIF double: {}", val);
-        }
-
-        loc.cast::<f64>().write(val.get_double());
+        }   
+        let val = val.get_number();
+        loc.cast::<f64>().write(val);
     }
     /* For integer return values smaller than `int', libffi expects the
        result in an `ffi_arg'-long buffer.  */
@@ -887,13 +889,11 @@ unsafe fn unpack(typ: *mut ffi_type, val: Value, loc: *mut (), return_value: boo
     }
 
     if t == types::sint32.type_ {
-        if !val.is_int32() {
-            return raise_exn!(Fail, &[], "wrong type of argument for CIF sint32: {}", val);
-        }
+        let val = scm_s32(val).ok_or_else(|| raise_exn!((), Fail, &[], "wrong type of argument for CIF sint32: {}", val).unwrap_err())?;
         if return_value {
-            loc.cast::<ffi_arg>().write(val.get_int32() as ffi_arg);
+            loc.cast::<ffi_arg>().write(val as ffi_arg);
         } else {
-            loc.cast::<i32>().write(val.get_int32());
+            loc.cast::<i32>().write(val);
         }
     }
 

@@ -122,6 +122,7 @@ impl VM {
 
 unsafe impl Object for VM {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
+       
         self.specific.trace(visitor);
         self.thunk.trace(visitor);
         self.result.trace(visitor);

@@ -6,7 +6,7 @@ use self::{
     structure::{is_struct_instance, struct_ref},
 };
 use crate::vm::interpreter::TRAMPOLINE_INSTALLED;
-use rsgc::thread::Thread;
+use rsgc::{thread::Thread, heap::heap::heap};
 
 #[macro_use]
 pub mod list;
@@ -74,6 +74,7 @@ pub(crate) fn init() {
     // load necessary files
     let t = Thread::current();
     let start = std::time::Instant::now();
+   
     match scm_require(
         make_string(t, "capy").into(),
         0,

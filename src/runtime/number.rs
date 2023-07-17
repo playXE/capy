@@ -9,7 +9,7 @@ use crate::{
 use super::{
     arith::{scm_is_exact, scm_is_zero},
     error::wrong_contract,
-    fun::scm_make_subr_inliner,
+    fun::{scm_make_subr_inliner, scm_make_subr},
     module::{scm_define, scm_scheme_module},
     object::ScmResult,
     symbol::Intern,
@@ -110,8 +110,58 @@ extern "C" fn exact_p(cfr: &mut CallFrame) -> ScmResult {
     }
 }
 
+extern "C" fn exact_to_inexact(cfr: &mut CallFrame) -> ScmResult {
+    let n = cfr.argument(0);
+    if n.is_double() {
+        return ScmResult::ok(n);
+    }
+    if !scm_is_exact(n).ok_or_else(|| {
+        wrong_contract::<()>("exact->inexact", "exact?", 0, 1, cfr.arguments()).unwrap_err()
+    })? {
+        return wrong_contract::<()>("exact->inexact", "exact?", 0, 1, cfr.arguments()).into();
+    }
+
+    if n.is_int32() {
+        ScmResult::ok(n.get_int32() as f64)
+    } else if n.is_bignum() {
+        ScmResult::ok(n.bignum().f64())
+    } else {
+        unreachable!()
+    }
+}
+
+extern "C" fn inexact_to_exact(cfr: &mut CallFrame) -> ScmResult {
+    let n = cfr.argument(0);
+    if !n.is_number() {
+        return wrong_contract::<()>("inexact->exact", "number?", 0, 1, cfr.arguments()).into();
+    }
+    if n.is_int32() {
+        ScmResult::ok(n)
+    } else if n.is_bignum() {
+        ScmResult::ok(n)
+    } else if n.is_double() {
+        if n.get_double().is_nan() {
+            ScmResult::ok(n)
+        } else if n.get_double().is_infinite() {
+            ScmResult::ok(n)
+        } else if f64_is_integer(n.get_double()) {
+            ScmResult::ok(scm_int(n.get_double() as i64))
+        } else {
+            ScmResult::ok(scm_uint(n.get_double() as u64))
+        }
+    } else {
+        unreachable!()
+    }
+}
+
 pub(crate) fn init_number() {
     let module = scm_scheme_module().module();
+
+    let subr = scm_make_subr("exact->inexact", exact_to_inexact, 1, 1);
+    scm_define(module, "exact->inexact".intern(), subr).unwrap();
+
+    let subr = scm_make_subr("inexact->exact", inexact_to_exact, 1, 1);
+    scm_define(module, "inexact->exact".intern(), subr).unwrap();
 
     let proc = scm_make_subr_inliner("number?", number_p, 1, 1, |iforms, _| {
         if iforms.len() == 1 {
@@ -445,6 +495,15 @@ pub fn scm_s16(val: Value) -> Option<i16> {
 
 pub fn scm_s32(val: Value) -> Option<i32> {
     let val = val.normalized();
+    if val.is_double() {
+        let x = val.get_double();
+
+        if x > i32::MAX as f64 || x < i32::MIN as f64 {
+            return None;
+        }
+
+        return Some(x.floor() as i32);
+    }
     if !val.is_int32() {
         return None;
     }

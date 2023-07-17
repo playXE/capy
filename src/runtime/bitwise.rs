@@ -209,7 +209,7 @@ extern "C" fn bitwise_or(cfr: &mut CallFrame) -> ScmResult {
             .into();
         }
 
-        ScmResult::ok(arith_logand(scm_vm(), cfr.argument(0), cfr.argument(1)).unwrap())
+        ScmResult::ok(arith_logior(scm_vm(), cfr.argument(0), cfr.argument(1)).unwrap())
     } else {
         if cfr.argument_count() == 1 {
             if !scm_is_exact_integer(cfr.argument(0)) {

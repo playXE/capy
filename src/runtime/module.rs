@@ -44,7 +44,7 @@ use crate::{
     runtime::value::Value,
     runtime::{fun::scm_make_subr, string::make_string, symbol::Intern},
     scm_for_each,
-    vm::callframe::CallFrame,
+    vm::callframe::CallFrame, raise_exn,
 };
 
 use super::{
@@ -146,7 +146,7 @@ pub(crate) fn init_modules() {
 
         mpl = DEFAULT_MPL;
     }
-    init_mod!(FOREIGN_MODULE, "capy.foreign.internal", None);
+    init_mod!(FOREIGN_MODULE, "system.foreign", None);
     init_mod!(INTERNAL_MODULE, "capy.internal", None);
     init_mod!(REQBASE_MODULE, "capy.require-base", None);
 
@@ -1206,4 +1206,44 @@ extern "C" fn module_p(cfr: &mut CallFrame) -> ScmResult {
     let module = cfr.argument(0);
 
     ScmResult::ok(Value::encode_bool_value(module.is_module()))
+}
+
+extern "C" fn module_export_all(cfr: &mut CallFrame) -> ScmResult {
+    let module = cfr.argument(0);
+
+    if !module.is_module() || !module.is_symbol() {
+        return wrong_contract::<()>(
+            "module-export-all",
+            "(or/c symbol? module?)",
+            0,
+            cfr.argument_count() as _,
+            cfr.arguments(),
+        )
+        .into();
+    }
+
+    let cond = cfr.argument(1);
+
+    if !cond.is_boolean() {
+        return wrong_contract::<()>(
+            "module-export-all",
+            "boolean?",
+            1,
+            cfr.argument_count() as _,
+            cfr.arguments(),
+        )
+        .into();
+    }
+
+    let mut module = if module.is_module() {
+        module.module()
+    } else {
+        scm_find_module(module.symbol(), false, false)?.ok_or_else(|| {
+            raise_exn!((), Fail, &[], "module '{}' not found", module).unwrap_err()
+        })?
+    };
+
+    module.export_all = cond.is_true();
+
+    ScmResult::ok(Value::encode_undefined_value())
 }

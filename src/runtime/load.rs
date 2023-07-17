@@ -276,6 +276,8 @@ unsafe impl Object for Loader {
         self.provided.trace(visitor);
         self.providing.trace(visitor);
         self.waiting.trace(visitor);
+        self.waiting.trace(visitor);
+        
     }
 }
 

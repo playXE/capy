@@ -145,23 +145,24 @@ impl Value {
         }
     }
 }
-/*
-fn apply_guards(stype: Handle<StructType>, mut args: &mut [Value])  {
+
+fn apply_guards(stype: Handle<StructType>, args: &[Value]) -> Result<ArrayList<Value>, Value> {
     let mut prev_guards = Value::encode_bool_value(false);
-    let mut guard = Value::encode_bool_value(false);
-    let t = Thread::current();
-    let mut guard_argv = None;
-    for p in (0..=stype.name_pos).rev() {
-
-
-        if stype.parent_types[p as usize].guard.is_procedure() || prev_guards.is_pair() {
-            let got = 0;
-
-                if guard_argv.is_none() {
-                    guard_argv = Some(ArrayList::from_slice_with_capacity(t, args, args.len() + 1));
-                    guard_argv.as_mut().unwrap().push(t, Value::encode_bool_value(false));
-                    args = &mut guard_argv.as_mut().unwrap();
-                }
+    let mut p = stype.name_pos;
+    let vm = scm_vm();
+    let argc = args.len();
+    let mut args = ArrayList::from_slice_with_capacity(scm_vm().mutator(), args, args.len() + 1);
+    args.push(vm.mutator(), Value::encode_null_value());
+    let mut guard;
+    while p >= 0 {
+        if (stype.parent_types[p as usize].struct_type().guard.is_pair()
+            || stype.parent_types[p as usize]
+                .struct_type()
+                .guard
+                .is_procedure())
+            || !prev_guards.is_false()
+        {
+            let mut got;
 
             if prev_guards.is_false() {
                 prev_guards = Value::encode_null_value();
@@ -171,8 +172,7 @@ fn apply_guards(stype: Handle<StructType>, mut args: &mut [Value])  {
                 if prev_guards.is_pair() {
                     guard = prev_guards.car();
                 } else {
-                    guard = stype.parent_types[p as usize].guard;
-
+                    guard = stype.parent_types[p as usize].struct_type().guard;
                     if !guard.is_false() {
                         if guard.is_pair() {
                             guard = guard.car();
@@ -182,10 +182,54 @@ fn apply_guards(stype: Handle<StructType>, mut args: &mut [Value])  {
                     }
                 }
 
+                if !guard.is_false() {
+                    let gcount = stype.parent_types[p as usize].struct_type().num_islots;
+
+                    args[argc] = args[gcount as usize];
+                    args[gcount as usize] = stype.name;
+                    let v = apply(guard, &args[..gcount as usize + 1])?;
+
+                    got = if v.is_values() { v.values().len() } else { 1 };
+
+                    if got != gcount as usize {
+                        return raise_exn!(
+                            FailContractArity,
+                            &[],
+                            "expected {} return value(s) but got {} while calling guard {}",
+                            gcount,
+                            got,
+                            guard
+                        );
+                    }
+
+                    if v.is_values() {
+                        if gcount != 0 {
+                            args[0..gcount as usize].copy_from_slice(&v.values());
+                        }
+                    } else {
+                        args[0] = v;
+                    }
+
+                    args[gcount as usize] = args[args.len()];
+                }
+
+                if prev_guards.is_null() {
+                    prev_guards = Value::encode_bool_value(false);
+                } else {
+                    prev_guards = prev_guards.cdr();
+                }
             }
         }
+
+        if stype.parent_types[p as usize].struct_type().guard.is_pair() {
+            prev_guards = stype.parent_types[p as usize].struct_type().guard.cdr();
+        }
+
+        p -= 1;
     }
-}*/
+
+    Ok(args)
+}
 
 pub fn make_struct_instance_(stype: Value, args: &[Value]) -> Result<Value, Value> {
     let vm = scm_vm();
@@ -200,7 +244,7 @@ pub fn make_struct_instance_(stype: Value, args: &[Value]) -> Result<Value, Valu
         slots,
     });
 
-    // todo: args = apply_guards(vm, stype, args)?;
+    //let args = apply_guards(stype.struct_type(), args)?;
 
     let c = stype.struct_type().num_slots as usize;
 
@@ -417,7 +461,7 @@ pub(crate) fn make_struct_type_property_raw(
     let mut accessor_name = None;
     let mut contract_name = None;
     if args.len() > 1 {
-        if args[1].is_true() && !check_proc_arity("", 2, 1, args.len() as _, args)? {
+        if args[1].to_bool() && !check_proc_arity("", 2, 1, args.len() as _, args)? {
             return wrong_contract(
                 who,
                 "(or/c (any/c any/c . -> . any) #f)",
@@ -464,7 +508,7 @@ pub(crate) fn make_struct_type_property_raw(
             }
 
             if args.len() > 3 {
-                if args[3].is_true() {
+                if args[3].to_bool() {
                     accessor_name = Some(args[3]);
                     if !accessor_name.unwrap().is_symbol() {
                         return wrong_contract(who, "(or/c symbol? #f)", 3, args.len() as _, args);
@@ -472,7 +516,7 @@ pub(crate) fn make_struct_type_property_raw(
                 }
 
                 if args.len() > 4 {
-                    if args[4].is_true() {
+                    if args[4].to_bool() {
                         contract_name = Some(args[4]);
                         if !contract_name.unwrap().is_symbol() {
                             return wrong_contract(
@@ -629,7 +673,11 @@ pub fn struct_set(sv: Value, pos: usize, v: Value) {
 
 pub fn is_simple_struct_type(stype: Handle<StructType>) -> bool {
     for p in (0..=stype.name_pos).rev() {
-        if stype.parent_types[p as usize].struct_type().guard.is_true() {
+        if stype.parent_types[p as usize]
+            .struct_type()
+            .guard
+            .is_procedure()
+        {
             return false;
         }
 
@@ -1529,10 +1577,10 @@ fn _make_struct_type(
     if !guard.is_false() {
         if !guard.is_procedure() || !check_arity(guard, struct_type.num_islots + 1, false) {
             return raise_exn!(
-                FailContract,
+                Fail,
                 &[],
                 "guard procedure does not accept correct number of arguments;\n
-                 should accept one more than the number of constructor arguments\n
+                should accept one more than the number of constructor arguments\n
                 guard procedure: {}, expected arity: {}",
                 guard,
                 struct_type.num_islots + 1

@@ -9,8 +9,6 @@
 
 
 (define unspecified undefined)
-(define void undefined)
-(define void? undefined?)
 (define unspecified? undefined?)
 
 (define (newline)
@@ -21,3 +19,7 @@
         (- x)
         x))
 
+(define (uint8? x)
+    (and (exact-integer? x)
+        (and (>= x 0)
+            (<= x 255))))
