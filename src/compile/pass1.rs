@@ -1,4 +1,4 @@
-use rsgc::{prelude::Handle, system::arraylist::ArrayList, thread::Thread};
+use rsgc::{prelude::{Handle, Object}, system::arraylist::ArrayList, thread::Thread, heap::root_processor::SimpleRoot};
 
 use super::{
     cenv_copy, cenv_lookup, cenv_toplevelp, make_iform, IForm, LVar, Let, LetScope, List, Seq,
@@ -313,6 +313,86 @@ pub fn adjust_arglist(
 }
 
 pub fn define_syntax() {
+    rsgc::heap::heap::heap().add_root(SimpleRoot::new("syntaxes", "stxs", |processor| {
+        let vis = processor.visitor();
+
+        if let Some(define) = Lazy::get(&DEFINE) {
+            define.trace(vis);
+        }
+
+        if let Some(define_syntax) = Lazy::get(&DEFINE_SYNTAX) {
+            define_syntax.trace(vis);
+        }
+
+        if let Some(begin) = Lazy::get(&LAMBDA) {
+            begin.trace(vis);
+        }
+
+        if let Some(apply) = Lazy::get(&APPLY) {
+            apply.trace(vis);
+        }
+        
+        if let Some(r5rs_define) = Lazy::get(&R5RS_DEFINE) {
+            r5rs_define.trace(vis);
+        }
+
+        if let Some(r5rs_lambda) = Lazy::get(&R5RS_LAMBDA) {
+            r5rs_lambda.trace(vis);
+        }
+
+        if let Some(values) = Lazy::get(&VALUES) {
+            values.trace(vis);
+        }
+
+        if let Some(begin) = Lazy::get(&BEGIN) {
+            begin.trace(vis);
+        }
+
+        if let Some(let_) = Lazy::get(&LET) {
+            let_.trace(vis);
+        }
+
+        if let Some(receive) = Lazy::get(&RECEIVE) {
+            receive.trace(vis);
+        }
+
+        if let Some(include) = Lazy::get(&INCLUDE) {
+            include.trace(vis);
+        }
+
+        if let Some(include_ci) = Lazy::get(&INCLUDE_CI) {
+            include_ci.trace(vis);
+        }
+
+        if let Some(else_) = Lazy::get(&ELSE) {
+            else_.trace(vis);
+        }
+
+        if let Some(arrow) = Lazy::get(&ARROW) {
+            arrow.trace(vis);
+        }
+
+        if let Some(current_module) = Lazy::get(&CURRENT_MODULE) {
+            current_module.trace(vis);
+        }
+
+        if let Some(with_module) = Lazy::get(&WITH_MODULE) {
+            with_module.trace(vis);
+        }
+
+        if let Some(quasiquote) = Lazy::get(&QUASIQUOTE) {
+            quasiquote.trace(vis);
+        }
+
+        if let Some(unquote) = Lazy::get(&UNQUOTE) {
+            unquote.trace(vis);
+        }
+
+        if let Some(unquote_splicing) = Lazy::get(&UNQUOTE_SPLICING) {
+            unquote_splicing.trace(vis);
+        }
+
+    }));
     macro_rules! define_syntax {
         ($name: literal, $module: expr, $form: ident, $cenv: ident, $b: block) => {{
             let module = match $module {

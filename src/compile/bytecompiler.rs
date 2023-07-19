@@ -60,41 +60,58 @@ impl CaptureGroup {
 }
 
 pub struct ByteCompiler {
-    parent: Option<*mut ByteCompiler>,
+    parent: Option<Handle<ByteCompiler>>,
     group: Handle<BindingGroup>,
     captures: CaptureGroup,
     num_locals: usize,
     max_locals: usize,
-    code: Vec<u8>,
+    code: ArrayList<u8>,
     literals: ArrayList<Value>,
     fragments: ArrayList<Handle<CodeBlock>>,
     pub note: Option<Handle<rsgc::system::collections::hashmap::HashMap<Value, Value>>>,
     pub ranges: Option<ArrayList<((u32, u32), Value, Value)>>,
 }
 
+unsafe impl Object for ByteCompiler {
+    fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
+        self.parent.trace(visitor);
+        self.group.trace(visitor);
+        self.captures.captures.trace(visitor);
+        self.code.trace(visitor);
+        self.literals.trace(visitor);
+        self.fragments.trace(visitor);
+        self.note.trace(visitor);
+        self.ranges.trace(visitor);
+    }
+}
+
+unsafe impl Allocation for ByteCompiler {}
 
 impl ByteCompiler {
-    pub fn new(thread: &mut Thread) -> Box<Self> {
-        Box::new(Self {
+    pub fn new(thread: &mut Thread) -> Handle<Self> {
+        let this = Self {
             note: None,
             captures: CaptureGroup {
                 captures: ArrayList::with_capacity(thread, 8),
             },
-            code: Vec::new(),
+            code: ArrayList::with_capacity(thread, 128),
             literals: ArrayList::with_capacity(thread, 16),
             fragments: ArrayList::with_capacity(thread, 4),
             num_locals: 0,
             max_locals: 0,
             parent: None,
-            ranges: Some(ArrayList::with_capacity(thread, 4)),
+            ranges: None,
+            //ranges: Some(ArrayList::with_capacity(thread, 4)),
             group: Thread::current().allocate(BindingGroup {
                 bindings: HashMap::new(thread),
                 parent: None,
             }),
-        })
+        };
+
+        thread.allocate(this)
     }
 
-    pub fn next_local_index(&mut self) -> usize {
+    pub fn next_local_index(mut self: Handle<Self>) -> usize {
         self.num_locals += 1;
         if self.num_locals > self.max_locals {
             self.max_locals = self.num_locals;
@@ -103,7 +120,7 @@ impl ByteCompiler {
         self.num_locals - 1
     }
 
-    pub fn add_constant(&mut self, thread: &mut Thread, constant: Value) -> usize {
+    pub fn add_constant(mut self: Handle<Self>, thread: &mut Thread, constant: Value) -> usize {
         assert!(!constant.is_empty());
         if let Some(ix) = self.literals.iter().position(|&value| value == constant) {
             ix
@@ -114,26 +131,42 @@ impl ByteCompiler {
         }
     }
 
-    pub fn emit_load(&mut self, thread: &mut Thread, constant: Value) {
+    pub fn emit_u8(mut self: Handle<Self>, x: u8) {
+        self.code.push(Thread::current(), x);
+    }
+
+    pub fn emit_u16(mut self: Handle<Self>, x: u16) {
+        let b = x.to_le_bytes();
+        self.code.push(Thread::current(), b[0]);
+        self.code.push(Thread::current(), b[1]);
+    }
+
+    pub fn emit_load(mut self: Handle<Self>, thread: &mut Thread, constant: Value) {
         if constant.is_empty() {
             panic!("wtf??");
         }
         if constant.is_int32() {
-            self.code.push(Opcode::PushInt32 as _);
-            self.code
-                .extend_from_slice(&constant.get_int32().to_le_bytes());
+            self.emit_u8(Opcode::PushInt32 as _);
+            let bytes = constant.get_int32().to_le_bytes();
+            for byte in bytes {
+                self.emit_u8(byte);
+            }
+            //self.code
+            //    .extend_from_slice(&constant.get_int32().to_le_bytes());
         } else if constant.is_double() {
-            self.code.push(Opcode::PushDouble as _);
-            self.code
-                .extend_from_slice(&constant.get_double().to_bits().to_le_bytes());
+            self.emit_u8(Opcode::PushDouble as _);
+            let bytes = constant.get_double().to_bits().to_le_bytes();
+            for byte in bytes {
+                self.emit_u8(byte);
+            }
         } else if constant.is_undefined() {
-            self.code.push(Opcode::PushUndef as _);
+            self.emit_u8(Opcode::PushUndef as _);
         } else if constant.is_null() {
-            self.code.push(Opcode::PushNull as _);
+            self.emit_u8(Opcode::PushNull as _);
         } else if constant.is_true() {
-            self.code.push(Opcode::PushTrue as _);
+            self.emit_u8(Opcode::PushTrue as _);
         } else if constant.is_false() {
-            self.code.push(Opcode::PushFalse as _);
+            self.emit_u8(Opcode::PushFalse as _);
         } else {
             let literal;
 
@@ -145,33 +178,38 @@ impl ByteCompiler {
             }
 
             self.emit_simple(Opcode::PushConstant);
-            self.code.extend_from_slice(&(literal as u32).to_le_bytes());
+            let bytes = (literal as u32).to_le_bytes();
+            for byte in bytes {
+                self.emit_u8(byte);
+            }
         }
     }
 
-    pub fn emit_call(&mut self, argc: u16) {
+    pub fn emit_call(self: Handle<Self>, argc: u16) {
         self.emit_simple(Opcode::Call);
-        self.code.extend_from_slice(&argc.to_le_bytes());
+        self.emit_u16(argc);
     }
 
-    pub fn emit_tail_call(&mut self, argc: u16) {
+    pub fn emit_tail_call(self: Handle<Self>, argc: u16) {
         self.emit_simple(Opcode::TailCall);
-        self.code.extend_from_slice(&argc.to_le_bytes());
+        self.emit_u16(argc);
     }
 
-    pub fn emit_simple(&mut self, opcode: Opcode) {
-        self.code.extend_from_slice(&(opcode as u8).to_le_bytes());
+    pub fn emit_simple(self: Handle<Self>, opcode: Opcode) {
+        self.emit_u8(opcode as _);
     }
 
-    pub fn emit_ldarg(&mut self, arg: u16) {
-        self.code.push(Opcode::LdArg as _);
-        self.code.extend_from_slice(&arg.to_le_bytes());
+    pub fn emit_ldarg(self: Handle<Self>, arg: u16) {
+        self.emit_simple(Opcode::LdArg);
+        self.emit_u16(arg);
     }
 
-    pub fn jmp(&mut self) -> impl FnOnce(&mut Self) {
+    pub fn jmp(self: Handle<Self>) -> impl FnOnce(&mut Self) {
         let p = self.code.len();
-        self.code.push(Opcode::Branch as u8);
-        self.code.extend_from_slice(&(0u32).to_le_bytes());
+        self.emit_simple(Opcode::Branch);
+        for _ in 0..4 {
+            self.emit_u8(0);
+        }
 
         move |ctx| {
             let offset = ctx.code.len() as isize - p as isize;
@@ -179,10 +217,12 @@ impl ByteCompiler {
         }
     }
 
-    pub fn cjmp(&mut self, cond: bool) -> impl FnOnce(&mut Self) {
+    pub fn cjmp(self: Handle<Self>, cond: bool) -> impl FnOnce(&mut Self) {
         let p = self.code.len();
-        self.code.push(Opcode::Branch as u8);
-        self.code.extend_from_slice(&(0u32).to_le_bytes());
+        self.emit_simple(Opcode::Branch);
+        for _ in 0..4 {
+            self.emit_u8(0);
+        }
         move |ctx| {
             ctx.code[p + 1..p + 5].copy_from_slice(&(5i32).to_le_bytes());
             ctx.code[p] = if cond {
@@ -193,7 +233,7 @@ impl ByteCompiler {
         }
     }
 
-    pub fn finalize(&mut self, thread: &mut Thread) -> Handle<CodeBlock> {
+    pub fn finalize(mut self: Handle<Self>, thread: &mut Thread) -> Handle<CodeBlock> {
         let fragments = Array::new(thread, self.fragments.len(), |_, x| self.fragments[x]);
         let literals = make_vector_from_slice(thread, &self.literals);
 
@@ -236,18 +276,19 @@ impl ByteCompiler {
         code
     }
 
-    pub fn bind(&mut self, lvar: Handle<LVar>, ix: usize) {
+    pub fn bind(self: Handle<Self>, lvar: Handle<LVar>, ix: usize) {
         self.group.bindings.put(lvar, ix);
     }
 
-    pub fn compile_lambda(&mut self, thread: &mut Thread, lam: &Lambda) {
-        let mut closure_compiler = ByteCompiler {
+    pub fn compile_lambda(self: Handle<Self>, thread: &mut Thread, lam: &Lambda) {
+        let closure_compiler = ByteCompiler {
             note: self.note,
             captures: CaptureGroup {
                 captures: ArrayList::with_capacity(thread, 8),
             },
-            ranges: Some(ArrayList::with_capacity(thread, 4)),
-            code: Vec::new(),
+            ranges: None,
+            //ranges: Some(ArrayList::with_capacity(thread, 4)),
+            code: ArrayList::with_capacity(thread, 128),
             literals: ArrayList::with_capacity(thread, 16),
             fragments: ArrayList::with_capacity(thread, 4),
             num_locals: 0,
@@ -258,18 +299,15 @@ impl ByteCompiler {
                 parent: None,
             }),
         };
+        let closure_compiler = thread.allocate(closure_compiler);
         let assert_argcount = lam.lvars.len() - lam.optarg as usize;
         closure_compiler.emit_simple(Opcode::Enter);
         if lam.optarg {
             closure_compiler.emit_simple(Opcode::AssertMinArgCount);
-            closure_compiler
-                .code
-                .extend_from_slice(&(assert_argcount as u16).to_le_bytes());
+            closure_compiler.emit_u16(assert_argcount as _);
         } else {
             closure_compiler.emit_simple(Opcode::AssertArgCount);
-            closure_compiler
-                .code
-                .extend_from_slice(&(assert_argcount as u16).to_le_bytes());
+            closure_compiler.emit_u16(assert_argcount as _);
         }
 
         for ix in 0..lam.lvars.len() - lam.optarg as usize {
@@ -287,9 +325,11 @@ impl ByteCompiler {
         if lam.optarg {
             let lvar = lam.lvars[lam.lvars.len() - 1];
             closure_compiler.emit_simple(Opcode::CollectRest);
-            closure_compiler
-                .code
-                .extend_from_slice(&(lam.lvars.len() as u16 - 1).to_le_bytes());
+            /*closure_compiler
+            .code
+            .extend_from_slice(&(lam.lvars.len() as u16 - 1).to_le_bytes());*/
+            closure_compiler.emit_u16(lam.lvars.len() as u16 - 1);
+
             let ix = closure_compiler.next_local_index();
 
             closure_compiler.bind(lvar, ix);
@@ -314,7 +354,6 @@ impl ByteCompiler {
             let proc = make_procedure(thread, code);
             self.emit_load(thread, proc.into());
         } else {
-            
             /*for capture in captures.iter().copied().rev() {
                 let lvar = unsafe { std::mem::transmute::<_, Handle<LVar>>(capture) };
                 self.resolve_local(lvar, false);
@@ -327,55 +366,49 @@ impl ByteCompiler {
 
             self.emit_load(thread, code.into());
             self.emit_simple(Opcode::MakeClosure);
-            self.code
-                .extend_from_slice(&(len as u16).to_le_bytes());
+            self.emit_u16(len as _);
         }
     }
 
-    pub fn emit_lref(&mut self, ix: u16) {
-        self.code.push(Opcode::StackGet as _);
-        self.code.extend_from_slice(&ix.to_le_bytes());
+    pub fn emit_lref(self: Handle<Self>, ix: u16) {
+        self.emit_simple(Opcode::StackGet as _);
+        self.emit_u16(ix);
     }
 
-    pub fn emit_closure_ref(&mut self, ix: u16) {
-        self.code.push(Opcode::ClosureRef as _);
-        self.code.extend_from_slice(&ix.to_le_bytes());
+    pub fn emit_closure_ref(self: Handle<Self>, ix: u16) {
+        self.emit_simple(Opcode::ClosureRef as _);
+        self.emit_u16(ix);
     }
 
-    pub fn emit_u16(&mut self, ix: u16) {
-        self.code.extend_from_slice(&ix.to_le_bytes());
+    pub fn emit_lset(self: Handle<Self>, ix: u16) {
+        self.emit_simple(Opcode::StackSet as _);
+        self.emit_u16(ix);
     }
 
-    pub fn emit_lset(&mut self, ix: u16) {
-        self.code.push(Opcode::StackSet as _);
-        self.code.extend_from_slice(&ix.to_le_bytes());
+    pub fn emit_closure_set(self: Handle<Self>, ix: u16) {
+        self.emit_simple(Opcode::ClosureSet as _);
+        self.emit_u16(ix);
     }
 
-    pub fn emit_closure_set(&mut self, ix: u16) {
-        self.code.push(Opcode::ClosureSet as _);
-        self.code.extend_from_slice(&ix.to_le_bytes());
-    }
-
-    fn resolve_local(&mut self, lvar: Handle<LVar>, unbox: bool) {
-        let this = self as *mut Self;
+    fn resolve_local(self: Handle<Self>, lvar: Handle<LVar>, unbox: bool) {
+        let mut this = self;
 
         let mut current = Some(this);
 
         while let Some(cc) = current {
-            let cc = unsafe { &mut *cc };
             if let Some(ix) = cc.group.lookup(lvar) {
-                if cc as *mut Self == this {
+                if cc.as_ptr() == this.as_ptr() {
                     self.emit_lref(ix as _);
                     if !lvar.is_immutable() && unbox {
                         self.emit_simple(Opcode::BoxRef);
                     }
                     return;
                 } else {
-                    let ix = unsafe { (*this).captures.capture(lvar) };
+                    let ix = this.captures.capture(lvar);
 
                     if !lvar.is_immutable() && unbox {
                         self.emit_simple(Opcode::ClosureRefUnbox);
-                        self.code.extend_from_slice(&(ix as u16).to_le_bytes());
+                        self.emit_u16(ix as _);
                     } else {
                         self.emit_closure_ref(ix as _);
                     }
@@ -390,15 +423,14 @@ impl ByteCompiler {
         panic!("unresolved local variable: {:?}", lvar.name);
     }
 
-    fn set_local(&mut self, lvar: Handle<LVar>, boxed: bool) {
-        let this = self as *mut Self;
+    fn set_local(self: Handle<Self>, lvar: Handle<LVar>, boxed: bool) {
+        let mut this = self;
 
         let mut current = Some(this);
 
         while let Some(cc) = current {
-            let cc = unsafe { &mut *cc };
             if let Some(ix) = cc.group.lookup(lvar) {
-                if cc as *mut Self == this {
+                if cc.as_ptr() == this.as_ptr() {
                     if lvar.is_immutable() || !boxed {
                         self.emit_lset(ix as _);
                     } else {
@@ -407,7 +439,7 @@ impl ByteCompiler {
                     }
                     return;
                 } else {
-                    let ix = unsafe { (*this).captures.capture(lvar) };
+                    let ix = this.captures.capture(lvar);
                     if !boxed {
                         self.emit_closure_set(ix as _);
                     } else {
@@ -422,7 +454,12 @@ impl ByteCompiler {
         }
     }
 
-    pub fn compile_iform(&mut self, thread: &mut Thread, iform: Handle<IForm>, tail: bool) -> bool {
+    pub fn compile_iform(
+        mut self: Handle<Self>,
+        thread: &mut Thread,
+        iform: Handle<IForm>,
+        tail: bool,
+    ) -> bool {
         let start = self.code.len();
         let mut origin = Value::encode_undefined_value();
         let exit = match &*iform {
@@ -437,8 +474,8 @@ impl ByteCompiler {
                 self.emit_simple(Opcode::Define);
                 assert!(!def.name.is_empty());
                 let id = self.add_constant(thread, def.name) as u16;
-                self.code.extend_from_slice(&id.to_le_bytes());
-                self.code.push(0);
+                self.emit_u16(id);
+                self.emit_u8(0);
                 false
             }
 
@@ -481,7 +518,7 @@ impl ByteCompiler {
                 origin = x.origin;
                 let c = self.add_constant(thread, x.id);
                 self.emit_simple(Opcode::GlobalRef);
-                self.code.extend_from_slice(&(c as u16).to_le_bytes());
+                self.emit_u16(c as _);
                 false
             }
 
@@ -490,7 +527,7 @@ impl ByteCompiler {
                 self.compile_iform(thread, x.value, false);
                 let c = self.add_constant(thread, x.id);
                 self.emit_simple(Opcode::GlobalSet);
-                self.code.extend_from_slice(&(c as u16).to_le_bytes());
+                self.emit_u16(c as _);
 
                 self.emit_simple(Opcode::PushUndef);
                 false
@@ -532,7 +569,7 @@ impl ByteCompiler {
                                 self.emit_lset(index as _);
                             } else {
                                 self.emit_simple(Opcode::StackBox);
-                                self.code.extend_from_slice(&(index as u16).to_le_bytes());
+                                self.emit_u16(index as _);
                             }
                         }
                         std::mem::swap(&mut self.group, &mut group);
@@ -549,7 +586,8 @@ impl ByteCompiler {
                             if !lvar.is_immutable() {
                                 self.emit_simple(Opcode::PushUndef);
                                 self.emit_simple(Opcode::StackBox);
-                                self.code.extend_from_slice(&(index as u16).to_le_bytes());
+                                self.emit_u16(index as u16);
+                                //self.code.extend_from_slice(&(index as u16).to_le_bytes());
                             } else {
                                 self.emit_simple(Opcode::PushUndef);
                                 self.emit_lset(index as _);
@@ -593,18 +631,21 @@ impl ByteCompiler {
                     for operand in operands.iter() {
                         match operand {
                             AsmOperand::I16(x) => {
-                                self.code.extend_from_slice(&x.to_le_bytes());
+                                self.emit_u16(*x as u16);
                             }
                             AsmOperand::I32(x) => {
-                                self.code.extend_from_slice(&x.to_le_bytes());
+                                let bytes = x.to_le_bytes();
+                                for byte in bytes {
+                                    self.emit_u8(byte);
+                                }
                             }
                             AsmOperand::I8(x) => {
-                                self.code.push(*x as u8);
+                                self.emit_u8(*x as u8);
                             }
 
                             AsmOperand::Constant(x) => {
                                 let ix = self.add_constant(thread, *x);
-                                self.code.extend_from_slice(&(ix as u16).to_le_bytes());
+                                self.emit_u16(ix as _);
                             }
                         }
                     }
@@ -628,7 +669,7 @@ impl ByteCompiler {
 
                 self.emit_simple(Opcode::NoOp5);
                 for _ in 0..4 {
-                    self.code.push(0);
+                    self.emit_u8(0);
                 }
 
                 if self.compile_iform(thread, alt, tail) {
@@ -645,7 +686,7 @@ impl ByteCompiler {
 
                     self.emit_simple(Opcode::NoOp5);
                     for _ in 0..4 {
-                        self.code.push(0);
+                        self.emit_u8(0);
                     }
                     self.code[else_jump_ip] = Opcode::BranchIf as u8;
                     let diff = (self.code.len() - else_jump_ip) as i32 - 5;
@@ -675,7 +716,8 @@ impl ByteCompiler {
         };
 
         let end = self.code.len();
-        if let (Some(ref mut ranges), Some(note)) = (self.ranges.as_mut(), self.note) {
+        let note = self.note;
+        if let (Some(ref mut ranges), Some(note)) = (self.ranges.as_mut(), note) {
             let note = note
                 .get(&origin)
                 .copied()
@@ -687,11 +729,15 @@ impl ByteCompiler {
         exit
     }
 
-    pub fn compile_body(&mut self, thread: &mut Thread, expr: Handle<IForm>, argc: usize) {
+    pub fn compile_body(
+        mut self: Handle<Self>,
+        thread: &mut Thread,
+        expr: Handle<IForm>,
+        argc: usize,
+    ) {
         let patch_alloc = self.code.len();
         self.emit_simple(Opcode::NoOp3);
-        self.code.push(0);
-        self.code.push(0);
+        self.emit_u16(0);
 
         if !self.compile_iform(thread, expr, true) {
             self.emit_simple(Opcode::Return);

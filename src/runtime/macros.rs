@@ -696,11 +696,11 @@ fn compile_rules(
             ctx.form = rule.cadr();
             t.write_barrier(tmpl);
             tmpl.pattern = ctx.compile_rule1(t, ctx.form, tmpl, false)?;
-            //println!("2) Compiled {:?} to {:?}",ctx.form, tmpl.pattern);
-            sr.rules.get_unchecked_mut(i).pattern = pat.pattern;
-            sr.rules.get_unchecked_mut(i).template = tmpl.pattern;
-            sr.rules.get_unchecked_mut(i).num_pvars = ctx.pvcnt as _;
-            sr.rules.get_unchecked_mut(i).max_level = ctx.maxlev as _;
+            let rule = sr.rules.as_mut_ptr().add(i).as_mut().unwrap();
+            rule.pattern = pat.pattern;
+            rule.template = tmpl.pattern;
+            rule.num_pvars = ctx.pvcnt as _;
+            rule.max_level = ctx.maxlev as _;
             sr.num_init_rules += 1;
             if ctx.pvcnt > sr.max_num_pvars {
                 sr.max_num_pvars = ctx.pvcnt;

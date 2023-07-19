@@ -23,6 +23,7 @@ pub fn scm_eqv(x: Value, y: Value) -> bool {
 }
 
 pub fn scm_equal(x: Value, y: Value) -> bool {
+    println!("{:x} {:x}", x.get_raw(), y.get_raw());
     if x.is_double() && y.is_double() {
         return x.get_double() == y.get_double();
     }
@@ -66,7 +67,7 @@ pub fn scm_equal(x: Value, y: Value) -> bool {
     if x.is_string() && y.is_string() {
         return x.string().as_str() == y.string().as_str();
     }
-
+    
     if x.is_wrapped_identifier() || y.is_wrapped_identifier() {
         let x = if x.is_wrapped_identifier() {
             scm_unwrap_identifier(x.identifier()).into()
