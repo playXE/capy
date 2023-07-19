@@ -29,14 +29,12 @@ use rsgc::{
     system::collections::hashmap::Entry,
 };
 use rsgc::{system::collections::hashmap::HashMap as HashTable, thread::Thread};
-use std::{
-    collections::{hash_map::RandomState, HashMap},
-    path::PathBuf,
-};
+use std::{collections::HashMap, path::PathBuf};
 
 use crate::{
     compaux::{identifier_to_symbol, scm_identifier_global_binding, scm_unwrap_identifier},
     compile::IForm,
+    raise_exn,
     runtime::list::{scm_cons, scm_list, scm_memq},
     runtime::macros::SyntaxRules,
     runtime::object::{Identifier, Module, ObjectHeader, Symbol, Syntax, Type, GLOC},
@@ -44,7 +42,7 @@ use crate::{
     runtime::value::Value,
     runtime::{fun::scm_make_subr, string::make_string, symbol::Intern},
     scm_for_each,
-    vm::callframe::CallFrame, raise_exn,
+    vm::callframe::CallFrame,
 };
 
 use super::{
@@ -263,8 +261,8 @@ fn _make_module(
     internal: Option<Handle<HashTable<Handle<Symbol>, Value>>>,
 ) -> Handle<Module> {
     let t = Thread::current();
-    let internal = internal.unwrap_or_else(|| HashTable::with_hasher(RandomState::new()));
-    let external = HashTable::with_hasher(RandomState::new());
+    let internal = internal.unwrap_or_else(|| HashTable::new(t));
+    let external = HashTable::new(t);
 
     let mut module = Thread::current().allocate(Module {
         object: ObjectHeader::new(Type::Module),
@@ -618,7 +616,7 @@ pub fn scm_global_variable_ref(
 }
 
 pub fn scm_make_binding(
-    mut module: Handle<Module>,
+    module: Handle<Module>,
     symbol: Handle<Symbol>,
     value: Value,
     flags: i32,
@@ -649,14 +647,10 @@ pub fn scm_make_binding(
                 setter: None,
             });
 
-            module
-                .internal
-                .put(Thread::current(), symbol, Value::encode_object_value(g));
+            module.internal.put(symbol, Value::encode_object_value(g));
 
             if module.export_all && symbol.interned {
-                module
-                    .external
-                    .put(Thread::current(), symbol, Value::encode_object_value(g));
+                module.external.put(symbol, Value::encode_object_value(g));
             }
 
             g
@@ -703,7 +697,7 @@ pub fn scm_define_const(
 ///   Since we assume MODULE is for intermediate modules, we only
 ///   insert bindings to the external table, for those modules are
 ///   only searched in the 'import' path.
-pub fn scm_hide_binding(mut module: Handle<Module>, symbol: Handle<Symbol>) -> Result<(), Value> {
+pub fn scm_hide_binding(module: Handle<Module>, symbol: Handle<Symbol>) -> Result<(), Value> {
     if module.sealed {
         Err(err_sealed(Value::encode_object_value(symbol), module))
     } else {
@@ -730,9 +724,7 @@ pub fn scm_hide_binding(mut module: Handle<Module>, symbol: Handle<Symbol>) -> R
                 setter: None,
             });
 
-            module
-                .external
-                .put(Thread::current(), symbol, Value::encode_object_value(g));
+            module.external.put(symbol, Value::encode_object_value(g));
         }
 
         drop(mods);
@@ -766,7 +758,7 @@ pub fn scm_hide_binding(mut module: Handle<Module>, symbol: Handle<Symbol>) -> R
 ///   won't cause much trouble if the target module is an implicit anonymous
 ///   module created by :only and :rename import options.
 pub fn scm_alias_binding(
-    mut target: Handle<Module>,
+    target: Handle<Module>,
     target_name: Handle<Symbol>,
     origin: Handle<Module>,
     origin_name: Handle<Symbol>,
@@ -777,16 +769,12 @@ pub fn scm_alias_binding(
         let g = scm_find_binding(origin, origin_name, SCM_BINDING_EXTERNAL);
         if let Some(g) = g {
             let mods = MODULES.lock(true);
-            target.external.put(
-                Thread::current(),
-                target_name,
-                Value::encode_object_value(g),
-            );
-            target.internal.put(
-                Thread::current(),
-                target_name,
-                Value::encode_object_value(g),
-            );
+            target
+                .external
+                .put(target_name, Value::encode_object_value(g));
+            target
+                .internal
+                .put(target_name, Value::encode_object_value(g));
             drop(mods);
             Ok(true)
         } else {
@@ -985,7 +973,7 @@ pub fn scm_export_symbols(mut module: Handle<Module>, specs: Value) -> Result<()
                 }
             };
 
-            module.external.put(t, exported_name, g.into());
+            module.external.put(exported_name, g.into());
         }
     });
 
@@ -1208,6 +1196,7 @@ extern "C" fn module_p(cfr: &mut CallFrame) -> ScmResult {
     ScmResult::ok(Value::encode_bool_value(module.is_module()))
 }
 
+#[allow(dead_code)]
 extern "C" fn module_export_all(cfr: &mut CallFrame) -> ScmResult {
     let module = cfr.argument(0);
 

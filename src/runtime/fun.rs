@@ -97,9 +97,12 @@ pub fn scm_make_closed_native_procedure(
         proc.captures
             .as_mut_ptr()
             .copy_from_nonoverlapping(captures.as_ptr(), captures.len());
+       
     }
 
-    unsafe { proc.assume_init() }
+    unsafe { 
+      
+        proc.assume_init() }
 }
 
 pub fn scm_make_subr(

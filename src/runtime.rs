@@ -6,7 +6,7 @@ use self::{
     structure::{is_struct_instance, struct_ref},
 };
 use crate::vm::interpreter::TRAMPOLINE_INSTALLED;
-use rsgc::{thread::Thread, heap::heap::heap};
+use rsgc::thread::Thread;
 
 #[macro_use]
 pub mod list;
@@ -16,14 +16,15 @@ pub mod arith;
 pub mod arithfun;
 pub mod base;
 pub mod bigint;
-pub mod dload;
+pub mod bitwise;
 pub mod bytevector;
 pub mod cmp;
 pub mod complex;
-pub mod file;
 pub mod cont;
 pub mod date;
+pub mod dload;
 pub mod error;
+pub mod file;
 pub mod foreign;
 pub mod fun;
 pub mod gc;
@@ -45,7 +46,6 @@ pub mod sync;
 pub mod tuple;
 pub mod value;
 pub mod values;
-pub mod bitwise;
 
 pub(crate) fn init() {
     base::init_base();
@@ -73,8 +73,7 @@ pub(crate) fn init() {
     //crate::vm::jit::baseline::init_baseline();
     // load necessary files
     let t = Thread::current();
-    let start = std::time::Instant::now();
-   
+
     match scm_require(
         make_string(t, "capy").into(),
         0,
@@ -94,7 +93,7 @@ pub(crate) fn init() {
             std::process::exit(1);
         }
     }
-    println!("Loaded standard library in {:?}", start.elapsed());
+
     TRAMPOLINE_INSTALLED.store(true, std::sync::atomic::Ordering::Release);
     /*scm_require(
         make_string(t, "capy/list").into(),

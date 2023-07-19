@@ -147,6 +147,7 @@ unsafe impl Object for Pair {
 
 unsafe impl Allocation for Pair {}
 
+
 #[repr(C)]
 pub struct Vector {
     pub(crate) object: ObjectHeader,
@@ -158,6 +159,7 @@ unsafe impl Object for Vector {
     fn trace_range(&self, from: usize, to: usize, visitor: &mut dyn rsgc::prelude::Visitor) {
         for i in from..to {
             unsafe {
+                assert!(i < self.length as usize);
                 self.data.get_unchecked(i).trace(visitor);
             }
         }
@@ -229,24 +231,6 @@ unsafe impl Allocation for Symbol {
     const VARSIZE_OFFSETOF_VARPART: usize = offset_of!(Symbol, data);
 }
 
-#[repr(C)]
-pub struct BigNum {
-    pub(crate) object: ObjectHeader,
-    pub(crate) length: u32,
-    pub(crate) _pad: u32,
-    pub(crate) data: [u32; 0],
-}
-
-unsafe impl Object for BigNum {}
-
-unsafe impl Allocation for BigNum {
-    const VARSIZE: bool = true;
-    const VARSIZE_ITEM_SIZE: usize = size_of::<u32>();
-    const VARSIZE_NO_HEAP_PTRS: bool = true;
-    const VARSIZE_OFFSETOF_CAPACITY: usize = offset_of!(BigNum, length);
-    const VARSIZE_OFFSETOF_LENGTH: usize = offset_of!(BigNum, length);
-    const VARSIZE_OFFSETOF_VARPART: usize = offset_of!(BigNum, data);
-}
 
 #[repr(C)]
 pub struct Complex {
@@ -292,7 +276,11 @@ impl Str {
     }
 }
 
-unsafe impl Object for Str {}
+unsafe impl Object for Str {
+    fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
+        self.string.trace(visitor);
+    }
+}
 unsafe impl Allocation for Str {}
 
 impl Deref for Str {
@@ -608,6 +596,7 @@ impl Index<usize> for CodeBlock {
     type Output = u8;
 
     fn index(&self, index: usize) -> &Self::Output {
+        debug_assert!(index < self.code_len as usize);
         unsafe { self.code.get_unchecked(index) }
     }
 }
@@ -617,12 +606,13 @@ unsafe impl Object for CodeBlock {
         self.name.trace(visitor);
         self.literals.trace(visitor);
         self.fragments.trace(visitor);
+        self.ranges.trace(visitor);
     }
 }
 
 unsafe impl Allocation for CodeBlock {
     const DESTRUCTIBLE: bool = true;
-    const FINALIZE: bool = true;
+
     const VARSIZE: bool = true;
     const VARSIZE_ITEM_SIZE: usize = 1;
     const VARSIZE_NO_HEAP_PTRS: bool = true;
@@ -681,7 +671,10 @@ unsafe impl Object for NativeProcedure {
     }
 }
 
-unsafe impl Allocation for NativeProcedure {}
+
+unsafe impl Allocation for NativeProcedure {
+  
+}
 
 #[repr(C)]
 pub struct ClosedNativeProcedure {
@@ -869,6 +862,7 @@ pub struct Macro {
 unsafe impl Object for Macro {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
         self.transformer.trace(visitor);
+        self.name.trace(visitor);
     }
 }
 

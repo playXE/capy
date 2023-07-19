@@ -12,7 +12,6 @@ use rsgc::{
     system::collections::hashmap::{Entry, HashMap},
     thread::Thread,
 };
-use std::collections::hash_map::RandomState;
 pub fn scm_outermost_identifier(mut id: Handle<Identifier>) -> Handle<Identifier> {
     while id.name.is_xtype(Type::Identifier) {
         id = id.name.identifier();
@@ -99,11 +98,11 @@ impl UnwrapCtx {
             *loc = ref_.reader_reference().value;
         } else {
             self.refs
-                .put(Thread::current(), loc as *mut Value as usize, ref_);
+                .put( loc as *mut Value as usize, ref_);
         }
     }
 
-    fn fill_history(entry: Entry<'_, Value, Value, RandomState>, value: Value) {
+    fn fill_history(entry: Entry<'_, Value, Value>, value: Value) {
         match entry {
             Entry::Vacant(entry) => {
                 entry.insert(value);
@@ -214,8 +213,8 @@ impl UnwrapCtx {
 
 pub fn scm_unwrap_syntax(form: Value, immutable: bool) -> Value {
     let mut ctx = UnwrapCtx {
-        history: HashMap::with_hasher_and_capacity(RandomState::new(), 16),
-        refs: HashMap::with_hasher_and_capacity(RandomState::new(), 16),
+        history: HashMap::new(Thread::current()),
+        refs: HashMap::new(Thread::current()),
         immutable,
     };
 

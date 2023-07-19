@@ -241,7 +241,7 @@ impl<'a> Reader<'a> {
     }
 
     pub fn put_note(&mut self, key: Value, value: Value) {
-        self.notes.unwrap().put(self.vm.mutator(), key, value);
+        self.notes.unwrap().put(key, value);
     }
 
     pub fn done(self) -> Result<(), Value> {

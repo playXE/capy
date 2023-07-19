@@ -2,14 +2,13 @@
 //!  
 //! Implementation of FASL for serializating Scheme objects to binary files.
 
-use std::collections::hash_map::RandomState;
 
 use rsgc::{
     prelude::Handle,
     system::{
         arraylist::ArrayList,
         collections::hashmap::{Entry, HashMap},
-    },
+    }, thread::Thread,
 };
 
 use crate::{
@@ -56,7 +55,7 @@ impl<'a> FASLPrinter<'a> {
     pub fn new(port: Handle<Port>, vm: &'a mut VM) -> Self {
         Self {
             port,
-            lites: HashMap::with_hasher_and_capacity(RandomState::new(), 4),
+            lites: HashMap::new(Thread::current()),
             stack: ArrayList::with_capacity(vm.mutator(), 4),
             bad: Value::encode_bool_value(false),
             vm,

@@ -1166,20 +1166,20 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                 }
 
                 Opcode::ClosureRefUnbox => {
-                    let ix = read2!();
+                    let ix = read2!() as u32;
 
                     let callee = (*cfr).callee.procedure();
-
+                    debug_assert!(ix < callee.env_size);
                     let val = callee.captures.as_ptr().add(ix as _).read();
                     let val = val.box_ref();
                     push!(val);
                 }
 
                 Opcode::ClosureRef => {
-                    let ix = read2!();
+                    let ix = read2!() as u32;
 
-                    let callee = (*cfr).callee.procedure();
-
+                    let callee: Handle<Procedure> = (*cfr).callee.procedure();
+                    debug_assert!(ix < callee.env_size);
                     push!(callee.captures.as_ptr().add(ix as _).read());
                 }
 

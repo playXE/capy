@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use std::{collections::hash_map::RandomState, mem::transmute};
+use std::mem::transmute;
 
 use super::{
     error::*,
@@ -1503,11 +1503,11 @@ fn _make_struct_type(
 
     if props.is_pair() {
         let mut num_props = count_props(props);
-        let mut can_override = HashMap::with_hasher_and_capacity(RandomState::new(), 4);
+        let can_override = HashMap::new(Thread::current());
         let mut ji = 0;
         for i in 0..struct_type.props.len() {
             let prop = struct_type.props[i];
-            can_override.put(Thread::current(), prop, true);
+            can_override.put(prop, true);
             ji = i;
         }
         let mut skip_supers = false;
@@ -1547,7 +1547,7 @@ fn _make_struct_type(
                     skip_supers = true;
                 }
                 println!("overriden");
-                can_override.put(Thread::current(), prop, false);
+                can_override.put(prop, false);
             } else {
                 num_props += 1;
             }

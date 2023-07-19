@@ -1361,7 +1361,7 @@ unsafe impl Allocation for BigInt {
     const VARSIZE_ITEM_SIZE: usize = size_of::<u32>();
     const VARSIZE_NO_HEAP_PTRS: bool = true;
     const VARSIZE_OFFSETOF_LENGTH: usize = 0;
-    const VARSIZE_OFFSETOF_CAPACITY: usize = 0;
+    const VARSIZE_OFFSETOF_CAPACITY: usize = offset_of!(Self, count);
     const VARSIZE_OFFSETOF_VARPART: usize = offset_of!(Self, uwords);
 }
 

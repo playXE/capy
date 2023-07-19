@@ -1,10 +1,3 @@
-use rsgc::{
-    prelude::Handle,
-    system::{array::Array, arraylist::ArrayList},
-    thread::Thread,
-};
-use std::{collections::HashMap, ptr::null};
-
 use crate::{
     compaux::scm_unwrap_identifier,
     compile::LetScope,
@@ -14,17 +7,33 @@ use crate::{
     runtime::value::Value,
     runtime::vector::make_vector_from_slice,
 };
+use rsgc::system::collections::hash::*;
+use rsgc::{
+    prelude::{Allocation, Handle, Object},
+    system::{array::Array, arraylist::ArrayList},
+    thread::Thread,
+};
+use std::ptr::null;
 
 use super::{AsmOperand, IForm, LVar, Lambda};
 
 struct BindingGroup {
-    bindings: HashMap<usize, usize>,
-    parent: Option<Box<BindingGroup>>,
+    bindings: Handle<HashMap<Handle<LVar>, usize>>,
+    parent: Option<Handle<BindingGroup>>,
 }
+
+unsafe impl Object for BindingGroup {
+    fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {
+        self.bindings.trace(visitor);
+        self.parent.trace(visitor);
+    }
+}
+
+unsafe impl Allocation for BindingGroup {}
 
 impl BindingGroup {
     pub fn lookup(&self, lvar: Handle<LVar>) -> Option<usize> {
-        if let Some(&ix) = self.bindings.get(&(lvar.as_ptr() as usize)) {
+        if let Some(&ix) = self.bindings.get(&lvar) {
             Some(ix)
         } else if let Some(ref parent) = self.parent {
             parent.lookup(lvar)
@@ -35,20 +44,16 @@ impl BindingGroup {
 }
 
 struct CaptureGroup {
-    captures: Vec<usize>,
+    captures: ArrayList<Handle<LVar>>,
 }
 
 impl CaptureGroup {
     pub fn capture(&mut self, lvar: Handle<LVar>) -> usize {
-        if let Some(ix) = self
-            .captures
-            .iter()
-            .position(|&x| x == lvar.as_ptr() as usize)
-        {
+        if let Some(ix) = self.captures.iter().position(|&x| x == lvar) {
             ix
         } else {
             let ix = self.captures.len();
-            self.captures.push(lvar.as_ptr() as usize);
+            self.captures.push(Thread::current(), lvar);
             ix
         }
     }
@@ -56,7 +61,7 @@ impl CaptureGroup {
 
 pub struct ByteCompiler {
     parent: Option<*mut ByteCompiler>,
-    group: Box<BindingGroup>,
+    group: Handle<BindingGroup>,
     captures: CaptureGroup,
     num_locals: usize,
     max_locals: usize,
@@ -67,12 +72,13 @@ pub struct ByteCompiler {
     pub ranges: Option<ArrayList<((u32, u32), Value, Value)>>,
 }
 
+
 impl ByteCompiler {
-    pub fn new(thread: &mut Thread) -> Self {
-        Self {
+    pub fn new(thread: &mut Thread) -> Box<Self> {
+        Box::new(Self {
             note: None,
             captures: CaptureGroup {
-                captures: Vec::new(),
+                captures: ArrayList::with_capacity(thread, 8),
             },
             code: Vec::new(),
             literals: ArrayList::with_capacity(thread, 16),
@@ -81,11 +87,11 @@ impl ByteCompiler {
             max_locals: 0,
             parent: None,
             ranges: Some(ArrayList::with_capacity(thread, 4)),
-            group: Box::new(BindingGroup {
-                bindings: HashMap::new(),
+            group: Thread::current().allocate(BindingGroup {
+                bindings: HashMap::new(thread),
                 parent: None,
             }),
-        }
+        })
     }
 
     pub fn next_local_index(&mut self) -> usize {
@@ -231,14 +237,14 @@ impl ByteCompiler {
     }
 
     pub fn bind(&mut self, lvar: Handle<LVar>, ix: usize) {
-        self.group.bindings.insert(lvar.as_ptr() as usize, ix);
+        self.group.bindings.put(lvar, ix);
     }
 
     pub fn compile_lambda(&mut self, thread: &mut Thread, lam: &Lambda) {
         let mut closure_compiler = ByteCompiler {
             note: self.note,
             captures: CaptureGroup {
-                captures: Vec::new(),
+                captures: ArrayList::with_capacity(thread, 8),
             },
             ranges: Some(ArrayList::with_capacity(thread, 4)),
             code: Vec::new(),
@@ -247,8 +253,8 @@ impl ByteCompiler {
             num_locals: 0,
             max_locals: 0,
             parent: Some(self),
-            group: Box::new(BindingGroup {
-                bindings: HashMap::new(),
+            group: Thread::current().allocate(BindingGroup {
+                bindings: HashMap::new(thread),
                 parent: None,
             }),
         };
@@ -308,16 +314,21 @@ impl ByteCompiler {
             let proc = make_procedure(thread, code);
             self.emit_load(thread, proc.into());
         } else {
-            let captures = std::mem::take(&mut closure_compiler.captures.captures);
-            for capture in captures.iter().copied().rev() {
+            
+            /*for capture in captures.iter().copied().rev() {
                 let lvar = unsafe { std::mem::transmute::<_, Handle<LVar>>(capture) };
                 self.resolve_local(lvar, false);
+            }*/
+            for i in (0..closure_compiler.captures.captures.len()).rev() {
+                let lvar = closure_compiler.captures.captures[i];
+                self.resolve_local(lvar, false);
             }
+            let len = closure_compiler.captures.captures.len();
 
             self.emit_load(thread, code.into());
             self.emit_simple(Opcode::MakeClosure);
             self.code
-                .extend_from_slice(&(captures.len() as u16).to_le_bytes());
+                .extend_from_slice(&(len as u16).to_le_bytes());
         }
     }
 
@@ -500,9 +511,10 @@ impl ByteCompiler {
 
             IForm::Let(var) => {
                 origin = var.origin;
-                let mut group = Box::new(BindingGroup {
+                let bindings = HashMap::new(thread);
+                let mut group = thread.allocate(BindingGroup {
                     parent: None,
-                    bindings: HashMap::new(),
+                    bindings,
                 });
 
                 let init_locals = self.num_locals;
@@ -511,7 +523,7 @@ impl ByteCompiler {
                     LetScope::Let => {
                         for (i, &lvar) in var.lvars.iter().enumerate() {
                             let index = self.next_local_index();
-                            group.bindings.insert(lvar.as_ptr() as usize, index);
+                            group.bindings.put(lvar, index);
 
                             let init = var.inits[i];
                             self.compile_iform(thread, init, false);
@@ -532,7 +544,7 @@ impl ByteCompiler {
                     LetScope::Rec => {
                         for (_, &lvar) in var.lvars.iter().enumerate() {
                             let index = self.next_local_index();
-                            group.bindings.insert(lvar.as_ptr() as usize, index);
+                            group.bindings.put(lvar, index);
 
                             if !lvar.is_immutable() {
                                 self.emit_simple(Opcode::PushUndef);
@@ -551,7 +563,7 @@ impl ByteCompiler {
                             let init = var.inits[i];
                             self.compile_iform(thread, init, false);
 
-                            let index = self.group.bindings[&(lvar.as_ptr() as usize)];
+                            let index = *self.group.bindings.get(&lvar).unwrap();
 
                             if lvar.is_immutable() {
                                 self.emit_lset(index as _);

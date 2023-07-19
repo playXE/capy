@@ -195,7 +195,7 @@
         ; draw GC percentage
         (let-values ([(unused available max) (gc-stats)])
             (let ([used (- max available)])
-                (set-window-title (format "Snake! | GC: ~a%" (quotient (* used 100) max)))))
+                (set-window-title (format "Snake! | GC: ~a% | FPS: ~a" (quotient (* used 100) max) (get-fps)))))
         (if (not game-over?)
             (begin (do ([i 0 (+ i 1)])
                 [(= i (+ (quotient screen-width square-size) 1)) i]

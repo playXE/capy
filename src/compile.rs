@@ -1,3 +1,5 @@
+use std::hash::Hash;
+
 use crate::{
     compaux::{scm_identifier_env, scm_identifier_global_binding, scm_make_identifier},
     op::Opcode,
@@ -110,6 +112,21 @@ pub struct LVar {
     pub ref_count: usize,
     pub set_count: usize,
 }
+
+impl Hash for LVar {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        let ptr = self as *const _ as *const u8;
+        ptr.hash(state);
+    }
+}
+
+impl PartialEq for LVar {
+    fn eq(&self, other: &Self) -> bool {
+        self as *const _ == other as *const _
+    }
+}
+
+impl Eq for LVar {}
 
 unsafe impl Object for LVar {
     fn trace(&self, visitor: &mut dyn rsgc::prelude::Visitor) {

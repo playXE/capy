@@ -1,11 +1,7 @@
 #![allow(dead_code)]
-use std::collections::hash_map::RandomState;
-
 use rsgc::prelude::Handle;
 use rsgc::system::collections::hashmap::HashMap;
-
 use crate::compaux::scm_outermost_identifier;
-
 use super::bigint::BigInt;
 use super::fun::SCM_PRIM_TYPE_PARAMETER;
 use super::port::*;
@@ -251,7 +247,7 @@ impl<'a> Printer<'a> {
         }
     }
 
-    pub fn scan(&mut self, mut ht: Handle<HashMap<Value, Value>>, obj: Value) {
+    pub fn scan(&mut self, ht: Handle<HashMap<Value, Value>>, obj: Value) {
         let value = ht.get(&obj);
 
         if let Some(val) = value {
@@ -260,20 +256,20 @@ impl<'a> Printer<'a> {
             }
 
             if val.is_false() {
-                ht.put(self.vm.mutator(), obj, Value::encode_bool_value(true));
+                ht.put(obj, Value::encode_bool_value(true));
                 return;
             }
         }
 
         if obj.is_pair() {
-            ht.put(self.vm.mutator(), obj, Value::encode_bool_value(false));
+            ht.put(obj, Value::encode_bool_value(false));
             self.scan(ht, obj.car());
             self.scan(ht, obj.cdr());
             return;
         }
 
         if obj.is_vector() {
-            ht.put(self.vm.mutator(), obj, Value::encode_bool_value(false));
+            ht.put(obj, Value::encode_bool_value(false));
             let len = obj.vector_len();
             for i in 0..len {
                 self.scan(ht, obj.vector_ref(i));
@@ -282,7 +278,7 @@ impl<'a> Printer<'a> {
         }
 
         if obj.is_struct() {
-            ht.put(self.vm.mutator(), obj, Value::encode_bool_value(false));
+            ht.put(obj, Value::encode_bool_value(false));
             let s = obj.structure();
             let len = s.slots.len();
             for i in 0..len {
@@ -293,7 +289,7 @@ impl<'a> Printer<'a> {
     }
 
     pub fn write(&mut self, obj: Value) -> Result<(), Value> {
-        let ht = HashMap::with_hasher_and_capacity(RandomState::new(), 4);
+        let ht = HashMap::new(self.vm.mutator());
         self.scan(ht, obj);
         self._write(Some(ht), obj)
     }

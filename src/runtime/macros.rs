@@ -104,6 +104,7 @@ unsafe impl Object for SyntaxRules {
         }
         for i in from..to {
             unsafe {
+                assert!(i < self.num_init_rules as usize, "Index out of bounds");
                 let branch = self.rules.get_unchecked(i);
 
                 branch.pattern.trace(visitor);
@@ -1105,8 +1106,6 @@ fn realize_template_rec(
                 exlev,
             );
 
-            //println!("realize template {:?} to {:?}", pat.pattern, r);
-
             if r.is_undefined() {
                 if *exlev < pat.level as i32 {
                     return r;
@@ -1168,8 +1167,9 @@ pub fn synrule_expand(
     let mut mvec = alloc_mvec(sr.max_num_pvars as _);
 
     for i in 0..sr.num_rules {
+        t.write_barrier(mvec);
         init_mvec(&mut mvec);
-        //println!("pattern #{:?}: {:?}", i, sr[i as usize].pattern);
+        
         if match_synrule(
             t,
             form.cdr(),
@@ -1178,12 +1178,6 @@ pub fn synrule_expand(
             env,
             &mut mvec,
         ) {
-            /*print!("success #{:?}:", i);
-            for i in 0..sr[i as usize].num_pvars {
-                print!("{:?} ", mvec[i as usize]);
-            }
-
-            println!();*/
             let expanded = realize_template(t, sr, &sr[i as usize], &mvec);
 
             return Ok(expanded);
