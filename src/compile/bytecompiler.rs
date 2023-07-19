@@ -100,8 +100,8 @@ impl ByteCompiler {
             num_locals: 0,
             max_locals: 0,
             parent: None,
-            ranges: None,
-            //ranges: Some(ArrayList::with_capacity(thread, 4)),
+            //ranges: None,
+            ranges: Some(ArrayList::with_capacity(thread, 4)),
             group: Thread::current().allocate(BindingGroup {
                 bindings: HashMap::new(thread),
                 parent: None,
@@ -286,8 +286,8 @@ impl ByteCompiler {
             captures: CaptureGroup {
                 captures: ArrayList::with_capacity(thread, 8),
             },
-            ranges: None,
-            //ranges: Some(ArrayList::with_capacity(thread, 4)),
+
+            ranges: Some(ArrayList::with_capacity(thread, 4)),
             code: ArrayList::with_capacity(thread, 128),
             literals: ArrayList::with_capacity(thread, 16),
             fragments: ArrayList::with_capacity(thread, 4),
@@ -325,9 +325,7 @@ impl ByteCompiler {
         if lam.optarg {
             let lvar = lam.lvars[lam.lvars.len() - 1];
             closure_compiler.emit_simple(Opcode::CollectRest);
-            /*closure_compiler
-            .code
-            .extend_from_slice(&(lam.lvars.len() as u16 - 1).to_le_bytes());*/
+
             closure_compiler.emit_u16(lam.lvars.len() as u16 - 1);
 
             let ix = closure_compiler.next_local_index();
@@ -718,10 +716,12 @@ impl ByteCompiler {
         let end = self.code.len();
         let note = self.note;
         if let (Some(ref mut ranges), Some(note)) = (self.ranges.as_mut(), note) {
+            
             let note = note
                 .get(&origin)
                 .copied()
                 .unwrap_or(Value::encode_null_value());
+            
             if !note.is_null() {
                 ranges.push(thread, ((start as _, end as _), note, origin));
             }

@@ -1154,6 +1154,9 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                     if likely(constant.is_xtype(Type::GLOC)) {
                         push!(constant.gloc().value);
                     } else {
+                        vm.sp = sp;
+                        vm.top_call_frame = cfr;
+                        vm.ip = pc;
                         let (value, gloc) =
                             catch!(scm_identifier_global_ref(constant.identifier()));
 
@@ -1202,6 +1205,9 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                         // set the value directly since GLOC is already resolved.
                         constant.gloc().value = value;
                     } else {
+                        vm.sp = sp;
+                        vm.top_call_frame = cfr;
+                        vm.ip = pc;
                         // try to resolve the GLOC first and then set the value.
                         // also caches the resolved GLOC in the literal vector.
                         let gloc = catch!(scm_identifier_global_set(constant.identifier(), value));

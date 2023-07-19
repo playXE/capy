@@ -15,6 +15,7 @@ use rsgc::heap::heap::heap;
 use rsgc::heap::root_processor::SimpleRoot;
 use rsgc::prelude::{Handle, Object};
 use rsgc::sync::mutex::{Condvar, RawMutex};
+use rsgc::system::collections::hash::HashMap;
 use rsgc::thread::Thread;
 
 use super::error::wrong_contract;
@@ -87,7 +88,7 @@ pub fn scm_load_from_port(port: Handle<Port>, environment: Value) -> Result<Valu
         let mut reader = Reader::new(scm_vm(), port, false);
 
         let mut s;
-        /*let note = HashMap::new(Thread::current());
+        let note = HashMap::new(Thread::current());
         let prev = scm_vm().current_notes.take();
         scm_vm().current_notes = Some(note);
         loop {
@@ -102,17 +103,8 @@ pub fn scm_load_from_port(port: Handle<Port>, environment: Value) -> Result<Valu
             })?;
         }
 
-        scm_vm().current_notes = prev;*/
+        scm_vm().current_notes = prev;
 
-        loop {
-            s = reader.read(None)?;
-
-            if s.is_eof_object() {
-                break;
-            }
-
-            last = scm_eval(s, Value::encode_bool_value(false), None)?;
-        }
 
         Ok(last)
     })();

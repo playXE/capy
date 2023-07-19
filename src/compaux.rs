@@ -1,12 +1,15 @@
-use crate::runtime::{
-    list::scm_cons,
-    module::{scm_find_binding, SCM_BINDING_STAY_IN_MODULE},
-    object::{Identifier, Module, ObjectHeader, ReaderReference, Symbol, Type, GLOC},
-    string::make_string,
-    value::Value,
-    vector::make_vector,
-};
 use crate::scm_for_each;
+use crate::{
+    raise_exn,
+    runtime::{
+        list::scm_cons,
+        module::{scm_find_binding, SCM_BINDING_STAY_IN_MODULE},
+        object::{Identifier, Module, ObjectHeader, ReaderReference, Symbol, Type, GLOC},
+       
+        value::Value,
+        vector::make_vector,
+    },
+};
 use rsgc::{
     prelude::Handle,
     system::collections::hashmap::{Entry, HashMap},
@@ -97,8 +100,7 @@ impl UnwrapCtx {
         if ref_.is_reader_reference_realized() {
             *loc = ref_.reader_reference().value;
         } else {
-            self.refs
-                .put( loc as *mut Value as usize, ref_);
+            self.refs.put(loc as *mut Value as usize, ref_);
         }
     }
 
@@ -238,11 +240,7 @@ pub fn scm_identifier_global_ref(id: Handle<Identifier>) -> Result<(Value, Handl
         return Ok((gloc.value, gloc));
     }
 
-    Err(make_string(
-        Thread::current(),
-        &format!("unbound variable: {}", scm_unwrap_identifier(id)),
-    )
-    .into())
+    raise_exn!(Fail, &[], "unbound variable: {}", scm_unwrap_identifier(id))
 }
 
 pub fn scm_identifier_global_set(
@@ -259,20 +257,22 @@ pub fn scm_identifier_global_set(
 
     if gloc.is_none() {
         if let Some(gloc) = scm_find_binding(z.module.module(), z.name.symbol(), 0) {
-            return Err(make_string(
+            /*return Err(make_string(
                 Thread::current(),
                 &format!(
                     "Can't mutate binding of '{:?}' which is in another module",
                     gloc.name
                 ),
             )
-            .into());
-        } else {
-            return Err(make_string(
-                Thread::current(),
-                &format!("unbound variable: {}", scm_unwrap_identifier(id)),
+            .into());*/
+            return raise_exn!(
+                Fail,
+                &[],
+                "Can't mutate binding of '{:?}' which is in another module",
+                gloc.name
             )
-            .into());
+        } else {
+            return raise_exn!(Fail, &[], "unbound variable: {}", scm_unwrap_identifier(z))
         }
     }
 

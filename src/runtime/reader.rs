@@ -1051,6 +1051,7 @@ impl<'a> Reader<'a> {
 
             if delimited(c) {
                 buf[i] = 0;
+
                 return Ok(make_symbol(std::str::from_utf8(&buf[..i]).unwrap(), true).into());
             }
 
