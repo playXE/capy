@@ -327,7 +327,7 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
             
             macro_rules! read1 {
                 () => {{
-                    let val = pc.read();
+                    let val = pc.read_unaligned();
                     pc = pc.add(1);
                     val
                 }};
@@ -335,7 +335,7 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
 
             macro_rules! read2 {
                 () => {{
-                    let val = pc.cast::<u16>().read();
+                    let val = pc.cast::<u16>().read_unaligned();
                     pc = pc.add(2);
                     val
                 }};
@@ -343,7 +343,7 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
 
             macro_rules! read4 {
                 () => {{
-                    let val = pc.cast::<u32>().read();
+                    let val = pc.cast::<u32>().read_unaligned();
                     pc = pc.add(4);
                     val
                 }};
@@ -351,7 +351,7 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
 
             macro_rules! read8 {
                 () => {{
-                    let val = pc.cast::<u64>().read();
+                    let val = pc.cast::<u64>().read_unaligned();
                     pc = pc.add(8);
                     val
                 }};
