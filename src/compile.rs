@@ -118,6 +118,12 @@ pub struct LVar {
     pub set_count: usize,
 }
 
+impl std::fmt::Debug for LVar {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<lvar {}.{:p}>", self.name, self)
+    }
+}
+
 impl Hash for LVar {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         let ptr = self as *const _ as *const u8;

@@ -145,7 +145,8 @@ unsafe impl Object for Pair {
     }
 }
 
-unsafe impl Allocation for Pair {}
+unsafe impl Allocation for Pair {
+}
 
 
 #[repr(C)]
@@ -671,9 +672,15 @@ unsafe impl Object for NativeProcedure {
     }
 }
 
-
+ 
 unsafe impl Allocation for NativeProcedure {
-  
+//    const FINALIZE: bool = false;
+}
+
+impl Drop for NativeProcedure {
+    fn drop(&mut self) {
+
+    }
 }
 
 #[repr(C)]

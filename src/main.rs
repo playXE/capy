@@ -17,7 +17,7 @@ pub struct Args {
 
 fn main() {
     env_logger::init();
-
+    
     let _ = main_thread(HeapArguments::from_env(), |heap| {
         heap.add_core_root_set();
         capy::vm::scm_init_vm();

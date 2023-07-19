@@ -419,7 +419,6 @@ pub fn define_syntax() {
     }
 
     define_syntax!("define", None, form, cenv, {
-        println!("define: {:?}", form);
         pass1_define(form, form, false, false, cenv_module(cenv), cenv)
     });
 
