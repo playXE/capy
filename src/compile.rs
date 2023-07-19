@@ -95,7 +95,12 @@ unsafe impl Object for IForm {
             IForm::Cons(c) => c.trace(visitor),
             IForm::List(l) => l.trace(visitor),
             IForm::Define(d) => d.trace(visitor),
-            IForm::Asm(a) => a.args.trace(visitor),
+            IForm::Asm(a) => {
+                a.args.trace(visitor);
+                if let Some(operands) = &a.operands {
+                    operands.trace(visitor);
+                }
+            },
             _ => (),
         }
     }

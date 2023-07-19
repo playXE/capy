@@ -23,7 +23,7 @@ pub fn scm_eqv(x: Value, y: Value) -> bool {
 }
 
 pub fn scm_equal(x: Value, y: Value) -> bool {
-    println!("{:x} {:x}", x.get_raw(), y.get_raw());
+    
     if x.is_double() && y.is_double() {
         return x.get_double() == y.get_double();
     }
