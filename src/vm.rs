@@ -75,10 +75,7 @@ impl VM {
         for rand in rands {
             self.tail_rands.push(t, *rand);
         }
-        ScmResult {
-            tag: ScmResult::TAIL,
-            value: Value::encode_undefined_value(),
-        }
+        ScmResult::tail_raw()
     }
 
     pub fn mutator(&mut self) -> &mut Thread {

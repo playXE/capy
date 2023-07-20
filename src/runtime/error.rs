@@ -35,6 +35,8 @@ use super::{
     value::Value,
 };
 
+pub struct SchemeError(pub Value);
+
 #[macro_export]
 macro_rules! raise_exn {
     ($id:ident, $eargs:expr, $msg:literal $(,)? $($arg:expr),*) => {{
@@ -448,7 +450,7 @@ pub fn finish_exn_impl<T>(
 
     reargs[0] = make_string(Thread::current(), msg).into();
     reargs[1] = make_string(Thread::current(), &get_stacktrace_str(scm_vm())).into(); // cmark
-    
+
     if let Some(errno) = errno_val {
         if id == Exception::FailFilesystem {
             id = Exception::FailFilesystemErrno;
@@ -464,7 +466,7 @@ pub fn finish_exn_impl<T>(
             id = Exception::FailUnsupported;
         }
     }
-    
+
     let instance = make_struct_instance_(EXN_TABLE[id as usize].typ, &reargs[0..c])?;
 
     Err(instance)
@@ -748,7 +750,7 @@ fn do_raise_range_error(who: &str, args: &[Value]) -> ScmResult {
         args[6],
     ) {
         Ok(_) => unreachable!(),
-        Err(e) => ScmResult::err(e),
+        Err(e) => ScmResult::ok(e),
     }
 }
 
@@ -1177,16 +1179,14 @@ extern "C" fn make_result_arity_error(cfr: &mut CallFrame) -> ScmResult {
     } else if args[0].is_symbol() {
         args[0].strsym()
     } else {
-        return ScmResult::err(
-            wrong_contract::<()>(
-                "raise-result-arity-error",
-                "(or/c #f symbol?)",
-                0,
-                args.len() as _,
-                args,
-            )
-            .unwrap_err(),
-        );
+        return wrong_contract::<()>(
+            "raise-result-arity-error",
+            "(or/c #f symbol?)",
+            0,
+            args.len() as _,
+            args,
+        )
+        .into();
     };
 
     let expected = if args[1].is_int32() {
@@ -1198,16 +1198,14 @@ extern "C" fn make_result_arity_error(cfr: &mut CallFrame) -> ScmResult {
     };
 
     if expected < 1 {
-        return ScmResult::err(
-            wrong_contract::<()>(
-                "raise-result-arity-error",
-                "exact-nonnegative-integer?",
-                1,
-                args.len() as _,
-                args,
-            )
-            .unwrap_err(),
-        );
+        return wrong_contract::<()>(
+            "raise-result-arity-error",
+            "exact-nonnegative-integer?",
+            1,
+            args.len() as _,
+            args,
+        )
+        .into();
     }
 
     let detail = if args[2].is_false() {
@@ -1215,16 +1213,14 @@ extern "C" fn make_result_arity_error(cfr: &mut CallFrame) -> ScmResult {
     } else if args[2].is_string() {
         args[2].strsym()
     } else {
-        return ScmResult::err(
-            wrong_contract::<()>(
-                "raise-result-arity-error",
-                "(or/c #f string?)",
-                2,
-                args.len() as _,
-                args,
-            )
-            .unwrap_err(),
-        );
+        return wrong_contract::<()>(
+            "raise-result-arity-error",
+            "(or/c #f string?)",
+            2,
+            args.len() as _,
+            args,
+        )
+        .into();
     };
 
     ScmResult::ok(
@@ -1309,11 +1305,12 @@ extern "C" fn scheme_error(cfr: &mut CallFrame) -> ScmResult {
         port_extract_string(port)?
     )
     .unwrap_err();
-    ScmResult::err(err)
+    scm_vm().result = err;
+    std::panic::resume_unwind(Box::new(SchemeError(err)))
 }
 
 extern "C" fn scheme_raise(cfr: &mut CallFrame) -> ScmResult {
-    ScmResult::err(cfr.argument(0))
+    std::panic::resume_unwind(Box::new(SchemeError(cfr.arguments()[0])))
 }
 
 static RAISE_PROC: Lazy<Value> = Lazy::new(|| {

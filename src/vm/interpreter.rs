@@ -20,7 +20,7 @@ use crate::compile::{compile, make_cenv};
 use crate::op::{disassembly, Opcode};
 use crate::raise_exn;
 use crate::runtime::arith::*;
-use crate::runtime::error::{out_of_range, scm_raise_proc, wrong_contract, wrong_count};
+use crate::runtime::error::{out_of_range, scm_raise_proc, wrong_contract, wrong_count, SchemeError};
 use crate::runtime::foreign::scm_foreign_call;
 use crate::runtime::fun::{get_proc_name, make_closed_procedure};
 use crate::runtime::list::{scm_cons, scm_is_list, scm_list};
@@ -267,8 +267,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
 
             if result.is_ok() {
                 leave_frame!(=> Ok(result.value()))
-            } else if result.is_err() {
-                leave_frame!(=> Err(result.value()))
             } else {
                 pc = null();
                 let caller = (*cfr).caller;
@@ -2022,7 +2020,14 @@ pub unsafe fn _vm_entry_trampoline(
     vm.ip = prev_ip;
     match result {
         Ok(val) => val,
-        Err(err) => std::panic::resume_unwind(err),
+        Err(err) => {
+            match err.downcast_ref::<SchemeError>() {
+                Some(err) => Err(err.0),
+                None => {
+                    std::panic::resume_unwind(err);
+                }
+            }
+        }
     }
 }
 
@@ -2079,7 +2084,14 @@ pub unsafe fn _vm_entry_trampoline2(
     vm.ip = ip;
     match result {
         Ok(val) => val,
-        Err(err) => std::panic::resume_unwind(err),
+        Err(err) => {
+            match err.downcast_ref::<SchemeError>() {
+                Some(err) => Err(err.0),
+                None => {
+                    std::panic::resume_unwind(err);
+                }
+            }
+        }
     }
 }
 

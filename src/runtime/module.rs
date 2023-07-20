@@ -278,6 +278,7 @@ fn _make_module(
         prefix: Value::encode_null_value(),
         sealed: false,
         info: Value::encode_null_value(),
+        placeholding: false,
     });
 
     let mpl = scm_cons(t, Value::encode_object_value(module), unsafe {
@@ -340,10 +341,15 @@ pub fn scm_find_module(
     name: Handle<Symbol>,
     create: bool,
     quiet: bool,
+    placeholding: bool,
 ) -> Result<Option<Handle<Module>>, Value> {
     if create {
-        let (m, _created) = lookup_module_create(name);
-
+        let (mut m, created) = lookup_module_create(name);
+        if created && placeholding {
+            m.placeholding = true;
+        } else {
+            m.placeholding = false;
+        }
         Ok(Some(m))
     } else {
         if let Some(m) = lookup_module(name) {
@@ -795,9 +801,9 @@ pub fn scm_import_module(
     let imp = if imported.is_xtype(Type::Module) {
         Some(imported.module())
     } else if imported.is_xtype(Type::Symbol) {
-        scm_find_module(imported.symbol(), false, false)?
+        scm_find_module(imported.symbol(), false, false, false)?
     } else if imported.is_xtype(Type::Identifier) {
-        scm_find_module(scm_unwrap_identifier(imported.identifier()), false, false)?
+        scm_find_module(scm_unwrap_identifier(imported.identifier()), false, false, false)?
     } else {
         //scm_error!("module name or module required, but got {:?}", imported);
         return Err(make_string(Thread::current(), "module name or module required").into());
@@ -1106,7 +1112,7 @@ extern "C" fn find_module(cfr: &mut CallFrame) -> ScmResult {
     let name = cfr.argument(0);
     let create = cfr.argument(1).is_true();
     let quiet = cfr.argument(2).is_true();
-
+    let placeholding = cfr.argument(3).is_true();
     let name: Handle<Symbol> = if name.is_wrapped_identifier() {
         identifier_to_symbol(name.identifier())
     } else if name.is_symbol() {
@@ -1122,7 +1128,7 @@ extern "C" fn find_module(cfr: &mut CallFrame) -> ScmResult {
         .into();
     };
 
-    scm_find_module(name, create, quiet)
+    scm_find_module(name, create, quiet, placeholding)
         .map(|x| {
             x.map(|x| Value::encode_object_value(x))
                 .unwrap_or(Value::encode_bool_value(false))
@@ -1227,7 +1233,7 @@ extern "C" fn module_export_all(cfr: &mut CallFrame) -> ScmResult {
     let mut module = if module.is_module() {
         module.module()
     } else {
-        scm_find_module(module.symbol(), false, false)?.ok_or_else(|| {
+        scm_find_module(module.symbol(), false, false, false)?.ok_or_else(|| {
             raise_exn!((), Fail, &[], "module '{}' not found", module).unwrap_err()
         })?
     };

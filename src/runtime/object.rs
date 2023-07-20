@@ -3,7 +3,7 @@ use std::{
     fmt::{Debug, Display, Formatter},
     hash::Hash,
     mem::{offset_of, size_of},
-    ops::{Deref, DerefMut, FromResidual, Index, IndexMut, Try},
+    ops::{Deref, DerefMut, FromResidual, Index, IndexMut},
 };
 
 use once_cell::sync::Lazy;
@@ -110,7 +110,7 @@ pub enum Type {
     Condition,
     Pointer,
     CIF,
-    Dynlib
+    Dynlib,
 }
 
 #[repr(C)]
@@ -145,9 +145,7 @@ unsafe impl Object for Pair {
     }
 }
 
-unsafe impl Allocation for Pair {
-}
-
+unsafe impl Allocation for Pair {}
 
 #[repr(C)]
 pub struct Vector {
@@ -231,7 +229,6 @@ unsafe impl Allocation for Symbol {
     const VARSIZE_OFFSETOF_LENGTH: usize = offset_of!(Symbol, length);
     const VARSIZE_OFFSETOF_VARPART: usize = offset_of!(Symbol, data);
 }
-
 
 #[repr(C)]
 pub struct Complex {
@@ -490,6 +487,7 @@ pub struct Module {
     pub(crate) prefix: Value,
     pub(crate) info: Value,
     pub(crate) sealed: bool,
+    pub(crate) placeholding: bool,
 }
 
 unsafe impl Object for Module {
@@ -672,15 +670,12 @@ unsafe impl Object for NativeProcedure {
     }
 }
 
- 
 unsafe impl Allocation for NativeProcedure {
-//    const FINALIZE: bool = false;
+    //    const FINALIZE: bool = false;
 }
 
 impl Drop for NativeProcedure {
-    fn drop(&mut self) {
-
-    }
+    fn drop(&mut self) {}
 }
 
 #[repr(C)]
@@ -762,22 +757,17 @@ unsafe impl Allocation for ClosedNativeProcedure {
     const VARSIZE_OFFSETOF_VARPART: usize = offset_of!(ClosedNativeProcedure, captures);
 }
 
+static TAIL_CALL_RESULT: &'static usize = &0xdeadc0de;
+
 #[repr(C)]
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub struct ScmResult {
-    pub(crate) tag: u8,
     pub(crate) value: Value,
 }
 
 impl ScmResult {
-    pub const OK: u8 = 0;
-    pub const TAIL: u8 = 1;
-    pub const ERR: u8 = 2;
-    pub const JIT_ERR: u8 = 3;
-
     pub fn ok(value: impl Into<Value>) -> Self {
         Self {
-            tag: Self::OK,
             value: value.into(),
         }
     }
@@ -789,35 +779,16 @@ impl ScmResult {
 
     pub(crate) fn tail_raw() -> Self {
         Self {
-            tag: Self::TAIL,
-            value: Value::encode_undefined_value(),
-        }
-    }
-
-    pub fn err(value: impl Into<Value>) -> Self {
-        Self {
-            tag: Self::ERR,
-            value: value.into(),
-        }
-    }
-    #[allow(dead_code)]
-    pub(crate) fn jit_err(value: impl Into<Value>) -> Self {
-        Self {
-            tag: Self::JIT_ERR,
-            value: value.into(),
+            value: unsafe { std::mem::transmute(TAIL_CALL_RESULT) },
         }
     }
 
     pub fn is_ok(&self) -> bool {
-        self.tag == Self::OK
+        self.value != unsafe { std::mem::transmute::<_, Value>(TAIL_CALL_RESULT) }
     }
 
     pub fn is_tail(&self) -> bool {
-        self.tag == Self::TAIL
-    }
-
-    pub fn is_err(&self) -> bool {
-        self.tag == Self::ERR
+        self.value == unsafe { std::mem::transmute::<_, Value>(TAIL_CALL_RESULT) }
     }
 
     pub fn value(&self) -> Value {
@@ -874,50 +845,6 @@ unsafe impl Object for Macro {
 }
 
 unsafe impl Allocation for Macro {}
-
-// implement Try trait for ScmResult
-
-impl Try for ScmResult {
-    type Output = Value;
-    type Residual = Value;
-
-    fn branch(self) -> std::ops::ControlFlow<Self::Residual, Self::Output> {
-        match self.tag {
-            ScmResult::OK => std::ops::ControlFlow::Continue(self.value),
-            ScmResult::TAIL => std::ops::ControlFlow::Break(self.value),
-            ScmResult::ERR => std::ops::ControlFlow::Break(self.value),
-            _ => unreachable!(),
-        }
-    }
-
-    fn from_output(output: Self::Output) -> Self {
-        Self {
-            tag: ScmResult::OK,
-            value: output,
-        }
-    }
-}
-
-impl FromResidual<Value> for ScmResult {
-    fn from_residual(residual: Value) -> Self {
-        Self {
-            tag: ScmResult::ERR,
-            value: residual,
-        }
-    }
-}
-
-impl FromResidual<Result<Value, Value>> for ScmResult {
-    fn from_residual(residual: Result<Value, Value>) -> Self {
-        match residual {
-            Ok(val) => ScmResult::ok(val),
-            Err(value) => Self {
-                tag: ScmResult::ERR,
-                value,
-            },
-        }
-    }
-}
 
 #[repr(C)]
 pub struct Tuple {
@@ -983,7 +910,7 @@ impl<T: Object + ?Sized> From<Result<Handle<T>, Value>> for ScmResult {
     fn from(value: Result<Handle<T>, Value>) -> Self {
         match value {
             Ok(val) => Self::ok(Value::encode_object_value(val)),
-            Err(err) => Self::err(err),
+            Err(err) => Self::tail(scm_raise_proc(), &[err]),
         }
     }
 }

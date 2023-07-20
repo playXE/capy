@@ -151,7 +151,8 @@ pub enum Opcode {
     StructPred,
 
     Not,
-
+    EnsureModule,
+    ExportSymbols,
     ForeignCall,
 
     Count,

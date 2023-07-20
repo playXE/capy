@@ -73,7 +73,7 @@ pub(crate) fn init() {
     //crate::vm::jit::baseline::init_baseline();
     // load necessary files
     let t = Thread::current();
-
+    let start = std::time::Instant::now();
     match scm_require(
         make_string(t, "capy").into(),
         0,
@@ -92,7 +92,8 @@ pub(crate) fn init() {
 
             std::process::exit(1);
         }
-    }
+    }   
+    println!("Loaded standard library in {}ms", start.elapsed().as_millis());
 
     TRAMPOLINE_INSTALLED.store(true, std::sync::atomic::Ordering::Release);
     /*scm_require(

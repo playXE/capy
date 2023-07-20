@@ -1635,7 +1635,7 @@ extern "C" fn symbol_hash(cfr: &mut CallFrame) -> ScmResult {
         exn.unwrap_err()
     }) {
         Ok(hash) => hash,
-        Err(err) => return ScmResult::err(err),
+        Err(err) => return Err::<(), _>(err).into(),
     };
     ScmResult::ok(Value::encode_int32(hash as i32))
 }

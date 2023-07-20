@@ -1,5 +1,5 @@
 #![allow(unused_assignments)]
-use std::intrinsics::{likely, unlikely};
+use std::intrinsics::likely;
 use std::mem::size_of;
 use std::panic::AssertUnwindSafe;
 use std::ptr::{null, null_mut};
@@ -70,8 +70,6 @@ pub unsafe fn vm_eval(vm: &mut VM) -> Result<Value, Value> {
                     set!(dst, result.value());
                     println!("ret to {}, {}", dst, result.value());
                 }
-            } else if unlikely(result.is_err()) {
-                todo!()
             } else {
                 let callee = vm.tail_rator;
                 if callee.is_native_procedure() {

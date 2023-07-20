@@ -404,16 +404,14 @@ extern "C" fn prop_accessor(cfr: &mut CallFrame) -> ScmResult {
             prop.struct_property().name.strsym()
         };
 
-        return ScmResult::err(
-            wrong_contract::<()>(
-                get_proc_name(cfr.callee()).unwrap_or(""),
-                ctc,
-                0,
-                1,
-                cfr.arguments(),
-            )
-            .unwrap_err(),
-        );
+        return wrong_contract::<()>(
+            get_proc_name(cfr.callee()).unwrap_or(""),
+            ctc,
+            0,
+            1,
+            cfr.arguments(),
+        )
+        .into();
     } else {
         let v = cfr.argument(1);
         if v.is_procedure() {
@@ -613,7 +611,7 @@ extern "C" fn make_struct_type_property(cfr: &mut CallFrame) -> ScmResult {
 
     let p = match make_struct_type_property_raw(cfr.arguments(), &mut pred, &mut acc) {
         Ok(v) => v,
-        Err(e) => return ScmResult::err(e),
+        Err(e) => return Err::<(), Value>(e).into(),
     };
 
     a[0] = p;
@@ -819,18 +817,16 @@ pub extern "C" fn struct_getter(cfr: &mut CallFrame) -> ScmResult {
     let name = cfr.callee().native_procedure().name.strsym();
     if !inst.is_struct() {
         let pred_name = extract_field_proc_name(st.name, &cfr.callee().closed_native_procedure());
-        return match wrong_contract::<()>(
+        return wrong_contract::<()>(
             name,
             &pred_name,
             0,
             cfr.argument_count() as _,
             cfr.arguments(),
-        ) {
-            Ok(_) => unreachable!(),
-            Err(v) => ScmResult::err(v),
-        };
+        )
+        .into();
     } else if !is_struct_instance(st.into(), inst) {
-        return ScmResult::err(wrong_struct_type(
+        return Err::<(), _>(wrong_struct_type(
             &cfr.callee().closed_native_procedure(),
             name,
             st.name,
@@ -838,7 +834,8 @@ pub extern "C" fn struct_getter(cfr: &mut CallFrame) -> ScmResult {
             0,
             cfr.arguments().len() as _,
             cfr.arguments(),
-        ));
+        ))
+        .into();
     }
 
     let pos = if cfr.arguments().len() == 2 {
@@ -849,7 +846,7 @@ pub extern "C" fn struct_getter(cfr: &mut CallFrame) -> ScmResult {
             cfr.callee().native_procedure().name.strsym(),
         ) {
             Ok(p) => p,
-            Err(e) => return ScmResult::err(e),
+            Err(e) => return Err::<(), _>(e).into(),
         }
     } else {
         cfr.callee().closed_native_procedure()[1].get_int32()
@@ -864,18 +861,16 @@ pub extern "C" fn struct_setter(cfr: &mut CallFrame) -> ScmResult {
     let name = cfr.callee().native_procedure().name.strsym();
     if !inst.is_struct() {
         let pred_name = extract_field_proc_name(st.name, &cfr.callee().closed_native_procedure());
-        return match wrong_contract::<()>(
+        return wrong_contract::<()>(
             name,
             &pred_name,
             0,
             cfr.argument_count() as _,
             cfr.arguments(),
-        ) {
-            Ok(_) => unreachable!(),
-            Err(v) => ScmResult::err(v),
-        };
+        )
+        .into();
     } else if !is_struct_instance(st.into(), inst) {
-        return ScmResult::err(wrong_struct_type(
+        return Err::<(), _>(wrong_struct_type(
             &cfr.callee().closed_native_procedure(),
             name,
             st.name,
@@ -883,7 +878,8 @@ pub extern "C" fn struct_setter(cfr: &mut CallFrame) -> ScmResult {
             0,
             cfr.arguments().len() as _,
             cfr.arguments(),
-        ));
+        ))
+        .into();
     }
     let v;
     let pos = if cfr.arguments().len() == 3 {
@@ -895,7 +891,7 @@ pub extern "C" fn struct_setter(cfr: &mut CallFrame) -> ScmResult {
             cfr.callee().native_procedure().name.strsym(),
         ) {
             Ok(p) => p,
-            Err(e) => return ScmResult::err(e),
+            Err(e) => return Err::<(), _>(e).into(),
         }
     } else {
         v = cfr.argument(1);
@@ -930,7 +926,7 @@ fn check_struct(who: &str, args: &[Value]) -> Result<(), Value> {
 extern "C" fn struct_type_pred(cfr: &mut CallFrame) -> ScmResult {
     match check_struct("struct-type-make-predicate", cfr.arguments()) {
         Ok(()) => (),
-        Err(e) => return ScmResult::err(e),
+        Err(e) => return Err::<(), _>(e).into(),
     }
 
     let stype = cfr.argument(0).struct_type();
@@ -944,7 +940,7 @@ extern "C" fn struct_type_pred(cfr: &mut CallFrame) -> ScmResult {
 extern "C" fn struct_type_constr(cfr: &mut CallFrame) -> ScmResult {
     match check_struct("struct-type-make-constructor", cfr.arguments()) {
         Ok(()) => (),
-        Err(e) => return ScmResult::err(e),
+        Err(e) => return Err::<(), _>(e).into(),
     }
 
     let stype = cfr.argument(0).struct_type();
@@ -954,16 +950,14 @@ extern "C" fn struct_type_constr(cfr: &mut CallFrame) -> ScmResult {
     } else if args[1].is_symbol() {
         args[1].strsym().to_string()
     } else {
-        return ScmResult::err(
-            wrong_contract::<()>(
-                "struct-type-make-constructor",
-                "symbol?",
-                1,
-                args.len() as _,
-                args,
-            )
-            .unwrap_err(),
-        );
+        return wrong_contract::<()>(
+            "struct-type-make-constructor",
+            "symbol?",
+            1,
+            args.len() as _,
+            args,
+        )
+        .into();
     };
     let val = make_struct_proc(stype, &v, Value::encode_null_value(), ProcType::Constr, 0);
 
@@ -973,7 +967,7 @@ extern "C" fn struct_type_constr(cfr: &mut CallFrame) -> ScmResult {
 extern "C" fn make_struct_instance(cfr: &mut CallFrame) -> ScmResult {
     match make_struct_instance_(cfr.callee().closed_native_procedure()[0], cfr.arguments()) {
         Ok(v) => ScmResult::ok(v),
-        Err(e) => ScmResult::err(e),
+        Err(e) => return Err::<(), _>(e).into(),
     }
 }
 
@@ -1630,51 +1624,43 @@ extern "C" fn make_struct_type_proc(cfr: &mut CallFrame) -> ScmResult {
     let args = cfr.arguments();
 
     if !args[0].is_symbol() {
-        return ScmResult::err(
-            wrong_contract::<()>("make-struct-type", "symbol?", 0, args.len() as _, args)
-                .unwrap_err(),
-        );
+        return wrong_contract::<()>("make-struct-type", "symbol?", 0, args.len() as _, args)
+            .into();
     }
 
     if !args[1].is_false() && !args[1].is_struct_type() {
-        return ScmResult::err(
-            wrong_contract::<()>(
-                "make-struct-type",
-                "(or/c struct-type? #f)",
-                1,
-                args.len() as _,
-                args,
-            )
-            .unwrap_err(),
-        );
+        return wrong_contract::<()>(
+            "make-struct-type",
+            "(or/c struct-type? #f)",
+            1,
+            args.len() as _,
+            args,
+        )
+        .into();
     }
 
     let initc = if !args[2].is_int32() || args[2].get_int32() < 0 {
-        return ScmResult::err(
-            wrong_contract::<()>(
-                "make-struct-type",
-                "exact-nonnegative-integer?",
-                2,
-                args.len() as _,
-                args,
-            )
-            .unwrap_err(),
-        );
+        return wrong_contract::<()>(
+            "make-struct-type",
+            "exact-nonnegative-integer?",
+            2,
+            args.len() as _,
+            args,
+        )
+        .into();
     } else {
         args[2].get_int32() as usize
     };
 
     let uninitc = if !args[3].is_int32() || args[3].get_int32() < 0 {
-        return ScmResult::err(
-            wrong_contract::<()>(
-                "make-struct-type",
-                "exact-nonnegative-integer?",
-                3,
-                args.len() as _,
-                args,
-            )
-            .unwrap_err(),
-        );
+        return wrong_contract::<()>(
+            "make-struct-type",
+            "exact-nonnegative-integer?",
+            3,
+            args.len() as _,
+            args,
+        )
+        .into();
     } else {
         args[3].get_int32() as usize
     };
@@ -1694,32 +1680,28 @@ extern "C" fn make_struct_type_proc(cfr: &mut CallFrame) -> ScmResult {
                 guard = args[6];
 
                 if !guard.is_procedure() && !guard.is_false() {
-                    return ScmResult::err(
-                        wrong_contract::<()>(
-                            "make-struct-type",
-                            "procedure?",
-                            6,
-                            args.len() as _,
-                            args,
-                        )
-                        .unwrap_err(),
-                    );
+                    return wrong_contract::<()>(
+                        "make-struct-type",
+                        "procedure?",
+                        6,
+                        args.len() as _,
+                        args,
+                    )
+                    .into();
                 }
 
                 if args.len() > 7 {
                     cstr_name = args[7];
 
                     if !cstr_name.is_symbol() {
-                        return ScmResult::err(
-                            wrong_contract::<()>(
-                                "make-struct-type",
-                                "symbol?",
-                                7,
-                                args.len() as _,
-                                args,
-                            )
-                            .unwrap_err(),
-                        );
+                        return wrong_contract::<()>(
+                            "make-struct-type",
+                            "symbol?",
+                            7,
+                            args.len() as _,
+                            args,
+                        )
+                        .into();
                     }
                 }
             }
@@ -1736,7 +1718,7 @@ extern "C" fn make_struct_type_proc(cfr: &mut CallFrame) -> ScmResult {
         guard,
     ) {
         Ok(v) => v,
-        Err(e) => return ScmResult::err(e),
+        Err(e) => return Err::<(), _>(e).into(),
     };
 
     {
@@ -1859,11 +1841,18 @@ fn make_struct_field_xxor(who: &str, getter: bool, args: &[Value]) -> ScmResult 
             }
             == 0)
     {
-        return ScmResult::err(wrong_contract::<()>(who, if getter {
-            "(and/c struct-accessor-procedure? (lambda (p) (procedure-arity-includes? p 2)))"
-        } else {
-            "(and/c struct-mutator-procedure? (lambda (p) (procedure-arity-includes? p 3)))"
-        }, 0, args.len() as _, args).unwrap_err());
+        return wrong_contract::<()>(
+            who,
+            if getter {
+                "(and/c struct-accessor-procedure? (lambda (p) (procedure-arity-includes? p 2)))"
+            } else {
+                "(and/c struct-mutator-procedure? (lambda (p) (procedure-arity-includes? p 3)))"
+            },
+            0,
+            args.len() as _,
+            args,
+        )
+        .into();
     }
 
     let pos = match parse_pos(
@@ -1873,7 +1862,7 @@ fn make_struct_field_xxor(who: &str, getter: bool, args: &[Value]) -> ScmResult 
         "",
     ) {
         Ok(x) => x,
-        Err(e) => return ScmResult::err(e),
+        Err(e) => return Err::<(), _>(e).into(),
     };
 
     let fieldstr;
@@ -1885,10 +1874,8 @@ fn make_struct_field_xxor(who: &str, getter: bool, args: &[Value]) -> ScmResult 
             fieldstr = None;
         } else {
             if !args[2].is_symbol() {
-                return ScmResult::err(
-                    wrong_contract::<()>(who, "(or/c symbol? #f)", 2, args.len() as _, args)
-                        .unwrap_err(),
-                );
+                return wrong_contract::<()>(who, "(or/c symbol? #f)", 2, args.len() as _, args)
+                    .into();
             }
 
             fieldstr = Some(args[2].strsym());
@@ -1901,32 +1888,28 @@ fn make_struct_field_xxor(who: &str, getter: bool, args: &[Value]) -> ScmResult 
                 name = fieldstr;
 
                 if !args[3].is_symbol() && !args[3].is_string() {
-                    return ScmResult::err(
-                        wrong_contract::<()>(
-                            who,
-                            "(or/c symbol? string? #f)",
-                            3,
-                            args.len() as _,
-                            args,
-                        )
-                        .unwrap_err(),
-                    );
+                    return wrong_contract::<()>(
+                        who,
+                        "(or/c symbol? string? #f)",
+                        3,
+                        args.len() as _,
+                        args,
+                    )
+                    .into();
                 }
 
                 contract = args[3];
 
                 if args.len() > 4 {
                     if !args[4].is_module() {
-                        return ScmResult::err(
-                            wrong_contract::<()>(
-                                who,
-                                "(or/c symbol? module?)",
-                                4,
-                                args.len() as _,
-                                args,
-                            )
-                            .unwrap_err(),
-                        );
+                        return wrong_contract::<()>(
+                            who,
+                            "(or/c symbol? module?)",
+                            4,
+                            args.len() as _,
+                            args,
+                        )
+                        .into();
                     }
 
                     _module = args[4];

@@ -42,7 +42,7 @@ macro_rules! global_id {
         pub static $name: Lazy<Handle<Identifier>> = Lazy::new(|| {
             scm_make_identifier(
                 make_symbol($sym, true),
-                scm_find_module(make_symbol("capy", true).symbol(), false, true).unwrap(),
+                scm_find_module(make_symbol("capy", true).symbol(), false, true, false).unwrap(),
                 Value::encode_null_value(),
             )
         });
@@ -52,7 +52,7 @@ macro_rules! global_id {
         pub static $name: Lazy<Handle<Identifier>> = Lazy::new(|| {
             scm_make_identifier(
                 make_symbol($sym, true),
-                scm_find_module(make_symbol("null", true).symbol(), false, true).unwrap(),
+                scm_find_module(make_symbol("null", true).symbol(), false, true, false).unwrap(),
                 Value::encode_null_value(),
             )
         });
@@ -406,7 +406,7 @@ pub fn define_syntax() {
             ) -> Result<Handle<$crate::compile::IForm>, Value> {
                 $b
             }
-            let m = $crate::runtime::module::scm_find_module(module, false, true)
+            let m = $crate::runtime::module::scm_find_module(module, false, true, false)
                 .expect("error")
                 .expect("not found");
             $crate::runtime::module::scm_insert_syntax_binding(
@@ -964,7 +964,7 @@ pub fn define_syntax() {
     define_syntax!("import", Some("capy"), form, cenv, {
         fn ensure(m: Value) -> Result<Handle<Module>, Value> {
             let o = m;
-            let m = scm_find_module(m.symbol(), false, true).unwrap();
+            let m = scm_find_module(m.symbol(), false, true, false).unwrap();
             m.ok_or_else(|| {
                 make_string(Thread::current(), &format!("Module {:?} not found", o)).into()
             })
@@ -1090,7 +1090,7 @@ pub fn define_syntax() {
 
 pub fn ensure_module(thing: Value, name: Value, _create: bool) -> Result<Handle<Module>, Value> {
     let m = if thing.is_identifier() {
-        scm_find_module(scm_identifier_to_symbol(thing), false, true)?
+        scm_find_module(scm_identifier_to_symbol(thing), false, true, false)?
     } else if thing.is_module() {
         return Ok(thing.module());
     } else {
