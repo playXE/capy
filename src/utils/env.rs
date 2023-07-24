@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 fn read_float_and_factor_from_env(var: &str) -> Option<(f64, usize)> {
     let value = std::env::var(var);
 
@@ -59,6 +60,7 @@ cfg_if::cfg_if! {
             }
         }
     } else {
+
         const ADRESSABLE_SIZE: usize = 2usize.pow(63);
     }
 }

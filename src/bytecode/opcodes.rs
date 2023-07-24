@@ -154,6 +154,7 @@ macro_rules! decl_constants {
 for_each_opcode!(decl_opcodes);
 for_each_opcode!(decl_constants);
 
+#[allow(unused_macros)]
 macro_rules! disassemble {
     ($(($name: ident, $str: literal, {$($field: ident : $t: ty), *}))*) => {
 

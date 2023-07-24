@@ -46,9 +46,9 @@ pub type Pad = [u8; 0];
 #[derive(Clone, Copy)]
 #[repr(C)]
 pub struct Header {
-    type_id: TypeId,
-    pad: Pad,
-    flags: u16,
+    pub type_id: TypeId,
+    pub pad: Pad,
+    pub flags: u16,
 }
 
 #[derive(Clone, Copy)]

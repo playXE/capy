@@ -1,4 +1,3 @@
-use mmtk::util::ObjectReference;
 
 use crate::gc::object::ScmCellRef;
 

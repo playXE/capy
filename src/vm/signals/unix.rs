@@ -20,7 +20,7 @@ unsafe extern "C" fn sigdie_handler(sig: i32, _info: *mut siginfo_t, _context: *
 pub unsafe extern "C" fn handle_sigsegv(
     _sig: i32,
     info: *mut siginfo_t,
-    context: *mut ucontext_t,
+    _context: *mut ucontext_t,
 ) -> bool {
     if safepoint::addr_in_safepoint((*info).si_addr() as _) {
         let thread = Thread::current();

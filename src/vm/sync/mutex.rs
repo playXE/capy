@@ -1,12 +1,9 @@
 //! A mutual exclusion primitive useful for protecting shared data that is safe to use with RSGC.
-//! 
+//!
 //! API is entirely copied from parking_lot.
 
-use crate::{
-    vm::{safepoint, thread::Thread},
-    vm::thread::{safepoint_scope, safepoint_scope_conditional},
-};
-use parking_lot::lock_api;
+use crate::vm::thread::safepoint_scope_conditional;
+
 use parking_lot_core::{
     deadlock, ParkResult, RequeueOp, SpinWait, UnparkResult, UnparkToken, DEFAULT_PARK_TOKEN,
 };

@@ -1,10 +1,11 @@
 use std::mem::transmute;
+use std::ptr::null_mut;
 use std::slice::Iter;
 use std::sync::atomic::{AtomicI8, Ordering};
 use std::{mem::MaybeUninit, panic::AssertUnwindSafe};
 
 use mmtk::memory_manager::bind_mutator;
-use mmtk::Mutator;
+use mmtk::{Mutator, MutatorContext};
 
 use crate::gc::CapyVM;
 
@@ -29,10 +30,16 @@ pub struct Thread {
     pub safepoint: *mut u8,
     pub gc_state: i8,
     pub kind: ThreadKind,
+    pub handles: MaybeUninit<HandleMemory>,
+    pub stackchain: StackChain,
 
 }
 
 impl Thread {
+    pub fn stackchain(&mut self) -> &mut StackChain {
+        &mut self.stackchain
+    }
+
     pub fn mutator(&mut self) -> &mut Mutator<CapyVM> {
         unsafe { &mut *self.mutator.as_mut_ptr() }
     }
@@ -101,7 +108,7 @@ impl Thread {
         }
         std::sync::atomic::compiler_fence(Ordering::SeqCst);
     }
-
+    #[allow(dead_code)]
     #[inline(never)]
     #[cold]
     fn enter_conditional(&mut self) {
@@ -132,16 +139,20 @@ impl Thread {
     pub(crate) fn register_mutator(&mut self) {
         self.safepoint = super::safepoint::SAFEPOINT_PAGE.address();
         self.kind = ThreadKind::Mutator;
+        
+        
+        let mut mutator = bind_mutator(&scm_virtual_machine().mmtk, unsafe { transmute(self) });
+        unsafe { mutator.prepare(transmute(Thread::current())); }
+        Thread::current().mutator = MaybeUninit::new(*mutator);
+
+        for _ in 0..3 {
+            Thread::current().safepoint();
+        }
+        Thread::current().handles = MaybeUninit::new(HandleMemory::new());
         let th = threads();
         th.add_thread(Thread::current());
 
-        for _ in 0..3 {
-            self.safepoint();
-        }
 
-        let mutator = bind_mutator(&scm_virtual_machine().mmtk, unsafe { transmute(self) });
-
-        Thread::current().mutator = MaybeUninit::new(*mutator);
     }
 
     pub(crate) fn register_worker(&mut self, controller: bool) {
@@ -156,6 +167,8 @@ impl Thread {
     }
 }
 
+use crate::gc::refstorage::HandleMemory;
+use crate::gc::shadow_stack::StackChain;
 use crate::vm::sync::mutex::*;
 
 use super::scm_virtual_machine;
@@ -274,4 +287,6 @@ static mut THREAD: Thread = Thread {
     safepoint: std::ptr::null_mut(),
     gc_state: 2,
     kind: ThreadKind::None,
+    handles: MaybeUninit::uninit(),
+    stackchain: null_mut()
 };

@@ -28,3 +28,6 @@ winapi = { version = "0.3", features = [
     "minwindef",
     
 ] }
+
+[profile.release]
+lto = true

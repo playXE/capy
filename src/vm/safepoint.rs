@@ -147,8 +147,8 @@ impl SafepointSynchronize {
         drop(guard);
         end();
         SAFEPOINT_STATE.store(SAFEPOINT_UNSYNCHRONIZED, Ordering::Release);
-    }
-
+    }   
+    #[allow(dead_code)]
     pub fn is_at_safepoint() -> bool {
         SAFEPOINT_STATE.load(Ordering::Acquire) == SAFEPOINT_SYNCHRONIZED
     }
