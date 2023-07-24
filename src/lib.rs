@@ -1,42 +1,6 @@
-#![feature(
-    arbitrary_self_types,
-    offset_of,
-    min_specialization,
-    thread_local,
-    core_intrinsics,
-    try_trait_v2,
-    absolute_path,
-    adt_const_params,
-    inherent_associated_types,
-    const_type_id
-)]
-#![allow(incomplete_features)]
-
-macro_rules! scm_symbol {
-    ($name: ident, $val: literal) => {
-        pub static $name: once_cell::sync::Lazy<$crate::runtime::value::Value> =
-            once_cell::sync::Lazy::new(|| $crate::runtime::symbol::make_symbol($val, true));
-    };
-}
-
-#[macro_use]
-pub mod runtime;
+#![feature(thread_local)]
 pub mod bytecode;
-pub mod bytecompiler;
-pub mod compaux;
-pub mod compile;
-pub mod fasl;
-pub mod op;
-//pub mod repl;
-pub mod support;
+pub mod runtime;
 pub mod vm;
-
-pub fn init() {
-    runtime::symbol::init_symbols();
-    runtime::module::init_modules();
-    compile::init_compiler();
-    runtime::load::init_load();
-    runtime::init();
-}
-
-pub use rsgc::thread::Thread;
+pub mod gc;
+pub mod utils;
