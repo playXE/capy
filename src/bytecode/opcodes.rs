@@ -6,10 +6,10 @@ macro_rules! for_each_opcode {
         $m! {
             (op_enter, "enter", {})
             (op_nop, "nop", {})
-            // relative to FP load 
-            (op_load, "load", { offset: u32}) 
-            // relative to FP store of value on top of stack 
-            (op_store, "store", { offset: u32 })
+            // relative to FP load
+            (op_load, "load", { offset: i32})
+            // relative to FP store of value on top of stack
+            (op_store, "store", { offset: i32 })
             (op_tail_call, "tail-call", {})
             (op_call, "call", { argc: u32 })
             (op_ret, "ret", {})
@@ -23,6 +23,9 @@ macro_rules! for_each_opcode {
             (op_push_false, "push.false", {})
             (op_push_null, "push.null", {})
             (op_push_undef, "push.undef", {})
+            (op_assert_nargs_ee, "assert-nargs-ee", { argc: u32 })
+            (op_assert_nargs_ge, "assert-nargs-ge", { argc: u32 })
+            (op_assert_nargs_le, "assert-nargs-le", { argc: u32 })
 
 
             (op_equal_cmp, "equal.cmp", {})
@@ -63,10 +66,10 @@ macro_rules! for_each_opcode {
             (op_vector, "vector", { argc: u32 })
             (op_vector_ref_imm, "vector-ref-imm", { index: u32 })
             (op_vector_set_imm, "vector-set-imm!", { index: u32 })
-        
+
 
         }
-    }
+    };
 }
 
 macro_rules! decl_opcodes {

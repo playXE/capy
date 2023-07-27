@@ -1,7 +1,7 @@
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub mod mach;
 #[cfg(unix)]
 pub mod unix;
-#[cfg(any(target_os="macos", target_os = "ios"))]
-pub mod mach;
 #[cfg(windows)]
 pub mod windows;
 

@@ -20,11 +20,8 @@ pub struct FrameMap<const N: usize> {
 impl<const N: usize> FrameMap<N> {
     #[inline]
     pub const fn new(num_roots: u32, meta: [*const u8; N]) -> FrameMap<N> {
-        Self {
-            num_roots,
-        }
+        Self { num_roots }
     }
-
 
     #[inline]
     pub const fn as_unsized(this: *const Self) -> *const FrameMap<0> {
@@ -84,13 +81,11 @@ pub unsafe fn pop_gcframe(root: &mut StackChain, frame: *mut StackEntry<0>) {
 }
 
 /// Visits each stack entry registered in `root` chain.
-pub unsafe fn visit_roots(root: StackChain, edges: &mut Vec<SimpleEdge>)
-
-{
+pub unsafe fn visit_roots(root: StackChain, edges: &mut Vec<SimpleEdge>) {
     let mut entry = root;
     while !entry.is_null() {
         let roots = (*entry).roots();
-        
+
         for (i, root) in roots.iter().copied().enumerate() {
             let ptr = root.cast::<Value>();
 
@@ -147,9 +142,7 @@ impl Rooted {
         unsafe { &mut *self.value }
     }
 
-    pub fn get_copy(&self) -> Value
-
-    {
+    pub fn get_copy(&self) -> Value {
         unsafe { self.value.read() }
     }
 
@@ -158,14 +151,11 @@ impl Rooted {
     }
 }
 
-
-
 #[macro_export]
 macro_rules! count {
     () => (0usize);
     ( $x:tt $($xs:tt)* ) => (1usize + $crate::count!($($xs)*));
 }
-
 
 unsafe impl<const N: usize> Send for FrameMap<N> {}
 unsafe impl<const N: usize> Sync for FrameMap<N> {}

@@ -1,6 +1,5 @@
 use std::mem::size_of;
 
-
 pub mod bitfield;
 pub mod env;
 
@@ -8,7 +7,7 @@ pub const fn nth_bit(n: usize) -> usize {
     if n >= size_of::<usize>() * 8 {
         0
     } else {
-        1 << n 
+        1 << n
     }
 }
 
@@ -99,13 +98,18 @@ pub fn is_aligned_ptr<
 }
 
 pub fn round_down<
-    T: BitOr<T, Output = T> + BitAnd<T, Output = T> + Not<Output = T> + Copy + FromPrimitive + ToPrimitive,
+    T: BitOr<T, Output = T>
+        + BitAnd<T, Output = T>
+        + Not<Output = T>
+        + Copy
+        + FromPrimitive
+        + ToPrimitive,
 >(
     x: T,
     alignment: isize,
 ) -> T {
     assert!(is_power_of_two(alignment));
-   
+
     T::from_isize(x.to_isize().unwrap() & -alignment).unwrap()
 }
 
@@ -114,10 +118,13 @@ pub fn round_down_usize(x: usize, alignment: usize) -> usize {
     x & !(alignment.wrapping_sub(1))
 }
 
-
-
 pub fn round_down_unchecked<
-    T: BitOr<T, Output = T> + BitAnd<T, Output = T> + Not<Output = T> + Copy + FromPrimitive + ToPrimitive,
+    T: BitOr<T, Output = T>
+        + BitAnd<T, Output = T>
+        + Not<Output = T>
+        + Copy
+        + FromPrimitive
+        + ToPrimitive,
 >(
     x: T,
     alignment: isize,
@@ -139,7 +146,8 @@ pub fn round_up<
         + Not<Output = T>
         + Copy
         + BitAnd<T, Output = T>
-        + FromPrimitive + ToPrimitive,
+        + FromPrimitive
+        + ToPrimitive,
 >(
     x: T,
     alignment: usize,
@@ -152,7 +160,6 @@ pub fn round_up<
     ) - T::from_usize(offset).unwrap()
 }
 
-
 pub fn round_up_unchecked<
     T: One
         + NumOps
@@ -160,7 +167,8 @@ pub fn round_up_unchecked<
         + Not<Output = T>
         + Copy
         + BitAnd<T, Output = T>
-        + FromPrimitive + ToPrimitive,
+        + FromPrimitive
+        + ToPrimitive,
 >(
     x: T,
     alignment: usize,

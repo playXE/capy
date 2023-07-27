@@ -192,12 +192,15 @@ static PAGE_SIZE: AtomicUsize = AtomicUsize::new(0);
 
 #[cfg(all(unix, not(target_os = "fuchsia")))]
 pub mod posix {
-    use core::ptr::null_mut;
     use crate::{
         gc::memory_region::MemoryRegion,
         gc::virtual_memory::VirtualMemory,
-        utils::{is_aligned, is_power_of_two, round_down, round_up, round_up_usize, is_aligned_usize, round_down_usize}
+        utils::{
+            is_aligned, is_aligned_usize, is_power_of_two, round_down, round_down_usize, round_up,
+            round_up_usize,
+        },
     };
+    use core::ptr::null_mut;
 
     use super::{Protection, VirtualMemoryImpl};
 
@@ -212,7 +215,14 @@ pub mod posix {
         let result = libc::mmap(addr.cast(), length, prot, flags, fd, offset as _);
 
         if result == libc::MAP_FAILED {
-            panic!("mmap({:p}, {}, {}, {}) failed: {}", addr, length, prot, flags, errno::errno());
+            panic!(
+                "mmap({:p}, {}, {}, {}) failed: {}",
+                addr,
+                length,
+                prot,
+                flags,
+                errno::errno()
+            );
         }
 
         result.cast()
@@ -305,7 +315,11 @@ pub mod posix {
             name: &str,
         ) -> Option<super::VirtualMemory<Self>> {
             let _ = name;
-            assert!(is_aligned(size, VirtualMemory::<Self>::page_size(), 0), "{} not aligned to page size", size);
+            assert!(
+                is_aligned(size, VirtualMemory::<Self>::page_size(), 0),
+                "{} not aligned to page size",
+                size
+            );
             assert!(is_power_of_two(alignment));
             assert!(is_aligned(alignment, VirtualMemory::<Self>::page_size(), 0));
 
@@ -314,7 +328,7 @@ pub mod posix {
             let prot = libc::PROT_READ
                 | libc::PROT_WRITE
                 | if is_executable { libc::PROT_EXEC } else { 0 };
-            
+
             let mut map_flags = libc::MAP_PRIVATE | libc::MAP_ANONYMOUS;
 
             #[cfg(any(
@@ -367,7 +381,11 @@ pub mod posix {
                 VirtualMemory::<Self>::page_size(),
                 0
             ));
-            assert!(is_aligned_usize(size, VirtualMemory::<Self>::page_size(), 0));
+            assert!(is_aligned_usize(
+                size,
+                VirtualMemory::<Self>::page_size(),
+                0
+            ));
 
             let result = unsafe {
                 libc::mmap(
@@ -413,7 +431,8 @@ pub mod posix {
         fn protect(address: *mut u8, size: usize, mode: super::Protection) {
             let start_address = address as usize;
             let end_address = start_address + size;
-            let page_address = round_down_usize(start_address, VirtualMemory::<Self>::page_size() as _);
+            let page_address =
+                round_down_usize(start_address, VirtualMemory::<Self>::page_size() as _);
 
             let prot = match mode {
                 Protection::NoAccess => libc::PROT_NONE,

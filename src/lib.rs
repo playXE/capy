@@ -1,6 +1,7 @@
 #![feature(thread_local)]
 pub mod bytecode;
-pub mod runtime;
-pub mod vm;
+pub mod compiler;
 pub mod gc;
+pub mod runtime;
 pub mod utils;
+pub mod vm;

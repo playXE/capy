@@ -66,11 +66,11 @@ cfg_if::cfg_if! {
 }
 
 fn get_total_memory_linux(_filename: &str) -> usize {
-    #[cfg(all(target_pointer_width="32", unix))]
+    #[cfg(all(target_pointer_width = "32", unix))]
     {
-        return 3 * 1024 * 1024 * 1024
+        return 3 * 1024 * 1024 * 1024;
     }
-    #[cfg(all(target_os = "linux", not(target_pointer_width="32")))]
+    #[cfg(all(target_os = "linux", not(target_pointer_width = "32")))]
     unsafe {
         libc::sysconf(libc::_SC_PHYS_PAGES) as usize * libc::sysconf(libc::_SC_PAGESIZE) as usize
     }

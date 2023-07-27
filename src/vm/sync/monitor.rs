@@ -1,14 +1,16 @@
-use std::{time::Instant, ops::{Deref, DerefMut}};
+use std::{
+    ops::{Deref, DerefMut},
+    time::Instant,
+};
 
-use super::mutex::{Mutex, Condvar, MutexGuard, WaitTimeoutResult};
-
+use super::mutex::{Condvar, Mutex, MutexGuard, WaitTimeoutResult};
 
 /// A monitor is a synchronization primitive that can be used to protect shared data from concurrent access.
-/// 
+///
 /// It combines a mutex and a condition variable.
 pub struct Monitor<T> {
     mutex: Mutex<T>,
-    cv: Condvar
+    cv: Condvar,
 }
 
 unsafe impl<T> Send for Monitor<T> {}
@@ -18,21 +20,21 @@ impl<T> Monitor<T> {
     pub const fn new(val: T) -> Self {
         Self {
             mutex: Mutex::new(val),
-            cv: Condvar::new()
+            cv: Condvar::new(),
         }
     }
 
     pub fn lock<'a>(&'a self, safepoint: bool) -> MonitorLocker<'a, T> {
         MonitorLocker {
             guard: self.mutex.lock(safepoint),
-            cv: &self.cv
+            cv: &self.cv,
         }
     }
 
     pub fn try_lock<'a>(&'a self, safepoint: bool) -> Option<MonitorLocker<'a, T>> {
         self.mutex.try_lock(safepoint).map(|guard| MonitorLocker {
             guard,
-            cv: &self.cv
+            cv: &self.cv,
         })
     }
 
@@ -55,10 +57,6 @@ impl<T> Monitor<T> {
     pub fn mutex(&self) -> &Mutex<T> {
         &self.mutex
     }
-
-    
-
-
 }
 
 pub struct MonitorLocker<'a, T> {
@@ -85,13 +83,13 @@ impl<'a, T> MonitorLocker<'a, T> {
 
     pub fn notify(self) -> bool {
         let res = self.cv.notify_one();
-        res 
+        res
     }
 
     pub fn notify_all(&self) -> usize {
         let res = self.cv.notify_all();
-       
-        res 
+
+        res
     }
 }
 

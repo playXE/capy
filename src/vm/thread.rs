@@ -32,10 +32,13 @@ pub struct Thread {
     pub kind: ThreadKind,
     pub handles: MaybeUninit<HandleMemory>,
     pub stackchain: StackChain,
-
 }
 
 impl Thread {
+    pub fn to_mmtk(&self) -> mmtk::util::VMMutatorThread {
+        unsafe { transmute(self) }
+    }
+
     pub fn stackchain(&mut self) -> &mut StackChain {
         &mut self.stackchain
     }
@@ -60,6 +63,13 @@ impl Thread {
         }
 
         old_state
+    }
+
+    pub fn request_gc(&self) {
+        mmtk::memory_manager::handle_user_collection_request(
+            &scm_virtual_machine().mmtk,
+            self.to_mmtk(),
+        )
     }
 
     pub unsafe fn state_save_and_set(&mut self, state: i8) -> i8 {
@@ -139,10 +149,11 @@ impl Thread {
     pub(crate) fn register_mutator(&mut self) {
         self.safepoint = super::safepoint::SAFEPOINT_PAGE.address();
         self.kind = ThreadKind::Mutator;
-        
-        
+
         let mut mutator = bind_mutator(&scm_virtual_machine().mmtk, unsafe { transmute(self) });
-        unsafe { mutator.prepare(transmute(Thread::current())); }
+        unsafe {
+            mutator.prepare(transmute(Thread::current()));
+        }
         Thread::current().mutator = MaybeUninit::new(*mutator);
 
         for _ in 0..3 {
@@ -151,8 +162,6 @@ impl Thread {
         Thread::current().handles = MaybeUninit::new(HandleMemory::new());
         let th = threads();
         th.add_thread(Thread::current());
-
-
     }
 
     pub(crate) fn register_worker(&mut self, controller: bool) {
@@ -288,5 +297,5 @@ static mut THREAD: Thread = Thread {
     gc_state: 2,
     kind: ThreadKind::None,
     handles: MaybeUninit::uninit(),
-    stackchain: null_mut()
+    stackchain: null_mut(),
 };

@@ -59,7 +59,6 @@ pub unsafe extern "C" fn segv_handler(sig: i32, info: *mut siginfo_t, context: *
     sigdie_handler(sig, info, context as _);
 }
 
-
 pub fn install_signal_handlers() {
     unsafe {
         let mut act: sigaction = std::mem::MaybeUninit::<sigaction>::zeroed().assume_init();

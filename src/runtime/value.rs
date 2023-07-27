@@ -1,11 +1,18 @@
+use std::hash::Hash;
 
-use crate::gc::object::ScmCellRef;
+use crate::runtime::object::ScmCellRef;
 
 use super::pure_nan::{pure_nan, purify_nan};
 
 #[derive(Clone, Copy)]
 #[repr(transparent)]
 pub struct Value(EncodedValueDescriptor);
+
+impl Hash for Value {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        unsafe { self.0.as_int64.hash(state) }
+    }
+}
 
 #[derive(Clone, Copy)]
 #[repr(C)]
@@ -197,7 +204,7 @@ impl Value {
 
     #[inline(always)]
     pub fn get_object(self) -> ScmCellRef {
-        debug_assert!(self.is_object());
+        debug_assert!(self.is_object(), "{:?}", self);
 
         unsafe { std::mem::transmute(self.0.ptr) }
     }

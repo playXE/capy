@@ -14,11 +14,13 @@ use mmtk::{
     vm::{
         edge_shape::{SimpleEdge, UnimplementedMemorySlice},
         *,
-    }, MutatorContext,
+    },
+    MutatorContext,
 };
 
 use crate::{
     runtime::value::Value,
+    utils::round_up,
     vm::{
         safepoint::SafepointSynchronize,
         scm_virtual_machine,
@@ -26,13 +28,13 @@ use crate::{
     },
 };
 
-use self::{object::{scm_car, scm_cdr, ScmCellHeader, ScmCellRef, TypeId}, shadow_stack::visit_roots};
+use self::shadow_stack::visit_roots;
+use crate::runtime::object::{scm_car, scm_cdr, ScmCellHeader, ScmCellRef, TypeId};
 
 pub mod memory_region;
-pub mod object;
 pub mod refstorage;
-pub mod virtual_memory;
 pub mod shadow_stack;
+pub mod virtual_memory;
 
 #[derive(Default)]
 pub struct CapyVM;
@@ -44,8 +46,8 @@ pub const FORWARDING_POINTER_METADATA_SPEC: VMLocalForwardingPointerSpec =
     VMLocalForwardingPointerSpec::in_header(0);
 pub const FORWARDING_BITS_METADATA_SPEC: VMLocalForwardingBitsSpec =
     VMLocalForwardingBitsSpec::in_header(56);
-pub const MARKING_METADATA_SPEC: VMLocalMarkBitSpec =
-    VMLocalMarkBitSpec::in_header(61);
+pub const MARKING_METADATA_SPEC: VMLocalMarkBitSpec = VMLocalMarkBitSpec::side_first();
+//VMLocalMarkBitSpec::in_header(61);
 pub const LOS_METADATA_SPEC: VMLocalLOSMarkNurserySpec = VMLocalLOSMarkNurserySpec::in_header(58);
 
 impl ObjectModel<CapyVM> for ScmObjectModel {
@@ -128,9 +130,22 @@ impl ObjectModel<CapyVM> for ScmObjectModel {
                 size_of::<ScmCellHeader>() + size_of::<Value>() * (len as usize)
             }
 
-            TypeId::Bytevector | TypeId::String => {
+            TypeId::String | TypeId::Symbol => {
                 let len = reference.slot_ref(1).get_int32();
-                size_of::<ScmCellHeader>() + size_of::<u8>() * (len as usize)
+                round_up(
+                    size_of::<ScmCellHeader>() + size_of::<u8>() * (len as usize) + 1, /* for null byte */
+                    size_of::<usize>(),
+                    0,
+                )
+            }
+
+            TypeId::Bytevector => {
+                let len = reference.slot_ref(1).get_int32();
+                round_up(
+                    size_of::<ScmCellHeader>() + size_of::<u8>() * (len as usize),
+                    size_of::<usize>(),
+                    0,
+                )
             }
 
             TypeId::Program => {
@@ -200,10 +215,7 @@ impl ActivePlan<CapyVM> for ScmActivePlan {
                 threads()
                     .iter_unlocked()
                     .filter(|&&x| (*x).kind == ThreadKind::Mutator)
-                    .map(|x| {
-                       
-                        x
-                    })
+                    .map(|x| x)
                     .map(|&thread| (*thread).mutator.assume_init_mut()),
             )
         }
@@ -211,6 +223,14 @@ impl ActivePlan<CapyVM> for ScmActivePlan {
 
     fn number_of_mutators() -> usize {
         unsafe { threads().num() }
+    }
+
+    fn vm_trace_object<Q: mmtk::ObjectQueue>(
+        _queue: &mut Q,
+        _object: ObjectReference,
+        _worker: &mut mmtk::scheduler::GCWorker<CapyVM>,
+    ) -> ObjectReference {
+        _object
     }
 }
 
@@ -225,7 +245,10 @@ impl Collection<CapyVM> for ScmCollection {
             // Sets safepoint page to `PROT_NONE` and waits for all threads to enter safepoint.
             // Some threads might enter without signal handler e.g when invoking `lock()` on Mutexes.
             let mutators = SafepointSynchronize::begin();
-            for &mutator in mutators.iter().filter(|&&x| (*x).kind == ThreadKind::Mutator) {
+            for &mutator in mutators
+                .iter()
+                .filter(|&&x| (*x).kind == ThreadKind::Mutator)
+            {
                 mutator_visitor((*mutator).mutator.assume_init_mut());
             }
 
@@ -407,6 +430,7 @@ impl Scanning<CapyVM> for ScmScanning {
             for &mutator in threads().iter_unlocked() {
                 let mutator = &mut *mutator;
                 let mut edges = vec![];
+                visit_roots(mutator.stackchain, &mut edges);
                 for handle in mutator.handles.assume_init_ref().iterate_for_gc() {
                     let edge = SimpleEdge::from_address(handle.location());
                     edges.push(edge);
@@ -419,9 +443,20 @@ impl Scanning<CapyVM> for ScmScanning {
 
     fn scan_vm_specific_roots(
         _tls: mmtk::util::VMWorkerThread,
-        _factory: impl RootsWorkFactory<<CapyVM as VMBinding>::VMEdge>,
+        mut factory: impl RootsWorkFactory<<CapyVM as VMBinding>::VMEdge>,
     ) {
-        
+        let vm = scm_virtual_machine();
+        let mut edges = vec![];
+        for (_, value) in vm.symtable.iter() {
+            let value: &ScmCellRef = unsafe { std::mem::transmute(value) };
+            let edge = SimpleEdge::from_address(Address::from_ptr(value));
+            edges.push(edge);
+        }
+        unsafe {
+            vm.images.visit_roots(&mut factory);
+        }
+
+        factory.create_process_edge_roots_work(edges);
     }
 
     fn scan_roots_in_mutator_thread(
@@ -431,13 +466,18 @@ impl Scanning<CapyVM> for ScmScanning {
     ) {
         unsafe {
             let tls = mutator.get_tls();
-            if tls.0.0.is_null() {
+            if tls.0 .0.is_null() {
                 return;
             }
             let tls: &'static mut Thread = transmute(tls);
-          
+
             let mut edges = vec![];
             visit_roots(tls.stackchain, &mut edges);
+
+            for handle in tls.handles.assume_init_ref().iterate_for_gc() {
+                let edge = SimpleEdge::from_address(handle.location());
+                edges.push(edge);
+            }
 
             factory.create_process_edge_roots_work(edges);
         }

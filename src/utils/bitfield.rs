@@ -41,7 +41,7 @@ impl<const SIZE: usize, const POSITION: usize, const SIGN_EXTEND: bool>
         } else {
             (value >> POSITION as u64) & Self::mask()
         }
-    }   
+    }
     #[inline(always)]
     pub const fn encode(value: u64) -> u64 {
         (value & Self::mask()) << POSITION as u64

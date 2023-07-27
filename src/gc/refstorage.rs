@@ -4,7 +4,7 @@ use mmtk::util::Address;
 
 use crate::vm::thread::Thread;
 
-use super::{object::ScmCellRef, virtual_memory::VirtualMemory};
+use super::{super::runtime::object::ScmCellRef, virtual_memory::VirtualMemory};
 
 pub struct HandleMemory {
     inner: UnsafeCell<HandleMemoryInner>,
