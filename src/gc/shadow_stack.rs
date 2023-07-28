@@ -7,7 +7,6 @@
 //! and does not require tricky platform-specific code to crawl the machine stack.
 
 use super::*;
-use std::collections::HashSet;
 use std::ops::{Deref, DerefMut};
 use std::{marker::PhantomData, ptr::NonNull};
 

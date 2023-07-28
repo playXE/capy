@@ -89,14 +89,14 @@ pub fn identifier_env(mut id: P<Identifier>) -> Sexpr {
     id.frames.cdr()
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SyntaxEnv {
     pub env: HashMap<Value, P<Denotation>>,
     pub denotation_of_define: Option<P<Denotation>>,
     pub denotation_of_begin: Option<P<Denotation>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum Denotation {
     Macro(P<SyntaxRules>),
     Special(fn(Sexpr, &Cenv) -> Result<P<IForm>, String>),

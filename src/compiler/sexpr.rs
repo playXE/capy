@@ -5,7 +5,7 @@ use super::{
     Cenv, SyntaxEnv, P,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum Sexpr {
     Null,
     Undefined,
@@ -28,14 +28,14 @@ pub enum Sexpr {
     LVar(P<LVar>),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Identifier {
     pub name: Sexpr,
     pub frames: Sexpr,
     pub env: P<SyntaxEnv>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SyntaxRules {
     pub name: Sexpr,
     pub max_num_pvars: u32,
@@ -44,7 +44,7 @@ pub struct SyntaxRules {
     pub rules: Vec<SyntaxRuleBranch>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SyntaxRuleBranch {
     pub pattern: Sexpr,
     pub template: Sexpr,
@@ -52,7 +52,7 @@ pub struct SyntaxRuleBranch {
     pub max_level: u32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SyntaxPattern {
     pub pattern: Sexpr,
     pub vars: Sexpr,
@@ -60,7 +60,7 @@ pub struct SyntaxPattern {
     pub num_following_items: i16,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct PVRef {
     pub level: i16,
     pub count: i16,
@@ -509,9 +509,9 @@ impl Sexpr {
             Self::Null => allocator.text("()"),
             Self::Undefined => allocator.text("#<undefined>"),
             Self::Bytevector(x) => allocator.text(format!("#u8({:?})", x)),
-            Self::SyntaxPattern(x) => allocator.text(format!("#<syntax-pattern {:?}>", x)),
-            Self::SyntaxRules(x) => allocator.text(format!("#<syntax-rules {:?}>", x)),
-            Self::PVRef(x) => allocator.text(format!("#<pv-ref {:?}>", x)),
+            Self::SyntaxPattern(x) => allocator.text(format!("#<syntax-pattern {}>", x.pattern)),
+            Self::SyntaxRules(x) => allocator.text(format!("#<syntax-rules {}>", x.name)),
+            Self::PVRef(x) => allocator.text(format!("#<pv-ref {}.{}>", x.level, x.count)),
         }
     }
 

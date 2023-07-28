@@ -15,7 +15,7 @@ use mmtk::{
         edge_shape::{SimpleEdge, UnimplementedMemorySlice},
         *,
     },
-    MutatorContext,
+
 };
 
 use crate::{
