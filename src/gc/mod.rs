@@ -241,6 +241,7 @@ impl Collection<CapyVM> for ScmCollection {
     where
         F: FnMut(&'static mut mmtk::Mutator<CapyVM>),
     {
+        
         unsafe {
             // Sets safepoint page to `PROT_NONE` and waits for all threads to enter safepoint.
             // Some threads might enter without signal handler e.g when invoking `lock()` on Mutexes.
@@ -269,7 +270,6 @@ impl Collection<CapyVM> for ScmCollection {
 
     fn block_for_gc(_tls: mmtk::util::VMMutatorThread) {
         let vm = scm_virtual_machine();
-
         // thread will enter safepoint inside `lock`.
         let mut ml = vm.gc_waiters_lock.lock(true);
         // wait on notification for GC to resume mutators
@@ -435,7 +435,7 @@ impl Scanning<CapyVM> for ScmScanning {
                     let edge = SimpleEdge::from_address(handle.location());
                     edges.push(edge);
                 }
-
+                
                 factory.create_process_edge_roots_work(edges);
             }
         }
