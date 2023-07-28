@@ -41,14 +41,17 @@ pub struct CapyVM;
 
 pub struct ScmObjectModel;
 
-pub const LOGGING_SIDE_METADATA_SPEC: VMGlobalLogBitSpec = VMGlobalLogBitSpec::side_first();
+pub const FORWARDING_BITS_METADATA_SPEC: VMLocalForwardingBitsSpec = //VMLocalForwardingBitsSpec::side_first();
+    VMLocalForwardingBitsSpec::in_header(56);
+
+pub const LOGGING_SIDE_METADATA_SPEC: VMGlobalLogBitSpec = VMGlobalLogBitSpec::in_header(59);
 pub const FORWARDING_POINTER_METADATA_SPEC: VMLocalForwardingPointerSpec =
     VMLocalForwardingPointerSpec::in_header(0);
-pub const FORWARDING_BITS_METADATA_SPEC: VMLocalForwardingBitsSpec =
-    VMLocalForwardingBitsSpec::in_header(56);
-pub const MARKING_METADATA_SPEC: VMLocalMarkBitSpec = VMLocalMarkBitSpec::side_first();
-//VMLocalMarkBitSpec::in_header(61);
-pub const LOS_METADATA_SPEC: VMLocalLOSMarkNurserySpec = VMLocalLOSMarkNurserySpec::in_header(58);
+
+pub const MARKING_METADATA_SPEC: VMLocalMarkBitSpec = VMLocalMarkBitSpec::side_first();//side_after(LOGGING_SIDE_METADATA_SPEC.as_spec());
+pub const LOS_METADATA_SPEC: VMLocalLOSMarkNurserySpec = VMLocalLOSMarkNurserySpec::in_header(62);
+//VMLocalLOSMarkNurserySpec::side_after(MARKING_METADATA_SPEC.as_spec());//side_after(&MARKING_METADATA_SPEC.as_spec()); 
+//VMLocalLOSMarkNurserySpec::in_header(59);
 
 impl ObjectModel<CapyVM> for ScmObjectModel {
     const GLOBAL_LOG_BIT_SPEC: VMGlobalLogBitSpec = LOGGING_SIDE_METADATA_SPEC;
@@ -435,7 +438,7 @@ impl Scanning<CapyVM> for ScmScanning {
                     let edge = SimpleEdge::from_address(handle.location());
                     edges.push(edge);
                 }
-                
+                edges.dedup_by(|a, b| a.as_address() == b.as_address());
                 factory.create_process_edge_roots_work(edges);
             }
         }
@@ -455,7 +458,7 @@ impl Scanning<CapyVM> for ScmScanning {
         unsafe {
             vm.images.visit_roots(&mut factory);
         }
-
+        edges.dedup_by(|a, b| a.as_address() == b.as_address());
         factory.create_process_edge_roots_work(edges);
     }
 
@@ -464,7 +467,7 @@ impl Scanning<CapyVM> for ScmScanning {
         mutator: &'static mut mmtk::Mutator<CapyVM>,
         mut factory: impl RootsWorkFactory<<CapyVM as VMBinding>::VMEdge>,
     ) {
-        unsafe {
+        /*unsafe {
             let tls = mutator.get_tls();
             if tls.0 .0.is_null() {
                 return;
@@ -478,9 +481,10 @@ impl Scanning<CapyVM> for ScmScanning {
                 let edge = SimpleEdge::from_address(handle.location());
                 edges.push(edge);
             }
-
+            edges.dedup_by(|a, b| a.as_address() == b.as_address());
+            println!("{:?}", edges);
             factory.create_process_edge_roots_work(edges);
-        }
+        }*/
     }
 
     fn supports_return_barrier() -> bool {

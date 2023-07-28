@@ -7,6 +7,7 @@
 //! and does not require tricky platform-specific code to crawl the machine stack.
 
 use super::*;
+use std::collections::HashSet;
 use std::ops::{Deref, DerefMut};
 use std::{marker::PhantomData, ptr::NonNull};
 
@@ -82,7 +83,9 @@ pub unsafe fn pop_gcframe(root: &mut StackChain, frame: *mut StackEntry<0>) {
 
 /// Visits each stack entry registered in `root` chain.
 pub unsafe fn visit_roots(root: StackChain, edges: &mut Vec<SimpleEdge>) {
+    
     let mut entry = root;
+  
     while !entry.is_null() {
         let roots = (*entry).roots();
 
@@ -91,12 +94,15 @@ pub unsafe fn visit_roots(root: StackChain, edges: &mut Vec<SimpleEdge>) {
 
             if (*ptr).is_object() {
                 let edge = SimpleEdge::from_address(Address::from_ptr(ptr));
+            
                 edges.push(edge);
             }
         }
 
         entry = (*entry).next;
     }
+
+  
 }
 
 /// Simple struct that holds stack entry and entire stack chain. It automatically

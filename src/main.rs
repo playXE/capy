@@ -13,6 +13,7 @@ use fscheme::{
 };
 
 fn make_tree(thread: &mut Thread, depth: i32) -> Value {
+    thread.safepoint();
     if depth == 0 {
         return thread
             .make_cons(Value::encode_null_value(), Value::encode_null_value())
@@ -50,18 +51,19 @@ fn main() {
     let mut builder = mmtk::MMTKBuilder::new();
     builder.set_option("plan", "GenImmix");
     builder.set_option("gc_trigger", "DynamicHeapSize:32m,128m");
-    builder.set_option("threads", "6");
+    builder.set_option("threads", "4");
     builder.set_option("nursery",&format!("Fixed:{}", &(4 * 1024 * 1024).to_string()));
     //builder.set_option("stress_factor", &(128 * 1024).to_string());
     let _ = scm_init(builder.build());
 
-    let depth = 17;
+    let depth = 18;
     let min_depth = 4;
     let max_depth = depth;
 
     let stretch_depth = depth + 1;
 
     {
+        println!("started");
         println!(
             "stretch tree of depth {}\tcheck: {}",
             stretch_depth,
