@@ -15,11 +15,10 @@ use mmtk::{
         edge_shape::{SimpleEdge, UnimplementedMemorySlice},
         *,
     },
-
 };
 
 use crate::{
-    runtime::value::Value,
+    runtime::{object::*, value::Value},
     utils::round_up,
     vm::{
         safepoint::SafepointSynchronize,
@@ -29,7 +28,7 @@ use crate::{
 };
 
 use self::shadow_stack::visit_roots;
-use crate::runtime::object::{scm_car, scm_cdr, ScmCellHeader, ScmCellRef, TypeId};
+use crate::runtime::object::{ScmCellHeader, ScmCellRef, TypeId};
 
 pub mod memory_region;
 pub mod refstorage;
@@ -41,18 +40,15 @@ pub struct CapyVM;
 
 pub struct ScmObjectModel;
 
-pub const FORWARDING_BITS_METADATA_SPEC: VMLocalForwardingBitsSpec = //VMLocalForwardingBitsSpec::side_first();
+pub const FORWARDING_BITS_METADATA_SPEC: VMLocalForwardingBitsSpec =
     VMLocalForwardingBitsSpec::in_header(56);
 
-pub const LOGGING_SIDE_METADATA_SPEC: VMGlobalLogBitSpec = VMGlobalLogBitSpec::in_header(59);
+pub const LOGGING_SIDE_METADATA_SPEC: VMGlobalLogBitSpec = VMGlobalLogBitSpec::side_first();
 pub const FORWARDING_POINTER_METADATA_SPEC: VMLocalForwardingPointerSpec =
     VMLocalForwardingPointerSpec::in_header(0);
 
-pub const MARKING_METADATA_SPEC: VMLocalMarkBitSpec = VMLocalMarkBitSpec::side_first();//side_after(LOGGING_SIDE_METADATA_SPEC.as_spec());
+pub const MARKING_METADATA_SPEC: VMLocalMarkBitSpec = VMLocalMarkBitSpec::side_first();
 pub const LOS_METADATA_SPEC: VMLocalLOSMarkNurserySpec = VMLocalLOSMarkNurserySpec::in_header(62);
-//VMLocalLOSMarkNurserySpec::side_after(MARKING_METADATA_SPEC.as_spec());//side_after(&MARKING_METADATA_SPEC.as_spec()); 
-//VMLocalLOSMarkNurserySpec::in_header(59);
-
 impl ObjectModel<CapyVM> for ScmObjectModel {
     const GLOBAL_LOG_BIT_SPEC: VMGlobalLogBitSpec = LOGGING_SIDE_METADATA_SPEC;
     const LOCAL_FORWARDING_BITS_SPEC: VMLocalForwardingBitsSpec = FORWARDING_BITS_METADATA_SPEC;
@@ -122,38 +118,35 @@ impl ObjectModel<CapyVM> for ScmObjectModel {
         let reference = ScmCellRef(object);
 
         match reference.header().type_id() {
-            TypeId::Pair | TypeId::Complex | TypeId::Rational => {
-                size_of::<ScmCellHeader>() + size_of::<Value>() * 2
+            TypeId::Pair => size_of::<ScmPair>(),
+
+            TypeId::Box => size_of::<ScmBox>(),
+
+            TypeId::Vector => {
+                scm_vector_length(reference.into()) as usize * size_of::<Value>()
+                    + size_of::<ScmVector>()
+            }
+            TypeId::String => {
+                let len = scm_string_str(reference.into()).len() + 1;
+                let size = size_of::<ScmString>();
+                round_up(len + size, 8, 0)
             }
 
-            TypeId::Box => size_of::<ScmCellHeader>() + size_of::<Value>(),
-
-            TypeId::Bignum | TypeId::Vector => {
-                let len = reference.slot_ref(1).get_int32();
-                size_of::<ScmCellHeader>() + size_of::<Value>() * (len as usize)
-            }
-
-            TypeId::String | TypeId::Symbol => {
-                let len = reference.slot_ref(1).get_int32();
-                round_up(
-                    size_of::<ScmCellHeader>() + size_of::<u8>() * (len as usize) + 1, /* for null byte */
-                    size_of::<usize>(),
-                    0,
-                )
+            TypeId::Symbol => {
+                let len = scm_symbol_str(reference.into()).len() + 1;
+                let size = size_of::<ScmSymbol>();
+                round_up(len + size, 8, 0)
             }
 
             TypeId::Bytevector => {
-                let len = reference.slot_ref(1).get_int32();
-                round_up(
-                    size_of::<ScmCellHeader>() + size_of::<u8>() * (len as usize),
-                    size_of::<usize>(),
-                    0,
-                )
+                let len = scm_bytevector_length(reference.into()) as usize;
+                let size = size_of::<ScmBytevector>();
+                round_up(len + size, 8, 0)
             }
 
             TypeId::Program => {
-                let len = reference.slot_ref(2).get_int32();
-                size_of::<ScmCellHeader>() + size_of::<Value>() * (len as usize)
+                let len = scm_program_num_free_vars(reference.into());
+                len as usize * size_of::<Value>() + size_of::<ScmProgram>()
             }
 
             _ => unreachable!(),
@@ -240,21 +233,20 @@ impl ActivePlan<CapyVM> for ScmActivePlan {
 pub struct ScmCollection;
 
 impl Collection<CapyVM> for ScmCollection {
-    fn stop_all_mutators<F>(_: mmtk::util::VMWorkerThread, mut mutator_visitor: F)
+    fn stop_all_mutators<F>(_: mmtk::util::VMWorkerThread, _mutator_visitor: F)
     where
         F: FnMut(&'static mut mmtk::Mutator<CapyVM>),
     {
-        
         unsafe {
             // Sets safepoint page to `PROT_NONE` and waits for all threads to enter safepoint.
             // Some threads might enter without signal handler e.g when invoking `lock()` on Mutexes.
             let mutators = SafepointSynchronize::begin();
-            for &mutator in mutators
+            /*for &mutator in mutators
                 .iter()
                 .filter(|&&x| (*x).kind == ThreadKind::Mutator)
             {
                 mutator_visitor((*mutator).mutator.assume_init_mut());
-            }
+            }*/
 
             scm_virtual_machine().safepoint_lock_data = Some(transmute(mutators));
         }
@@ -273,6 +265,7 @@ impl Collection<CapyVM> for ScmCollection {
 
     fn block_for_gc(_tls: mmtk::util::VMMutatorThread) {
         let vm = scm_virtual_machine();
+
         // thread will enter safepoint inside `lock`.
         let mut ml = vm.gc_waiters_lock.lock(true);
         // wait on notification for GC to resume mutators
@@ -371,51 +364,48 @@ impl Scanning<CapyVM> for ScmScanning {
         object: ObjectReference,
         edge_visitor: &mut EV,
     ) {
-        let reference = ScmCellRef(object);
+        let mut reference = ScmCellRef(object);
 
         match reference.header().type_id() {
             TypeId::Pair => {
-                let car = scm_car(reference);
-                let cdr = scm_cdr(reference);
+                let pair = reference.cast_as::<ScmPair>();
 
-                if car.is_object() {
-                    edge_visitor.visit_edge(reference.edge(1 * size_of::<Value>()));
-                }
-
-                if cdr.is_object() {
-                    edge_visitor.visit_edge(reference.edge(2 * size_of::<Value>()));
-                }
+                pair.car.visit_edge(edge_visitor);
+                pair.cdr.visit_edge(edge_visitor);
             }
 
             TypeId::Box => {
-                let value = reference.slot_ref(1);
+                let boxed = reference.cast_as::<ScmBox>();
 
-                if value.is_object() {
-                    edge_visitor.visit_edge(reference.edge(1 * size_of::<Value>()));
-                }
+                boxed.value.visit_edge(edge_visitor);
             }
 
-            TypeId::Vector => {
-                let len = reference.slot_ref(1).get_int32();
-                for i in 0..len {
-                    let value = reference.slot_ref(2 + i as usize);
+            TypeId::GLOC => {
+                let gloc = reference.cast_as::<ScmGloc>();
 
-                    if value.is_object() {
-                        edge_visitor
-                            .visit_edge(reference.edge((2 + i as usize) * size_of::<Value>()));
-                    }
-                }
+                gloc.value.visit_edge(edge_visitor);
+                gloc.name.visit_edge(edge_visitor);
             }
 
             TypeId::Program => {
-                let len = reference.slot_ref(2).get_int32();
-                for i in 0..len {
-                    let value = reference.slot_ref(3 + i as usize);
+                let program = Value::encode_object_value(reference);
+                for i in 0..scm_program_num_free_vars(program) {
+                    let free_var = scm_program_free_var_mut(program, i);
+                    free_var.visit_edge(edge_visitor);
+                }
+            }
 
-                    if value.is_object() {
-                        edge_visitor
-                            .visit_edge(reference.edge((3 + i as usize) * size_of::<Value>()));
-                    }
+            TypeId::Subroutine => {
+                let subr = reference.cast_as::<ScmSubroutine>();
+                subr.name.visit_edge(edge_visitor);
+            }
+
+            TypeId::Vector => {
+                let vector = Value::encode_object_value(reference);
+
+                for i in 0..scm_vector_length(vector) {
+                    let element = scm_vector_ref_mut(vector, i);
+                    element.visit_edge(edge_visitor);
                 }
             }
 
@@ -432,14 +422,19 @@ impl Scanning<CapyVM> for ScmScanning {
         unsafe {
             for &mutator in threads().iter_unlocked() {
                 let mutator = &mut *mutator;
-                let mut edges = vec![];
-                visit_roots(mutator.stackchain, &mut edges);
-                for handle in mutator.handles.assume_init_ref().iterate_for_gc() {
-                    let edge = SimpleEdge::from_address(handle.location());
-                    edges.push(edge);
+                if mutator.kind == ThreadKind::Mutator {
+                    let mut edges = vec![];
+                    visit_roots(mutator.stackchain, &mut edges);
+                    for handle in mutator.handles.assume_init_ref().iterate_for_gc() {
+                        let edge = SimpleEdge::from_address(handle.location());
+                        edges.push(edge);
+                    }
+
+                    let interp = mutator.interpreter();
+                    interp.mark_stack_for_roots(&mut factory);
+
+                    factory.create_process_edge_roots_work(edges);
                 }
-                edges.dedup_by(|a, b| a.as_address() == b.as_address());
-                factory.create_process_edge_roots_work(edges);
             }
         }
     }
@@ -458,14 +453,14 @@ impl Scanning<CapyVM> for ScmScanning {
         unsafe {
             vm.images.visit_roots(&mut factory);
         }
-        edges.dedup_by(|a, b| a.as_address() == b.as_address());
+
         factory.create_process_edge_roots_work(edges);
     }
 
     fn scan_roots_in_mutator_thread(
         _tls: mmtk::util::VMWorkerThread,
         mutator: &'static mut mmtk::Mutator<CapyVM>,
-        mut factory: impl RootsWorkFactory<<CapyVM as VMBinding>::VMEdge>,
+        _factory: impl RootsWorkFactory<<CapyVM as VMBinding>::VMEdge>,
     ) {
         /*unsafe {
             let tls = mutator.get_tls();

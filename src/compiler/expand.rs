@@ -14,7 +14,22 @@ use crate::{
     runtime::{object::scm_symbol_str, symbol::scm_intern, value::Value},
 };
 
-use super::{make_identifier, p::Weak, sexpr::Sexpr, tree_il::*, unmangled, Cenv, SyntaxEnv, P};
+use super::{make_identifier, sexpr::Sexpr, tree_il::*, unmangled, Cenv, SyntaxEnv, P};
+
+fn is_call_declared(cenv: &Cenv) -> bool {
+    let name = scm_intern(".call");
+    let id = cenv.lookup(Sexpr::Symbol(name));
+
+    match id {
+        Sexpr::Identifier(_) => cenv
+            .syntax_env
+            .env
+            .get(&name)
+            .filter(|x| matches!(&***x, Denotation::Macro(_)))
+            .is_some(),
+        _ => false,
+    }
+}
 
 pub fn expand_call(
     _program: Sexpr,
@@ -65,7 +80,7 @@ pub fn expand_inline_procedure(iform: P<IForm>, iargs: &[P<IForm>]) -> Result<P<
 
         for i in 0..lvars.len() {
             let mut lvar = lvars[i].clone();
-            lvar.initval = Some(Weak::new(&args[i]));
+            lvar.initval = Some(args[i].clone());
         }
 
         Ok(P(IForm::Let(Let {
@@ -159,6 +174,35 @@ pub fn pass1(program: &Sexpr, cenv: &Cenv) -> Result<P<IForm>, String> {
             },
 
             None => {
+                if is_call_declared(cenv)
+                    && matches!(program.car(), Sexpr::Identifier(_) | Sexpr::Symbol(_))
+                {
+                    let call = Sexpr::list(&[
+                        Sexpr::Symbol(scm_intern(".call")),
+                        program.car(),
+                        program.clone(),
+                    ]);
+
+                    let Denotation::Macro(rules) = &*cenv
+                        .syntax_env
+                        .env
+                        .get(&scm_intern(".call"))
+                        .cloned()
+                        .unwrap()
+                    else {
+                        unreachable!()
+                    };
+                    let expr =
+                        synrule_expand(call, cenv.syntax_env.clone(), cenv.frames.clone(), &rules)?;
+
+                    if sexp_eq(&program, &expr) {
+                        let gref = P(IForm::GRef(GRef { name: id }));
+
+                        return expand_call(program.clone(), gref, program.cdr(), cenv);
+                    }
+
+                    return pass1(&expr, cenv);
+                }
                 let gref = P(IForm::GRef(GRef { name: id }));
 
                 expand_call(program.clone(), gref, program.cdr(), cenv)
@@ -179,6 +223,12 @@ pub fn pass1(program: &Sexpr, cenv: &Cenv) -> Result<P<IForm>, String> {
         match h {
             Sexpr::Identifier(x) => global_call(program.clone(), Sexpr::Identifier(x), cenv),
             Sexpr::Special(special) => special(program.clone(), cenv),
+            Sexpr::LVar(lvar) => expand_call(
+                program.clone(),
+                P(IForm::LRef(LRef { lvar })),
+                program.cdr(),
+                cenv,
+            ),
             Sexpr::SyntaxRules(sr) => {
                 let expanded = synrule_expand(
                     program.clone(),
@@ -191,12 +241,22 @@ pub fn pass1(program: &Sexpr, cenv: &Cenv) -> Result<P<IForm>, String> {
             }
 
             Sexpr::Boolean(false) => {
+                if false && is_call_declared(cenv) {
+                    let call = Sexpr::list(&[
+                        Sexpr::Symbol(scm_intern(".call")),
+                        program.car(),
+                        program.clone(),
+                    ]);
+
+                    return pass1(&call, cenv);
+                }
+
                 let rator = pass1(&program.car(), cenv)?;
 
                 expand_call(program.clone(), rator, program.cdr(), cenv)
             }
 
-            _ => Err(format!("illegal function call: {}", program)),
+            x => Err(format!("illegal function call: {} {}", program, x)),
         }
     } else if matches!(program, Sexpr::Identifier(_) | Sexpr::Symbol(_)) {
         let r = cenv.lookup(program.clone());
@@ -205,6 +265,7 @@ pub fn pass1(program: &Sexpr, cenv: &Cenv) -> Result<P<IForm>, String> {
             Ok(P(IForm::LRef(LRef { lvar })))
         } else if let Sexpr::Identifier(id) = r {
             let name = unwrap_identifier(id.clone());
+
             Ok(P(IForm::GRef(GRef {
                 name: Sexpr::Symbol(name),
             })))
@@ -308,6 +369,36 @@ pub fn define_syntax() -> P<SyntaxEnv> {
         }
     });
 
+    define_syntax!("set!", form, cenv, {
+        if form.list_length() == Some(3) {
+            let var = form.cadr();
+            let val = form.caddr();
+
+            if !matches!(var, Sexpr::Symbol(_) | Sexpr::Identifier(_)) {
+                return Err(format!("illegal set!: {}", form));
+            }
+
+            let var = cenv.lookup(var.clone());
+            let value = pass1(&val, cenv)?;
+
+            if let Sexpr::LVar(lvar) = var {
+                Ok(P(IForm::LSet(
+                    LSet {
+                        lvar,
+                        value,
+                    },
+                )))   
+            } else {
+                Ok(P(IForm::GSet(GSet {
+                    name: var,
+                    value,
+                })))
+            }
+        } else {
+            Err(format!("illegal set!: {}", form))
+        }
+    });
+
     define_syntax!("let", form, cenv, {
         let mut bindings = form.cadr();
         let mut body = form.cddr();
@@ -349,6 +440,7 @@ pub fn define_syntax() -> P<SyntaxEnv> {
                         arg: false,
                         ref_count: 0,
                         set_count: 0,
+                        boxed: false,
                     });
 
                     vars.push(lvar);
@@ -366,7 +458,7 @@ pub fn define_syntax() -> P<SyntaxEnv> {
                     let init = pass1(&kv.cadr(), cenv)?;
 
                     inits.push(init);
-                    vars[i].initval = Some(Weak::new(&inits[i]));
+                    vars[i].initval = Some(inits[i].clone());
                     i += 1;
                     ls = ls.cdr();
                 }
@@ -413,6 +505,7 @@ pub fn define_syntax() -> P<SyntaxEnv> {
                 initval: None,
                 arg: false,
                 ref_count: 0,
+                boxed: false,
                 set_count: 0,
             });
 
@@ -435,6 +528,7 @@ pub fn define_syntax() -> P<SyntaxEnv> {
                     name: var.clone(),
                     initval: None,
                     arg: false,
+                    boxed: false,
                     ref_count: 0,
                     set_count: 0,
                 });
@@ -459,7 +553,7 @@ pub fn define_syntax() -> P<SyntaxEnv> {
             );
             let body = pass1_body(&body, &env2)?;
 
-            let lam = P(IForm::Lambda(Lambda {
+            let lam = P(IForm::Lambda(P(Lambda {
                 name: None,
                 reqargs: args.len() as _,
                 optarg: false,
@@ -468,10 +562,12 @@ pub fn define_syntax() -> P<SyntaxEnv> {
                 flag: LambdaFlag::Used,
                 calls: vec![],
                 lifted_var: LiftedVar::NotLifted,
-                free_lvars: vec![],
-            }));
+                free_lvars: Default::default(),
+                bound_lvars: Default::default(),
+                defs: Default::default(),
+            })));
 
-            lvar.initval = Some(Weak::new(&lam));
+            lvar.initval = Some(lam.clone());
 
             let mut cargs = Vec::with_capacity(bindings.list_length().unwrap());
 
@@ -496,6 +592,10 @@ pub fn define_syntax() -> P<SyntaxEnv> {
 
             Ok(letrec)
         }
+    });
+
+    define_syntax!("letrec", form, cenv, {
+        expand_letrec(form, cenv, LetType::Rec)
     });
 
     define_syntax!("begin", form, cenv, {
@@ -550,7 +650,8 @@ pub fn define_syntax() -> P<SyntaxEnv> {
                 rules,
                 cenv.syntax_env.clone(),
                 cenv.frames.clone(),
-            )? else {
+            )?
+            else {
                 unreachable!()
             };
 
@@ -559,7 +660,7 @@ pub fn define_syntax() -> P<SyntaxEnv> {
 
         let id = if let Sexpr::Identifier(mut id) = name {
             let sym = Sexpr::Gensym(P(scm_symbol_str(
-                unwrap_identifier(id.clone()).get_object(),
+                unwrap_identifier(id.clone()),
             )
             .to_string()));
             id.name = sym;
@@ -585,6 +686,85 @@ pub fn define_syntax() -> P<SyntaxEnv> {
     env.denotation_of_begin = Some(denotation_of_begin);
 
     env
+}
+
+fn expand_letrec(form: Sexpr, cenv: &Cenv, typ: LetType) -> Result<P<IForm>, String> {
+    let bindings = form.cadr();
+    let body = form.cddr();
+
+    if bindings.is_null() {
+        return pass1_body(&body, cenv);
+    } else {
+        if !bindings.is_list() {
+            return Err(format!("illegal letrec: {}", form));
+        }
+
+        let mut vars = vec![];
+
+        let mut ls = bindings.clone();
+
+        while ls.is_pair() {
+            let kv = ls.car();
+
+            let var = kv.car();
+            if !kv.cdr().is_pair() || !kv.cddr().is_null() {
+                return Err(format!("illegal letrec: {}", form));
+            }
+
+            if !matches!(var, Sexpr::Symbol(_) | Sexpr::Identifier(_)) {
+                return Err(format!("illegal letrec: {}", form));
+            }
+
+            let lvar = P(LVar {
+                name: var,
+                initval: None,
+                boxed: false,
+                arg: false,
+                ref_count: 0,
+                set_count: 0,
+            });
+
+            vars.push(lvar.clone());
+
+            ls = ls.cdr();
+        }
+
+        let newnev = cenv.extend(
+            Sexpr::list_from_iter(
+                vars.iter()
+                    .map(|lvar| sexp_cons(lvar.name.clone(), Sexpr::LVar(lvar.clone()))),
+            ),
+            Sexpr::Symbol(scm_intern("LEXICAL")),
+        );
+
+        let mut inits = Vec::with_capacity(vars.len());
+
+        let mut ls = bindings.clone();
+        let mut i = 0;
+        while ls.is_pair() {
+            let kv = ls.car();
+
+            let init = kv.cadr();
+            let mut var = vars[i].clone();
+            i += 1;
+
+            let iexpr = pass1(&init, &newnev)?;
+
+            var.initval = Some(iexpr.clone());
+            inits.push(iexpr);
+
+            ls = ls.cdr();
+        }
+
+        let body = pass1_body(&body, &newnev)?;
+
+        Ok(P(IForm::Let(Let {
+            typ,
+            lvars: vars,
+            inits,
+            body,
+        })))
+    }
 }
 
 fn pass1_define(form: Sexpr, oform: Sexpr, cenv: &Cenv) -> Result<P<IForm>, String> {
@@ -614,7 +794,7 @@ fn pass1_define(form: Sexpr, oform: Sexpr, cenv: &Cenv) -> Result<P<IForm>, Stri
 
         let id = if let Sexpr::Identifier(mut id) = name {
             let sym = Sexpr::Gensym(P(scm_symbol_str(
-                unwrap_identifier(id.clone()).get_object(),
+                unwrap_identifier(id.clone()),
             )
             .to_string()));
             id.name = sym;
@@ -627,7 +807,7 @@ fn pass1_define(form: Sexpr, oform: Sexpr, cenv: &Cenv) -> Result<P<IForm>, Stri
 
         if let IForm::Lambda(ref mut lam) = &mut *value {
             lam.name = Some(
-                unmangled(scm_symbol_str(unwrap_identifier(id.clone()).get_object())).to_string(),
+                unmangled(scm_symbol_str(unwrap_identifier(id.clone()))).to_string(),
             );
         }
 
@@ -659,6 +839,7 @@ fn pass1_vanilla_lambda(
             arg: false,
             ref_count: 0,
             set_count: 0,
+            boxed: false,
         });
 
         lvars.push(lvar);
@@ -675,7 +856,7 @@ fn pass1_vanilla_lambda(
 
     let body = pass1_body(&body, &cenv)?;
 
-    Ok(P(IForm::Lambda(Lambda {
+    Ok(P(IForm::Lambda(P(Lambda {
         name: None,
         reqargs: nreqs as _,
         optarg: nopts != 0,
@@ -683,9 +864,11 @@ fn pass1_vanilla_lambda(
         body,
         flag: LambdaFlag::None,
         calls: vec![],
-        free_lvars: vec![],
+        free_lvars: Default::default(),
+        bound_lvars: Default::default(),
+        defs: Default::default(),
         lifted_var: LiftedVar::NotLifted,
-    })))
+    }))))
 }
 
 fn pass1_body(expr: &Sexpr, cenv: &Cenv) -> Result<P<IForm>, String> {
@@ -919,6 +1102,7 @@ fn pass1_body_finish(
                 name: var.clone(),
                 initval: None,
                 arg: false,
+                boxed: false,
                 ref_count: 0,
                 set_count: 0,
             });
@@ -965,7 +1149,7 @@ fn pass1_body_finish(
 fn pass1_body_init(mut lvar: P<LVar>, init: Sexpr, newenv: &Cenv) -> Result<P<IForm>, String> {
     let init = pass1(&init, newenv)?;
 
-    lvar.initval = Some(Weak::new(&init));
+    lvar.initval = Some(init.clone());
 
     Ok(init)
 }

@@ -14,11 +14,11 @@ pub fn scm_assq(key: Value, list: Value) -> Value {
     }
 
     while cell.is_pair() {
-        let pair = cell.get_object();
+        let pair = cell;
         if !scm_car(pair).is_object() {
             return Value::encode_bool_value(false);
         }
-        let kv = scm_car(pair).get_object();
+        let kv = scm_car(pair);
 
         if scm_car(kv) == key {
             return kv.into();
@@ -35,17 +35,17 @@ pub fn scm_map(mut proc: impl FnMut(&Value) -> Value, list: Value) -> Value {
     gc_frame!(thread.stackchain() => result = Value::encode_null_value(), tail = Value::encode_null_value(), list = list);
 
     while !list.is_null() {
-        let value = scm_car(list.get_object());
+        let value = scm_car(*list);
         gc_frame!(thread.stackchain() => value = value);
         *value = proc(&value);
         let pair = thread.make_cons(*value, Value::encode_null_value());
         if tail.is_null() {
             *result = pair.into();
         } else {
-            scm_set_cdr(tail.get_object(), thread, pair.into());
+            scm_set_cdr(*tail, thread, pair.into());
         }
         *tail = pair.into();
-        *list = scm_cdr(list.get_object());
+        *list = scm_cdr(*list);
     }
 
     *result
@@ -83,14 +83,14 @@ macro_rules! scm_cons {
             let car = $car;
             let cdr = $cdr;
             $crate::gc_frame!(thread.stackchain() => car = car, cdr = cdr);
-            $crate::runtime::value::Value::encode_object_value(thread.make_cons(*car, *cdr))
+            thread.make_cons(*car, *cdr)
         }
     };
 }
 
 pub fn copy_alist(list: &Value) -> Value {
     scm_map(
-        |kv| scm_cons!(scm_car(kv.get_object()), scm_cdr(kv.get_object())),
+        |&kv| scm_cons!(scm_car(kv), scm_cdr(kv)),
         *list,
     )
 }
@@ -100,20 +100,20 @@ pub fn scm_append(ls2: &Rooted, ls1: &Rooted) -> Value {
         return **ls2;
     }
     let thread = Thread::current();
-    let res = scm_cons!(scm_car(ls1.get_object()), Value::encode_null_value());
+    let res = scm_cons!(scm_car(**ls1), Value::encode_null_value());
     let ls = **ls1;
     gc_frame!(thread.stackchain() => result = res, tail = res, ls1 = ls);
 
-    *ls1 = scm_cdr(ls1.get_object());
+    *ls1 = scm_cdr(*ls1);
 
     while ls1.is_pair() {
-        let pair = thread.make_cons(scm_car(ls1.get_object()), Value::encode_null_value());
-        scm_set_cdr(tail.get_object(), thread, pair.into());
+        let pair = thread.make_cons(scm_car(*ls1), Value::encode_null_value());
+        scm_set_cdr(*tail, thread, pair.into());
         *tail = pair.into();
-        *ls1 = scm_cdr(ls1.get_object());
+        *ls1 = scm_cdr(*ls1);
     }
 
-    scm_set_cdr(tail.get_object(), thread, **ls2);
+    scm_set_cdr(*tail, thread, **ls2);
 
     *result
 }

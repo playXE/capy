@@ -5,6 +5,8 @@ macro_rules! for_each_opcode {
     ($m: path) => {
         $m! {
             (op_enter, "enter", {})
+            // tells interpreter that we're in loop, might enter JITed code from here.
+            (op_loop_hint, "loop-hint", {})
             (op_nop, "nop", {})
             // relative to FP load
             (op_load, "load", { offset: i32})
@@ -64,8 +66,8 @@ macro_rules! for_each_opcode {
             (op_vector_ref, "vector-ref", {  })
             (op_vector_set, "vector-set!", { })
             (op_vector, "vector", { argc: u32 })
-            (op_vector_ref_imm, "vector-ref-imm", { index: u32 })
-            (op_vector_set_imm, "vector-set-imm!", { index: u32 })
+            (op_vector_ref_imm, "vector-ref/immeadiate", { index: u32 })
+            (op_vector_set_imm, "vector-set/immediate!", { index: u32 })
 
 
         }

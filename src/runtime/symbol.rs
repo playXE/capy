@@ -15,7 +15,7 @@ pub fn scm_intern(string: impl AsRef<str>) -> Value {
     }
     vm.symtab_lock.unlock();
 
-    let sym = Thread::current().make_symbol(string);
+    let sym = Thread::current().make_symbol(string, false, true);
     let string = scm_symbol_str(sym);
     vm.symtab_lock.lock(true);
     vm.symtable.insert(string, sym.into());

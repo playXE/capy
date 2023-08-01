@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicI8, Ordering};
 use std::{mem::MaybeUninit, panic::AssertUnwindSafe};
 
 use mmtk::memory_manager::bind_mutator;
-use mmtk::{Mutator, MutatorContext};
+use mmtk::Mutator;
 
 use crate::gc::CapyVM;
 
@@ -25,7 +25,9 @@ pub enum ThreadKind {
 }
 
 pub struct Thread {
+    
     pub mutator: MaybeUninit<Mutator<CapyVM>>,
+    interpreter: MaybeUninit<InterpreterState>,
     pub id: u64,
     pub safepoint: *mut u8,
     pub gc_state: i8,
@@ -49,6 +51,10 @@ impl Thread {
 
     pub fn current() -> &'static mut Thread {
         unsafe { &mut THREAD }
+    }
+
+    pub fn interpreter(&mut self) -> &mut InterpreterState {
+        unsafe { &mut *self.interpreter.as_mut_ptr() }
     }
 
     pub fn atomic_gc_state(&self) -> &AtomicI8 {
@@ -150,18 +156,15 @@ impl Thread {
         self.safepoint = super::safepoint::SAFEPOINT_PAGE.address();
         self.kind = ThreadKind::Mutator;
 
-        let mut mutator = bind_mutator(&scm_virtual_machine().mmtk, unsafe { transmute(self) });
-        unsafe {
-            mutator.prepare(transmute(Thread::current()));
-        }
-        Thread::current().mutator = MaybeUninit::new(*mutator);
+        let mutator = bind_mutator(&scm_virtual_machine().mmtk, unsafe {
+            transmute(Thread::current())
+        });
+        self.mutator = MaybeUninit::new(*mutator);
 
-        for _ in 0..3 {
-            Thread::current().safepoint();
-        }
-        Thread::current().handles = MaybeUninit::new(HandleMemory::new());
+        self.handles = MaybeUninit::new(HandleMemory::new());
         let th = threads();
-        th.add_thread(Thread::current());
+        th.add_thread(self as *mut Thread);
+        self.interpreter = MaybeUninit::new(InterpreterState::new());
     }
 
     pub(crate) fn register_worker(&mut self, controller: bool) {
@@ -178,6 +181,7 @@ impl Thread {
 
 use crate::gc::refstorage::HandleMemory;
 use crate::gc::shadow_stack::StackChain;
+use crate::interpreter::InterpreterState;
 use crate::vm::sync::mutex::*;
 
 use super::scm_virtual_machine;
@@ -239,7 +243,10 @@ impl Threads {
 
     pub unsafe fn num(&self) -> usize {
         let threads = self.threads.unsafe_get();
-        threads.len()
+        threads
+            .iter()
+            .filter(|th| (***th).kind == ThreadKind::Mutator)
+            .count()
     }
 
     pub unsafe fn iter_unlocked(&self) -> Iter<*mut Thread> {
@@ -292,6 +299,7 @@ static mut SINK: u8 = 0;
 #[thread_local]
 static mut THREAD: Thread = Thread {
     id: 0,
+    interpreter: MaybeUninit::uninit(),
     mutator: MaybeUninit::uninit(),
     safepoint: std::ptr::null_mut(),
     gc_state: 2,

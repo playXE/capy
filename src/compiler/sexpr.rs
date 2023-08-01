@@ -2,7 +2,7 @@ use crate::runtime::{object::scm_symbol_str, symbol::scm_intern, value::Value};
 
 use super::{
     tree_il::{IForm, LVar},
-    Cenv, SyntaxEnv, P,
+    Cenv, SyntaxEnv, P, unwrap_identifier,
 };
 
 #[derive(Clone)]
@@ -72,6 +72,7 @@ pub fn sexp_eq(x: &Sexpr, y: &Sexpr) -> bool {
         (Sexpr::Null, Sexpr::Null) => true,
         (Sexpr::Undefined, Sexpr::Undefined) => true,
         (Sexpr::Symbol(x), Sexpr::Symbol(y)) => x == y,
+        (Sexpr::Identifier(x), Sexpr::Identifier(y)) => x.as_ptr() == y.as_ptr(),
         (Sexpr::Fixnum(x), Sexpr::Fixnum(y)) => x == y,
         (Sexpr::Char(x), Sexpr::Char(y)) => x == y,
         (Sexpr::Flonum(x), Sexpr::Flonum(y)) => x == y,
@@ -130,6 +131,14 @@ pub fn sexp_acons(caar: Sexpr, cdar: Sexpr, cdr: Sexpr) -> Sexpr {
 }
 
 impl Sexpr {
+    pub fn to_boolean(&self) -> bool {
+        match self {
+            Self::Boolean(false) => false,
+            Self::Undefined => false,
+            _ => true,
+        }
+    }
+
     pub fn cons(car: Sexpr, cdr: Sexpr) -> Self {
         sexp_cons(car, cdr)
     }
@@ -439,6 +448,16 @@ impl Sexpr {
         }
         res
     }
+
+    pub fn unwrap_id(&self) -> Value {
+        if let Sexpr::Identifier(id) = self {
+            unwrap_identifier(id.clone())
+        } else if let Sexpr::Symbol(sym) = self {
+            *sym 
+        } else {
+            panic!("unwrap_id: not an identifier");
+        }
+    }
 }
 
 use pretty::{BoxAllocator, DocAllocator, DocBuilder};
@@ -465,7 +484,7 @@ impl Sexpr {
                 .append(id.name.pretty(allocator))
                 .append(format!(".{:p}>", id.as_ptr()))
                 .annotate(ColorSpec::new().set_fg(Some(Color::Red)).clone()),
-            Self::Symbol(name) => allocator.text(scm_symbol_str(name.get_object())),
+            Self::Symbol(name) => allocator.text(scm_symbol_str(*name)),
 
             Self::Pair(pair) => {
                 let mut docs = vec![];

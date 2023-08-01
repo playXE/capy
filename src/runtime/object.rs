@@ -32,8 +32,7 @@ pub enum TypeId {
     Tuple,
     Bytevector,
     Port,
-    Intrinsic,
-    ClosedIntrinsic,
+    Subroutine,
     Rational,
     Complex,
     Bignum,
@@ -88,10 +87,12 @@ impl ScmCellRef {
         unsafe {
             let slot = self.0.to_raw_address().add(offset * size_of::<Value>());
             let edge = SimpleEdge::from_address(slot);
-
+            debug_assert_ne!(self.0, ObjectReference::NULL);
             if value.is_object() {
+                debug_assert_ne!(value.get_object().0, ObjectReference::NULL);
                 object_reference_write(&mut thread.mutator(), self.0, edge, value.get_object().0);
             } else {
+                debug_assert!(!value.is_empty());
                 slot.store(value);
             }
         }
@@ -122,15 +123,11 @@ impl ScmCellRef {
     pub fn header(self) -> ScmCellHeader {
         unsafe { self.0.to_raw_address().load::<ScmCellHeader>() }
     }
-}
 
-pub fn scm_program_set_free_variable(
-    program: ScmCellRef,
-    thread: &mut Thread,
-    index: u32,
-    value: Value,
-) {
-    program.slot_set(thread, 3 + index as usize, value)
+    #[inline]
+    pub fn cast_as<T>(&mut self) -> &mut T {
+        unsafe { &mut *self.0.to_raw_address().to_mut_ptr() }
+    }
 }
 
 impl Value {
@@ -170,12 +167,12 @@ impl Value {
         self.is_object() && self.get_object().header().type_id() == TypeId::Port
     }
 
-    pub fn is_intrinsic(self) -> bool {
-        self.is_object() && self.get_object().header().type_id() == TypeId::Intrinsic
+    pub fn is_subroutine(self) -> bool {
+        self.is_object() && self.get_object().header().type_id() == TypeId::Subroutine
     }
 
-    pub fn is_closed_intrinsic(self) -> bool {
-        self.is_object() && self.get_object().header().type_id() == TypeId::ClosedIntrinsic
+    pub fn is_gloc(self) -> bool {
+        self.is_object() && self.get_object().header().type_id() == TypeId::GLOC
     }
 }
 
@@ -185,121 +182,275 @@ impl Into<Value> for ScmCellRef {
     }
 }
 
-pub fn scm_car(cell: ScmCellRef) -> Value {
-    cell.slot_ref(1)
+pub fn scm_car(cell: Value) -> Value {
+    cell.get_object().cast_as::<ScmPair>().car
 }
 
-pub fn scm_cdr(cell: ScmCellRef) -> Value {
-    cell.slot_ref(2)
+pub fn scm_cdr(cell: Value) -> Value {
+    cell.get_object().cast_as::<ScmPair>().cdr
 }
 
-pub fn scm_set_car(cell: ScmCellRef, thread: &mut Thread, value: Value) {
-    cell.slot_set(thread, 1, value)
-}
-
-pub fn scm_set_cdr(cell: ScmCellRef, thread: &mut Thread, value: Value) {
-    cell.slot_set(thread, 2, value)
-}
-
-pub fn scm_vector_ref(vector: ScmCellRef, index: u32) -> Value {
-    vector.slot_ref(2 + index as usize)
-}
-
-pub fn scm_vector_set(vector: ScmCellRef, thread: &mut Thread, index: u32, value: Value) {
-    vector.slot_set(thread, 2 + index as usize, value)
-}
-
-pub fn scm_bytevector_ref(bytevector: ScmCellRef, index: u32) -> u8 {
-    bytevector.raw_load(size_of::<Value>() * 2 + index as usize)
-}
-
-pub fn scm_bytevector_set(bytevector: ScmCellRef, index: u32, value: u8) {
-    bytevector.raw_store(size_of::<Value>() * 2 + index as usize, value)
-}
-
-pub fn scm_bytevector_as_slice<'a>(bytevector: ScmCellRef) -> &'a [u8] {
-    unsafe {
-        std::slice::from_raw_parts(
-            bytevector.to_address().add(size_of::<Value>() * 2).to_ptr(),
-            bytevector.slot_ref(1).get_int32() as _,
-        )
+#[inline]
+pub fn scm_set_car(cell: Value, thread: &mut Thread, value: Value) {
+    let mut pair = cell.get_object();
+    let pair = pair.cast_as::<ScmPair>();
+    if value.is_object() {
+        object_reference_write(
+            thread.mutator(),
+            cell.get_object().0,
+            SimpleEdge::from_address(Address::from_ptr(&mut pair.car)),
+            value.get_object().0,
+        );
+    } else {
+        pair.car = value;
     }
 }
 
-pub fn scm_bytevector_as_slice_mut<'a>(bytevector: ScmCellRef) -> &'a mut [u8] {
-    unsafe {
-        std::slice::from_raw_parts_mut(
-            bytevector
-                .to_address()
-                .add(size_of::<Value>() * 2)
-                .to_mut_ptr(),
-            bytevector.slot_ref(1).get_int32() as _,
-        )
+#[inline]
+pub fn scm_set_cdr(cell: Value, thread: &mut Thread, value: Value) {
+    let mut pair = cell.get_object();
+    let pair = pair.cast_as::<ScmPair>();
+    if value.is_object() {
+        object_reference_write(
+            thread.mutator(),
+            cell.get_object().0,
+            SimpleEdge::from_address(Address::from_ptr(&mut pair.cdr)),
+            value.get_object().0,
+        );
+    } else {
+        pair.cdr = value;
     }
 }
 
-pub fn scm_bytevector_length(bytevector: ScmCellRef) -> u32 {
-    bytevector.slot_ref(1).get_int32() as _
-}
-
-pub fn scm_vector_length(vector: ScmCellRef) -> u32 {
-    vector.slot_ref(1).get_int32() as _
-}
-
-pub fn scm_program_code(program: ScmCellRef) -> *const u32 {
-    unsafe { std::mem::transmute(program.slot_ref(1)) }
-}
-
-pub fn scm_program_num_free_vars(program: ScmCellRef) -> u32 {
-    program.slot_ref(2).get_int32() as _
-}
-
-pub fn scm_program_free_variable(program: ScmCellRef, index: u32) -> Value {
-    program.slot_ref(3 + index as usize)
-}
-
-pub fn scm_string_str<'a>(str: ScmCellRef) -> &'a str {
+pub fn scm_vector_ref(vector: Value, index: u32) -> Value {
+    debug_assert!(vector.is_vector());
     unsafe {
+        debug_assert!(index < vector.get_object().cast_as::<ScmVector>().length as u32);
+        vector
+            .get_object()
+            .cast_as::<ScmVector>()
+            .values
+            .as_ptr()
+            .add(index as usize)
+            .read()
+    }
+}
+
+pub fn scm_vector_ref_mut<'a>(vector: Value, index: u32) -> &'a mut Value {
+    debug_assert!(vector.is_vector());
+    unsafe {
+        debug_assert!(index < vector.get_object().cast_as::<ScmVector>().length as u32);
+        &mut *vector
+            .get_object()
+            .cast_as::<ScmVector>()
+            .values
+            .as_mut_ptr()
+            .add(index as usize)
+    }
+}
+
+pub fn scm_vector_set(vector: Value, thread: &mut Thread, index: u32, value: Value) {
+    debug_assert!(vector.is_vector());
+    debug_assert!(index < vector.get_object().cast_as::<ScmVector>().length as u32);
+    let mut v = vector.get_object();
+    let vec = v.cast_as::<ScmVector>();
+
+    if value.is_object() {
+        object_reference_write(
+            thread.mutator(),
+            vector.get_object().0,
+            SimpleEdge::from_address(Address::from_mut_ptr(unsafe {
+                vec.values.as_mut_ptr().add(index as usize)
+            })),
+            value.get_object().0,
+        );
+    } else {
+        unsafe {
+            vec.values.as_mut_ptr().add(index as usize).write(value);
+        }
+    }
+}
+
+pub fn scm_bytevector_ref(bytevector: Value, index: u32) -> u8 {
+    debug_assert!(bytevector.is_bytevector());
+    unsafe {
+        debug_assert!(index < bytevector.get_object().cast_as::<ScmBytevector>().length as u32);
+        bytevector
+            .get_object()
+            .cast_as::<ScmBytevector>()
+            .data
+            .as_ptr()
+            .add(index as usize)
+            .read()
+    }
+}
+
+pub fn scm_bytevector_set(bytevector: Value, index: u32, value: u8) {
+    unsafe {
+        debug_assert!(bytevector.is_bytevector());
+        debug_assert!(index < bytevector.get_object().cast_as::<ScmBytevector>().length as u32);
+        let mut bvec = bytevector.get_object();
+        let bvec = bvec.cast_as::<ScmBytevector>();
+        bvec.data.as_mut_ptr().add(index as usize).write(value);
+    }
+}
+
+pub fn scm_bytevector_as_slice<'a>(bytevector: Value) -> &'a [u8] {
+    unsafe {
+        debug_assert!(bytevector.is_bytevector());
+        let mut bvec = bytevector.get_object();
+        let bvec = bvec.cast_as::<ScmBytevector>();
+        std::slice::from_raw_parts(bvec.data.as_ptr(), bvec.length)
+    }
+}
+
+pub fn scm_bytevector_as_slice_mut<'a>(bytevector: Value) -> &'a mut [u8] {
+    unsafe {
+        debug_assert!(bytevector.is_bytevector());
+        let mut bvec = bytevector.get_object();
+        let bvec = bvec.cast_as::<ScmBytevector>();
+        std::slice::from_raw_parts_mut(bvec.data.as_mut_ptr(), bvec.length)
+    }
+}
+
+pub fn scm_bytevector_length(bytevector: Value) -> u32 {
+    debug_assert!(bytevector.is_bytevector());
+    bytevector.get_object().cast_as::<ScmBytevector>().length as _
+}
+
+pub fn scm_vector_length(vector: Value) -> u32 {
+    debug_assert!(vector.is_vector());
+    vector.get_object().cast_as::<ScmVector>().length as _
+}
+
+pub fn scm_program_code(program: Value) -> *const u8 {
+    debug_assert!(program.is_program());
+    program.get_object().cast_as::<ScmProgram>().vcode
+}
+
+pub fn scm_program_num_free_vars(program: Value) -> u32 {
+    debug_assert!(program.is_program());
+    program.get_object().cast_as::<ScmProgram>().nfree as _
+}
+
+pub fn scm_program_free_variable(program: Value, index: u32) -> Value {
+    debug_assert!(program.is_program());
+    unsafe {
+        debug_assert!(index < program.get_object().cast_as::<ScmProgram>().nfree as u32);
+        program
+            .get_object()
+            .cast_as::<ScmProgram>()
+            .free
+            .as_ptr()
+            .add(index as usize)
+            .read()
+    }
+}
+
+pub fn scm_program_free_var_mut<'a>(program: Value, index: u32) -> &'a mut Value {
+    debug_assert!(program.is_program());
+    unsafe {
+        debug_assert!(index < program.get_object().cast_as::<ScmProgram>().nfree as u32);
+        &mut *program
+            .get_object()
+            .cast_as::<ScmProgram>()
+            .free
+            .as_mut_ptr()
+            .add(index as usize)
+    }
+}
+
+pub fn scm_program_set_free_variable(
+    program: Value,
+    thread: &mut Thread,
+    index: u32,
+    value: Value,
+) {
+    debug_assert!(program.is_program());
+    let mut prog = program.get_object();
+    let prog = prog.cast_as::<ScmProgram>();
+
+    if value.is_object() {
+        object_reference_write(
+            thread.mutator(),
+            program.get_object().0,
+            SimpleEdge::from_address(Address::from_mut_ptr(unsafe {
+                prog.free.as_mut_ptr().add(index as usize)
+            })),
+            value.get_object().0,
+        );
+    } else {
+        unsafe {
+            prog.free.as_mut_ptr().add(index as usize).write(value);
+        }
+    }
+}
+
+pub fn scm_string_str<'a>(str: Value) -> &'a str {
+    unsafe {
+        debug_assert!(str.is_string());
+        let mut str = str.get_object();
+        let str = str.cast_as::<ScmString>();
+        std::str::from_utf8_unchecked(std::slice::from_raw_parts(str.name.as_ptr(), str.length))
+    }
+}
+
+pub fn scm_string_cstr<'a>(str: Value) -> &'a str {
+    unsafe {
+        debug_assert!(str.is_string());
+        let mut str = str.get_object();
+        let str = str.cast_as::<ScmString>();
         std::str::from_utf8_unchecked(std::slice::from_raw_parts(
-            str.to_address().add(size_of::<Value>() * 2).to_ptr(),
-            str.slot_ref(1).get_int32() as _,
+            str.name.as_ptr(),
+            str.length + 1,
         ))
     }
 }
 
-pub fn scm_string_cstr<'a>(str: ScmCellRef) -> &'a str {
+pub fn scm_symbol_str<'a>(symbol: Value) -> &'a str {
     unsafe {
+        debug_assert!(symbol.is_symbol());
+        let mut str = symbol.get_object();
+        let str = str.cast_as::<ScmSymbol>();
         std::str::from_utf8_unchecked(std::slice::from_raw_parts(
-            str.to_address().add(size_of::<Value>() * 2).to_ptr(),
-            str.slot_ref(1).get_int32() as usize + 1,
+            str.name.as_ptr(),
+            str.length as _,
         ))
     }
 }
 
-pub fn scm_symbol_str<'a>(symbol: ScmCellRef) -> &'a str {
+pub fn scm_symbol_cstr<'a>(symbol: Value) -> &'a str {
     unsafe {
+        debug_assert!(symbol.is_symbol());
+
+        let mut str = symbol.get_object();
+        let str = str.cast_as::<ScmSymbol>();
         std::str::from_utf8_unchecked(std::slice::from_raw_parts(
-            symbol.to_address().add(size_of::<Value>() * 2).to_ptr(),
-            symbol.slot_ref(1).get_int32() as _,
+            str.name.as_ptr(),
+            str.length as usize + 1,
         ))
     }
 }
 
-pub fn scm_symbol_cstr<'a>(symbol: ScmCellRef) -> &'a str {
-    unsafe {
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(
-            symbol.to_address().add(size_of::<Value>() * 2).to_ptr(),
-            symbol.slot_ref(1).get_int32() as usize + 1,
-        ))
+pub fn scm_gloc_value(value: Value) -> Value {
+    debug_assert!(value.is_gloc());
+    value.get_object().cast_as::<ScmGloc>().value
+}
+
+pub fn scm_gloc_set(value: Value, thread: &mut Thread, new_value: Value) {
+    debug_assert!(value.is_gloc());
+    let mut gloc = value.get_object();
+    let gloc = gloc.cast_as::<ScmGloc>();
+    if new_value.is_object() {
+        object_reference_write(
+            thread.mutator(),
+            value.get_object().0,
+            SimpleEdge::from_address(Address::from_mut_ptr(&mut gloc.value)),
+            new_value.get_object().0,
+        );
+    } else {
+        gloc.value = new_value;
     }
-}
-
-pub fn scm_gloc_value(value: ScmCellRef) -> Value {
-    value.slot_ref(1)
-}
-
-pub fn scm_gloc_set(value: ScmCellRef, thread: &mut Thread, new_value: Value) {
-    value.slot_set(thread, 1, new_value)
 }
 
 pub fn scm_gloc_name(value: ScmCellRef) -> Value {
@@ -326,12 +477,12 @@ pub fn dump_object(val: Value) -> Result<String, std::fmt::Error> {
     } else if val.is_pair() {
         write!(f, "(")?;
 
-        let mut cell = val.get_object();
+        let mut cell = val;
         loop {
             write!(f, "{}", dump_object(scm_car(cell))?)?;
             if scm_cdr(cell).is_pair() {
                 write!(f, " ")?;
-                cell = scm_cdr(cell).get_object();
+                cell = scm_cdr(cell);
             } else if scm_cdr(cell).is_null() {
                 break;
             } else {
@@ -342,7 +493,7 @@ pub fn dump_object(val: Value) -> Result<String, std::fmt::Error> {
 
         write!(f, ")")?;
     } else if val.is_vector() {
-        let cell = val.get_object();
+        let cell = val;
         write!(f, "#(")?;
 
         for i in 0..scm_vector_length(cell) {
@@ -354,12 +505,81 @@ pub fn dump_object(val: Value) -> Result<String, std::fmt::Error> {
 
         write!(f, ")")?;
     } else if val.is_symbol() {
-        write!(f, "{}", scm_symbol_str(val.get_object()))?;
+        write!(f, "{}", scm_symbol_str(val))?;
     } else if val.is_string() {
-        write!(f, "{:?}", scm_string_str(val.get_object()))?;
+        write!(f, "{:?}", scm_string_str(val))?;
     } else {
         write!(f, "#<unknown {:?}>", val)?;
     }
 
     Ok(f)
+}
+
+#[repr(C)]
+pub struct ScmPair {
+    pub header: ScmCellHeader,
+    pub car: Value,
+    pub cdr: Value,
+}
+
+#[repr(C)]
+pub struct ScmVector {
+    pub header: ScmCellHeader,
+    pub length: usize,
+    pub values: [Value; 0],
+}
+
+#[repr(C)]
+pub struct ScmSymbol {
+    pub header: ScmCellHeader,
+    pub length: u32,
+    pub gensym: bool,
+    pub interned: bool,
+    pub name: [u8; 0],
+}
+
+#[repr(C)]
+pub struct ScmString {
+    pub header: ScmCellHeader,
+    pub length: usize,
+    pub name: [u8; 0],
+}
+
+#[repr(C)]
+pub struct ScmBytevector {
+    pub header: ScmCellHeader,
+    pub length: usize,
+    pub data: [u8; 0],
+}
+
+#[repr(C)]
+pub struct ScmGloc {
+    pub header: ScmCellHeader,
+    pub value: Value,
+    pub name: Value,
+}
+
+#[repr(C)]
+pub struct ScmProgram {
+    pub header: ScmCellHeader,
+    pub vcode: *const u8,
+    pub nfree: usize,
+    pub free: [Value; 0],
+}
+
+#[repr(C)]
+pub struct ScmBox {
+    pub header: ScmCellHeader,
+    pub value: Value,
+}
+
+#[repr(C)]
+pub struct ScmSubroutine {
+    pub header: ScmCellHeader,
+    pub name: Value,
+    pub callback: extern "C" fn(thread: &mut Thread),
+    pub mina: u32,
+    pub maxa: u32,
+    pub nenv: u32,
+    pub env: [Value; 0],
 }

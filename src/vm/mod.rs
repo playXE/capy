@@ -1,7 +1,4 @@
-use std::{
-    collections::HashMap,
-    mem::{transmute, MaybeUninit},
-};
+use std::{collections::HashMap, mem::transmute};
 
 use crate::{bytecode::image::ImageRegistry, gc::CapyVM, runtime::value::Value};
 
@@ -44,13 +41,13 @@ pub fn scm_init(mmtk: mmtk::MMTK<CapyVM>) -> &'static mut VirtualMachine {
     unsafe {
         VIRTUAL_MACHINE = this as *mut VirtualMachine;
 
-        Thread::current().register_mutator();
+        
 
         mmtk::memory_manager::initialize_collection(
             &scm_virtual_machine().mmtk,
             transmute(Thread::current()),
         );
-
+        Thread::current().register_mutator();
         this
     }
 }

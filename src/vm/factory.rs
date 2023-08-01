@@ -4,14 +4,17 @@ use mmtk::{util::ObjectReference, AllocationSemantics, MutatorContext};
 
 use crate::{
     runtime::object::{Header, ScmCellHeader, ScmCellRef, TypeId},
-    runtime::value::Value,
+    runtime::{
+        object::{ScmBytevector, ScmGloc, ScmProgram, ScmString, ScmSymbol, ScmVector},
+        value::Value,
+    },
     utils::round_up,
 };
 
 use super::thread::Thread;
 
 impl Thread {
-    pub fn make_cons(&mut self, car: Value, cdr: Value) -> ScmCellRef {
+    pub fn make_cons(&mut self, car: Value, cdr: Value) -> Value {
         unsafe {
             let mutator = self.mutator.assume_init_mut();
             let mem = mutator.alloc(
@@ -39,46 +42,45 @@ impl Thread {
                 AllocationSemantics::Default,
             );
 
-            ScmCellRef(reference)
+            ScmCellRef(reference).into()
         }
     }
 
-    pub fn make_vector(&mut self, len: usize, fill: Value) -> ScmCellRef {
-        let size = size_of::<ScmCellHeader>() + size_of::<Value>() * len + size_of::<Value>();
+    pub fn make_vector(&mut self, len: usize, fill: Value) -> Value {
+        let size = round_up(size_of::<ScmCellHeader>() + size_of::<Value>() * len, 8, 0);
 
         unsafe {
-            let mutator = self.mutator.assume_init_mut();
+            let mutator = self.mutator();
             let mem = mutator.alloc(size, size_of::<usize>(), 0, AllocationSemantics::Default);
 
-            mem.store::<ScmCellHeader>(ScmCellHeader {
-                as_header: Header {
-                    type_id: TypeId::Vector,
-                    pad: [0; 4],
-                    flags: 0,
+            mem.store(ScmVector {
+                header: ScmCellHeader {
+                    as_header: Header {
+                        type_id: TypeId::Vector,
+                        pad: [0; 4],
+                        flags: 0,
+                    },
                 },
+                length: len,
+                values: [],
             });
+            let mut cursor = (*mem.to_mut_ptr::<ScmVector>()).values.as_mut_ptr();
+            let end = cursor.add(len);
 
-            mem.add(size_of::<ScmCellHeader>())
-                .store(Value::encode_int32(len as i32));
-
-            for i in 0..len {
-                mem.add(size_of::<ScmCellHeader>() + size_of::<Value>() * (i + 1))
-                    .store(fill);
+            while cursor < end {
+                cursor.write(fill);
+                cursor = cursor.add(1);
             }
 
             let reference = ObjectReference::from_raw_address(mem);
             mutator.post_alloc(reference, size, AllocationSemantics::Default);
 
-            ScmCellRef(reference)
+            ScmCellRef(reference).into()
         }
     }
 
-    pub fn make_bytevector<const IMMORTAL: bool>(&mut self, n: usize, init: u8) -> ScmCellRef {
-        let size = round_up(
-            size_of::<ScmCellHeader>() + size_of::<u8>() * n + size_of::<Value>(),
-            8,
-            0,
-        );
+    pub fn make_bytevector<const IMMORTAL: bool>(&mut self, n: usize, init: u8) -> Value {
+        let size = round_up(size_of::<ScmBytevector>() + n, 8, 0);
         let semantics = if IMMORTAL {
             AllocationSemantics::Immortal
         } else {
@@ -88,32 +90,29 @@ impl Thread {
             let mutator = self.mutator.assume_init_mut();
             let mem = mutator.alloc(size, size_of::<usize>(), 0, semantics);
 
-            mem.store::<ScmCellHeader>(ScmCellHeader {
-                as_header: Header {
-                    type_id: TypeId::Bytevector,
-                    pad: [0; 4],
-                    flags: 0,
+            mem.store(ScmBytevector {
+                header: ScmCellHeader {
+                    as_header: Header {
+                        type_id: TypeId::Bytevector,
+                        pad: [0; 4],
+                        flags: 0,
+                    },
                 },
+                length: n,
+                data: [],
             });
 
-            mem.add(size_of::<ScmCellHeader>())
-                .store(Value::encode_int32(n as i32));
-            mem.add(size_of::<ScmCellHeader>() + size_of::<Value>())
-                .to_mut_ptr::<u8>()
-                .write_bytes(init, n);
+            let data = (*mem.to_mut_ptr::<ScmBytevector>()).data.as_mut_ptr();
+            data.write_bytes(init, n);
             let reference = ObjectReference::from_raw_address(mem);
             mutator.post_alloc(reference, size, semantics);
 
-            ScmCellRef(reference)
+            ScmCellRef(reference).into()
         }
     }
 
-    pub fn make_bytevector_from_slice<const IMMORTAL: bool>(&mut self, slice: &[u8]) -> ScmCellRef {
-        let size = round_up(
-            size_of::<ScmCellHeader>() + size_of::<u8>() * slice.len() + size_of::<Value>(),
-            8,
-            0,
-        );
+    pub fn make_bytevector_from_slice<const IMMORTAL: bool>(&mut self, slice: &[u8]) -> Value {
+        let size = round_up(size_of::<ScmBytevector>() + slice.len(), 8, 0);
         let semantics = if IMMORTAL {
             AllocationSemantics::Immortal
         } else {
@@ -123,32 +122,29 @@ impl Thread {
             let mutator = self.mutator.assume_init_mut();
             let mem = mutator.alloc(size, size_of::<usize>(), 0, semantics);
 
-            mem.store::<ScmCellHeader>(ScmCellHeader {
-                as_header: Header {
-                    type_id: TypeId::Bytevector,
-                    pad: [0; 4],
-                    flags: 0,
+            mem.store(ScmBytevector {
+                header: ScmCellHeader {
+                    as_header: Header {
+                        type_id: TypeId::Bytevector,
+                        pad: [0; 4],
+                        flags: 0,
+                    },
                 },
+                length: slice.len(),
+                data: [],
             });
 
-            mem.add(size_of::<ScmCellHeader>())
-                .store(Value::encode_int32(slice.len() as i32));
-            mem.add(size_of::<ScmCellHeader>() + size_of::<Value>())
-                .to_mut_ptr::<u8>()
-                .copy_from_nonoverlapping(slice.as_ptr(), slice.len());
+            let data = (*mem.to_mut_ptr::<ScmBytevector>()).data.as_mut_ptr();
+            data.copy_from_nonoverlapping(slice.as_ptr(), slice.len());
             let reference = ObjectReference::from_raw_address(mem);
             mutator.post_alloc(reference, size, semantics);
 
-            ScmCellRef(reference)
+            ScmCellRef(reference).into()
         }
     }
 
-    pub fn make_string<const IMMORTAL: bool>(&mut self, str: &str) -> ScmCellRef {
-        let size = round_up(
-            size_of::<ScmCellHeader>() + size_of::<u8>() * str.len() + size_of::<Value>() + 1,
-            8,
-            0,
-        );
+    pub fn make_string<const IMMORTAL: bool>(&mut self, str: &str) -> Value {
+        let size = round_up(size_of::<ScmString>() + str.len() + 1, 8, 0);
         let semantics = if IMMORTAL {
             AllocationSemantics::Immortal
         } else {
@@ -158,35 +154,36 @@ impl Thread {
             let mutator = self.mutator.assume_init_mut();
             let mem = mutator.alloc(size, size_of::<usize>(), 0, semantics);
 
-            mem.store::<ScmCellHeader>(ScmCellHeader {
-                as_header: Header {
-                    type_id: TypeId::String,
-                    pad: [0; 4],
-                    flags: 0,
+            mem.store(ScmString {
+                header: ScmCellHeader {
+                    as_header: Header {
+                        type_id: TypeId::String,
+                        pad: [0; 4],
+                        flags: 0,
+                    },
                 },
+                length: str.len(),
+                name: [],
             });
 
-            mem.add(size_of::<ScmCellHeader>())
-                .store(Value::encode_int32(str.len() as i32));
-            let strstart = mem
-                .add(size_of::<ScmCellHeader>() + size_of::<Value>())
-                .to_mut_ptr::<u8>();
-            strstart.copy_from_nonoverlapping(str.as_bytes().as_ptr(), str.len());
-            strstart.add(str.len()).write_bytes(0, 1);
+            let name = (*mem.to_mut_ptr::<ScmString>()).name.as_mut_ptr();
+            name.copy_from_nonoverlapping(str.as_ptr(), str.len());
+            *name.add(str.len()) = 0;
+
             let reference = ObjectReference::from_raw_address(mem);
             mutator.post_alloc(reference, size, semantics);
 
-            ScmCellRef(reference)
+            ScmCellRef(reference).into()
         }
     }
 
     pub fn make_program<const IMMORTAL: bool>(
         &mut self,
-        code: *const u8,
+        vcode: *const u8,
         num_free_vars: u32,
-    ) -> ScmCellRef {
+    ) -> Value {
         let size = round_up(
-            size_of::<ScmCellHeader>() + size_of::<Value>() * (num_free_vars as usize + 2),
+            size_of::<ScmProgram>() + size_of::<Value>() * num_free_vars as usize,
             8,
             0,
         );
@@ -199,44 +196,42 @@ impl Thread {
             let mutator = self.mutator.assume_init_mut();
             let mem = mutator.alloc(size, size_of::<usize>(), 0, semantics);
 
-            mem.store::<ScmCellHeader>(ScmCellHeader {
-                as_header: Header {
-                    type_id: TypeId::Program,
-                    pad: [0; 4],
-                    flags: 0,
+            mem.store(ScmProgram {
+                header: ScmCellHeader {
+                    as_header: Header {
+                        type_id: TypeId::Program,
+                        pad: [0; 4],
+                        flags: 0,
+                    },
                 },
+                vcode: vcode as *mut u8,
+                nfree: num_free_vars as _,
+                free: [],
             });
 
-            mem.add(size_of::<ScmCellHeader>()).store(code as usize);
-            mem.add(size_of::<ScmCellHeader>() + size_of::<Value>())
-                .store(Value::encode_int32(num_free_vars as i32));
-            let mut cursor = mem
-                .add(size_of::<ScmCellHeader>() + size_of::<Value>() * 2)
-                .to_mut_ptr::<Value>();
-            for _ in 0..num_free_vars {
-                cursor.write(Value::encode_undefined_value());
-                cursor = cursor.add(1);
+            let mut free = (*mem.to_mut_ptr::<ScmProgram>()).free.as_mut_ptr();
+            let end = free.add(num_free_vars as usize);
+
+            while free < end {
+                free.write(Value::encode_undefined_value());
+                free = free.add(1);
             }
 
             let reference = ObjectReference::from_raw_address(mem);
             mutator.post_alloc(reference, size, semantics);
 
-            ScmCellRef(reference)
+            ScmCellRef(reference).into()
         }
     }
 
-    pub fn make_symbol(&mut self, str: &str) -> ScmCellRef {
-        let size = round_up(
-            size_of::<ScmCellHeader>() + size_of::<u8>() * str.len() + size_of::<Value>() + 1,
-            8,
-            0,
-        );
+    pub fn make_symbol(&mut self, str: &str, gensym: bool, interned: bool) -> Value {
+        let size = round_up(size_of::<ScmSymbol>() + str.len() + 1, 8, 0);
 
         unsafe {
             let mutator = self.mutator.assume_init_mut();
             let mem = mutator.alloc(size, size_of::<usize>(), 0, AllocationSemantics::Immortal);
 
-            mem.store::<ScmCellHeader>(ScmCellHeader {
+            /*mem.store::<ScmCellHeader>(ScmCellHeader {
                 as_header: Header {
                     type_id: TypeId::Symbol,
                     pad: [0; 4],
@@ -251,31 +246,50 @@ impl Thread {
                 .to_mut_ptr::<u8>();
             strstart.copy_from_nonoverlapping(str.as_bytes().as_ptr(), str.len());
             strstart.add(str.len()).write_bytes(0, 1);
+            let reference = ObjectReference::from_raw_address(mem);*/
+
+            mem.store(ScmSymbol {
+                header: ScmCellHeader {
+                    as_header: Header {
+                        type_id: TypeId::Symbol,
+                        pad: [0; 4],
+                        flags: 0,
+                    },
+                },
+                length: str.len() as u32,
+                gensym,
+                interned,
+                name: [],
+            });
+            let addr = mem.to_mut_ptr::<ScmSymbol>();
+            let name = (*addr).name.as_mut_ptr();
+            name.copy_from_nonoverlapping(str.as_bytes().as_ptr(), str.len());
+            name.add(str.len()).write(0);
             let reference = ObjectReference::from_raw_address(mem);
             mutator.post_alloc(reference, size, AllocationSemantics::Default);
 
-            ScmCellRef(reference)
+            ScmCellRef(reference).into()
         }
     }
 
     pub fn make_gloc(&mut self, name: Value, value: Value) -> Value {
-        let size = round_up(size_of::<ScmCellHeader>() + size_of::<Value>() * 2, 8, 0);
+        let size = round_up(size_of::<ScmGloc>(), 8, 0);
 
         unsafe {
             let mutator = self.mutator.assume_init_mut();
             let mem = mutator.alloc(size, size_of::<usize>(), 0, AllocationSemantics::Default);
-
-            mem.store::<ScmCellHeader>(ScmCellHeader {
-                as_header: Header {
-                    type_id: TypeId::GLOC,
-                    pad: [0; 4],
-                    flags: 0,
+            mem.store(ScmGloc {
+                header: ScmCellHeader {
+                    as_header: Header {
+                        type_id: TypeId::GLOC,
+                        pad: [0; 4],
+                        flags: 0,
+                    },
                 },
+                name,
+                value,
             });
 
-            mem.add(size_of::<ScmCellHeader>()).store(name);
-            mem.add(size_of::<ScmCellHeader>() + size_of::<Value>())
-                .store(value);
             let reference = ObjectReference::from_raw_address(mem);
             mutator.post_alloc(reference, size, AllocationSemantics::Default);
 

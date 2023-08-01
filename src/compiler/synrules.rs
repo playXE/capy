@@ -704,7 +704,6 @@ fn match_synrule(
     env: Sexpr,
     mvec: &mut [MatchVar],
 ) -> bool {
-
     match pattern {
         Sexpr::PVRef(pvref) => {
             match_insert(pvref, form, mvec);
@@ -716,22 +715,26 @@ fn match_synrule(
         }
 
         Sexpr::Symbol(sym) => {
-          
-            return er_compare(
-                form,
+            let res = er_compare(
+                form.clone(),
                 Sexpr::Symbol(sym.clone()),
                 syntax_env.clone(),
                 env.clone(),
             );
+
+            return res;
         }
 
         Sexpr::Identifier(id) => {
-            return er_compare(
-                form,
+          
+            let res = er_compare(
+                form.clone(),
                 Sexpr::Identifier(id.clone()),
                 syntax_env.clone(),
                 env.clone(),
             );
+
+            return res;
         }
 
         Sexpr::SyntaxPattern(pat) => {
@@ -971,8 +974,8 @@ pub fn synrule_expand(
             branch: Sexpr::Null,
             sprout: Sexpr::Null,
         });
-        
-        if match_synrule(   
+
+        if match_synrule(
             form.clone(),
             &rule.pattern,
             syntax_env.clone(),
@@ -980,6 +983,7 @@ pub fn synrule_expand(
             &mut mvec,
         ) {
             let r = realize_template(sr, rule, &mvec);
+           
             return Ok(r);
         }
     }

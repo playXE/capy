@@ -1,9 +1,10 @@
-use std::{mem::ManuallyDrop, ptr::NonNull};
+use std::{mem::ManuallyDrop, ptr::NonNull, hash::Hash};
 
 #[repr(C)]
 struct Inner<T> {
-    rc: u32,
     weak: u32,
+    rc: u32,
+    
     value: ManuallyDrop<T>,
 }
 
@@ -53,8 +54,11 @@ impl<T> Clone for P<T> {
 impl<T> Drop for P<T> {
     fn drop(&mut self) {
         unsafe {
+          
             self.inner.as_mut().rc -= 1;
+            
             if self.inner.as_ref().rc == 0 {
+              
                 // destroy the contained object
                 ManuallyDrop::drop(&mut self.inner.as_mut().value);
 
@@ -97,6 +101,20 @@ impl<T: std::fmt::Display> std::fmt::Display for P<T> {
     }
 }
 
+impl<T: PartialEq> PartialEq for P<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.get().eq(other.get())
+    }
+}
+
+impl<T: Eq> Eq for P<T> {}
+
+impl<T: Hash> Hash for P<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.get().hash(state)
+    }
+}
+
 impl<T> AsRef<T> for P<T> {
     fn as_ref(&self) -> &T {
         self.get()
@@ -129,6 +147,7 @@ impl<T> Weak<T> {
     pub fn upgrade(&self) -> Option<P<T>> {
         unsafe {
             if self.inner.as_ref().rc > 0 {
+                self.inner.as_ptr().as_mut().unwrap().rc += 1;
                 Some(P { inner: self.inner })
             } else {
                 None
@@ -140,6 +159,7 @@ impl<T> Weak<T> {
 impl<T> Clone for Weak<T> {
     fn clone(&self) -> Self {
         unsafe {
+            
             self.inner.as_ptr().as_mut().unwrap().weak += 1;
         }
         Self { inner: self.inner }
@@ -149,8 +169,10 @@ impl<T> Clone for Weak<T> {
 impl<T> Drop for Weak<T> {
     fn drop(&mut self) {
         unsafe {
+           
             self.inner.as_mut().weak -= 1;
             if self.inner.as_ref().weak == 0 {
+                println!("ded");
                 // destroy the box itself
                 drop(Box::from_raw(self.inner.as_ptr()));
             }

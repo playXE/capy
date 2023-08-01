@@ -163,7 +163,7 @@ pub fn load_image_from_memory(
                         let string = Thread::current().make_string::<true>(string);
                         cursor
                             .cast::<Value>()
-                            .write(Value::encode_object_value(string));
+                            .write(string);
                     }
 
                     0x01 => {
@@ -177,7 +177,7 @@ pub fn load_image_from_memory(
                         let bvector = Thread::current().make_bytevector_from_slice::<true>(bvector);
                         cursor
                             .cast::<Value>()
-                            .write(Value::encode_object_value(bvector));
+                            .write(bvector);
                     }
 
                     0x03 => {
@@ -200,7 +200,7 @@ pub fn load_image_from_memory(
                         let program = Thread::current().make_program::<true>(code, 0);
                         cursor
                             .cast::<Value>()
-                            .write(Value::encode_object_value(program));
+                            .write(program);
                     }
 
                     _ => {

@@ -5,3 +5,4 @@ pub mod gc;
 pub mod runtime;
 pub mod utils;
 pub mod vm;
+pub mod interpreter;

@@ -159,6 +159,10 @@ impl<VM: VirtualMemoryImpl> VirtualMemory<VM> {
     pub unsafe fn unsafe_release(&self) {
         VM::release(self);
     }
+
+    pub fn null() -> Self {
+        unsafe { Self::from_raw(null_mut(), 0) }
+    }
 }
 
 impl<VM: VirtualMemoryImpl> Drop for VirtualMemory<VM> {
@@ -408,14 +412,24 @@ pub mod posix {
             let end_address = start_address + size;
             let page_address = round_down(start_address, VirtualMemory::<Self>::page_size() as _);
 
-            if unsafe {
-                libc::madvise(
-                    page_address as _,
-                    end_address - page_address,
-                    libc::MADV_DONTNEED,
-                ) != 0
-            } {
-                panic!("madvise failed");
+            loop {
+                unsafe {
+                    let ret = libc::madvise(
+                        page_address as _,
+                        end_address - page_address,
+                        libc::MADV_DONTNEED,
+                    );
+
+                    if ret != 0 && errno::errno().0 == libc::EAGAIN {
+                        continue;
+                    }
+
+                    if ret != 0 && errno::errno().0 != libc::ENOSYS {
+                        panic!("madvise failed");
+                    }
+
+                    break;
+                }
             }
         }
 

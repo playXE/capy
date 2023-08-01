@@ -1,6 +1,9 @@
+#![allow(unused_imports)]
 use fscheme::{
     compiler::{
+        compile,
         expand::{define_syntax, pass1},
+        pass2::pass2,
         sexpr::{r7rs_expr_to_sexpr, Sexpr},
         Cenv,
     },
@@ -9,8 +12,9 @@ use fscheme::{
         object::{scm_car, scm_cdr, scm_set_car, scm_set_cdr},
         value::Value,
     },
-    vm::{scm_init, thread::Thread},
+    vm::{scm_init, scm_virtual_machine, thread::Thread},
 };
+use r7rs_parser::expr::NoIntern;
 
 fn make_tree(thread: &mut Thread, depth: i32) -> Value {
     thread.safepoint();
@@ -24,9 +28,9 @@ fn make_tree(thread: &mut Thread, depth: i32) -> Value {
             .into();
         gc_frame!(thread.stackchain() => pair = pair);
         let car = make_tree(thread, depth - 1);
-        scm_set_car(pair.get_object(), thread, car);
+        scm_set_car(*pair, thread, car);
         let cdr = make_tree(thread, depth - 1);
-        scm_set_cdr(pair.get_object(), thread, cdr);
+        scm_set_cdr(*pair, thread, cdr);
 
         //scm_set_car(pair, thread, *car);
         //scm_set_cdr(pair, thread, *cdr);
@@ -36,8 +40,8 @@ fn make_tree(thread: &mut Thread, depth: i32) -> Value {
 }
 
 fn check_tree(tree: Value) -> usize {
-    let left = scm_car(tree.get_object());
-    let right = scm_cdr(tree.get_object());
+    let left = scm_car(tree);
+    let right = scm_cdr(tree);
 
     if left.is_null() {
         return 1;
@@ -50,13 +54,13 @@ fn main() {
     env_logger::init();
     let mut builder = mmtk::MMTKBuilder::new();
     builder.set_option("plan", "GenImmix");
-    builder.set_option("gc_trigger", "DynamicHeapSize:32m,128m");
+    builder.set_option("gc_trigger", "DynamicHeapSize:128m,4g");
     builder.set_option("threads", "4");
-    builder.set_option("nursery",&format!("Fixed:{}", &(4 * 1024 * 1024).to_string()));
-    //builder.set_option("stress_factor", &(128 * 1024).to_string());
+
     let _ = scm_init(builder.build());
 
-    let depth = 18;
+
+    let depth = 21;
     let min_depth = 4;
     let max_depth = depth;
 
@@ -75,7 +79,7 @@ fn main() {
         gc_frame!(thread.stackchain() => long_lasting_tree = long_lasting_tree);
 
         let mut d = min_depth;
-
+        mmtk::memory_manager::handle_user_collection_request(&scm_virtual_machine().mmtk, thread.to_mmtk());
         while d <= max_depth {
             let iterations = 1 << (max_depth - d + min_depth);
 
@@ -97,8 +101,22 @@ fn main() {
             check_tree(*long_lasting_tree)
         );
     }
-
-    /*let mut interner = NoIntern;
+}
+ 
+ /* 
+fn main() {
+    env_logger::init();
+    let mut builder = mmtk::MMTKBuilder::new();
+    builder.set_option("plan", "Immix");
+    builder.set_option("gc_trigger", "DynamicHeapSize:32m,128m");
+    builder.set_option("threads", "6");
+    builder.set_option(
+        "nursery",
+        &format!("Fixed:{}", &(4 * 1024 * 1024).to_string()),
+    );
+    //builder.set_option("stress_factor", &(128 * 1024).to_string());
+    let _ = scm_init(builder.build());
+    let mut interner = NoIntern;
     let src = std::fs::read_to_string("test.scm").unwrap();
     let mut parser = r7rs_parser::parser::Parser::new(&mut interner, &src, false);
 
@@ -116,12 +134,20 @@ fn main() {
 
         let mut out = termcolor::StandardStream::stdout(termcolor::ColorChoice::Always);
 
-        expr.pretty_print(&mut out).unwrap();
+        let iform = compile(
+            &expr,
+            &Cenv {
+                frames: Sexpr::Null,
+                syntax_env: syntax_env.clone(),
+            },
+            true,
+        )
+        .unwrap();
+
+        iform.pretty_print::<true>(&mut out).unwrap();
         println!();
 
-        let iform = pass1(&expr, &_cenv).unwrap();
-
-        iform.pretty_print(&mut out).unwrap();
-        println!();
-    }*/
+        drop(iform);
+    }
 }
+*/

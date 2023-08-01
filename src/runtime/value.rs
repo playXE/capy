@@ -1,5 +1,10 @@
 use std::hash::Hash;
 
+use mmtk::{
+    util::Address,
+    vm::{edge_shape::SimpleEdge, EdgeVisitor},
+};
+
 use crate::runtime::object::ScmCellRef;
 
 use super::pure_nan::{pure_nan, purify_nan};
@@ -310,5 +315,14 @@ impl Into<Value> for i32 {
 impl Into<Value> for f64 {
     fn into(self) -> Value {
         Value::encode_f64_value(self)
+    }
+}
+
+impl Value {
+    pub fn visit_edge<ES: EdgeVisitor<SimpleEdge>>(&mut self, visitor: &mut ES) {
+        if self.is_object() {
+            // Pointers in Value are transparent, we can directly pass them as edge
+            visitor.visit_edge(SimpleEdge::from_address(Address::from_mut_ptr(self)));
+        }
     }
 }
