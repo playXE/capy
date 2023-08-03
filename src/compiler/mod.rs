@@ -2,15 +2,15 @@ pub mod expand;
 pub mod p;
 #[macro_use]
 pub mod sexpr;
+pub mod assignment_elimination;
+pub mod compile_bytecode;
+pub mod constfold;
+pub mod loops;
 pub mod pass2;
 pub mod pass2p2;
 pub mod pass3;
-pub mod loops;
 pub mod synrules;
 pub mod tree_il;
-pub mod compile_bytecode;
-pub mod constfold;
-pub mod assignment_elimination;
 
 use std::collections::HashMap;
 
@@ -128,12 +128,11 @@ impl Cenv {
                 let fp1 = frames.clone();
 
                 let mut vls = fp1.cdar();
-                
+
                 while vls.is_pair() {
                     let vp = vls.car();
 
                     if sexp_eq(&vp.car(), &y) {
-                        
                         return vp.cdr();
                     }
 
@@ -271,10 +270,20 @@ pub fn unmangled(id: &str) -> &str {
     id
 }
 
-pub fn compile(sexpr: &Sexpr, cenv: &Cenv, recover_loops: bool) -> Result<P<IForm>, String> {
+pub fn compile(
+    sexpr: &Sexpr,
+    cenv: &Cenv,
+    recover_loops: bool,
+    opt: bool,
+) -> Result<P<IForm>, String> {
     let expanded = expand::pass1(sexpr, cenv)?;
-    let immut = assignment_elimination::assignment_elimination(expanded);
-    let opt = pass2::pass2(immut, recover_loops)?;
 
-    Ok(opt)
+    let immut = assignment_elimination::assignment_elimination(expanded);
+    if opt {
+        let opt = pass2::pass2(immut, recover_loops)?;
+
+        Ok(opt)
+    } else {
+        Ok(immut)
+    }
 }

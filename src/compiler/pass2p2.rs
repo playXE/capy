@@ -9,7 +9,7 @@ use super::{
 
 pub fn scan<const RESET_CALL: bool>(
     iform: &P<IForm>,
-    fs: &mut HashSet<P<LVar>>,
+    fs: &mut Vec<P<LVar>>,
     bs: &mut HashSet<P<LVar>>,
     toplevel: bool,
     labels: &mut Vec<P<IForm>>,
@@ -29,8 +29,8 @@ pub fn scan<const RESET_CALL: bool>(
             scan::<RESET_CALL>(&label.body, fs, bs, toplevel, labels);
         }
         IForm::LRef(lref) => {
-            if !bs.contains(&lref.lvar) {
-                fs.insert(lref.lvar.clone());
+            if !bs.contains(&lref.lvar) && !fs.contains(&lref.lvar) {
+                fs.push(lref.lvar.clone());
             }
         }
 
@@ -38,7 +38,9 @@ pub fn scan<const RESET_CALL: bool>(
             let insert = !bs.contains(&lvar.lvar);
             scan::<RESET_CALL>(&lvar.value, fs, bs, toplevel, labels);
             if insert {
-                fs.insert(lvar.lvar.clone());
+                if !fs.contains(&lvar.lvar) {
+                    fs.push(lvar.lvar.clone());
+                }
             }
         }
 
@@ -90,7 +92,7 @@ pub fn scan<const RESET_CALL: bool>(
 
         IForm::Lambda(lam) => {
             let mut lbs = lam.lvars.iter().cloned().collect();
-            let mut lfs = HashSet::new();
+            let mut lfs = Vec::new();
             let mut defs = Vec::new();
             scan::<RESET_CALL>(&lam.body, &mut lfs, &mut lbs, false, &mut defs);
             let mut lam = lam.clone();
@@ -105,8 +107,8 @@ pub fn scan<const RESET_CALL: bool>(
             // add free-variables of `lam` to `fs` if they are
             // not bount in current scope
             for inner in lfs.iter() {
-                if !bs.contains(inner) {
-                    fs.insert(inner.clone());
+                if !bs.contains(inner) && !fs.contains(inner) {
+                    fs.push(inner.clone());
                 }
             }
             lam.free_lvars = lfs;
@@ -119,7 +121,7 @@ pub fn scan<const RESET_CALL: bool>(
 }
 
 pub fn scan_toplevel<const RESET_CALL: bool>(iform: P<IForm>) {
-    let mut fs = HashSet::new();
+    let mut fs = Vec::new();
     let mut bs = HashSet::new();
     let mut labels = Vec::new();
     scan::<RESET_CALL>(&iform, &mut fs, &mut bs, true, &mut labels);

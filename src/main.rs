@@ -1,21 +1,26 @@
 #![allow(unused_imports)]
 use fscheme::{
+    bytecode::opcodes::disassemble,
+    bytecodeassembler::fasl::FASLPrinter,
     compiler::{
         compile,
+        compile_bytecode::compile_bytecode,
         expand::{define_syntax, pass1},
         pass2::pass2,
         sexpr::{r7rs_expr_to_sexpr, Sexpr},
-        Cenv,
+        tree_il::{IForm, Lambda, LambdaFlag, Seq},
+        Cenv, P,
     },
     gc_frame,
     runtime::{
         object::{scm_car, scm_cdr, scm_set_car, scm_set_cdr},
         value::Value,
     },
-    vm::{scm_init, scm_virtual_machine, thread::Thread}, bytecodeassembler::fasl::FASLPrinter, utils::pretty_hex::{self, PrettyHex, pretty_hex},
+    utils::pretty_hex::{self, pretty_hex, PrettyHex},
+    vm::{scm_init, scm_virtual_machine, thread::Thread},
 };
 use r7rs_parser::expr::NoIntern;
-/* 
+/*
 fn make_tree(thread: &mut Thread, depth: i32) -> Value {
     thread.safepoint();
     if depth == 0 {
@@ -120,20 +125,17 @@ fn main() {
 
     let syntax_env = define_syntax();
 
+    let mut toplevel_seq = vec![];
+
     while !parser.finished() {
         let expr = parser.parse(true).unwrap();
-  
+
         let _cenv = Cenv {
             frames: Sexpr::Null,
             syntax_env: syntax_env.clone(),
         };
         let interner = NoIntern;
         let expr = r7rs_expr_to_sexpr(&interner, &expr);
-        let mut out = vec![];
-        let mut fasl = FASLPrinter::new(&mut out);
-        fasl.put(expr.clone()).unwrap();
-        println!("{}", pretty_hex(&out));
-
 
         let mut out = termcolor::StandardStream::stdout(termcolor::ColorChoice::Always);
 
@@ -144,12 +146,34 @@ fn main() {
                 syntax_env: syntax_env.clone(),
             },
             true,
+            false,
         )
         .unwrap();
 
         iform.pretty_print::<true>(&mut out).unwrap();
         println!();
 
-        drop(iform);
+        toplevel_seq.push(iform);
     }
+
+    let lam = P(Lambda {
+        name: None,
+        reqargs: 0,
+        optarg: false,
+        lvars: vec![],
+        body: P(IForm::Seq(Seq {
+            forms: toplevel_seq,
+        })),
+        flag: LambdaFlag::None,
+        calls: vec![],
+        free_lvars: vec![],
+        bound_lvars: Default::default(),
+        defs: vec![],
+        lifted_var: fscheme::compiler::tree_il::LiftedVar::Candidate,
+    });
+
+    let asm = compile_bytecode(P(IForm::Lambda(lam)));
+    println!("{}", pretty_hex(&asm.code));
+
+    disassemble(&asm.code);
 }

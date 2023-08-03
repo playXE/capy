@@ -212,11 +212,19 @@ pub struct Lambda {
     pub body: P<IForm>,
     pub flag: LambdaFlag,
     pub calls: Vec<(P<IForm>, Vec<P<Lambda>>)>,
-    pub free_lvars: HashSet<P<LVar>>,
+    pub free_lvars: Vec<P<LVar>>,
     pub bound_lvars: HashSet<P<LVar>>,
     pub defs: Vec<P<IForm>>,
     pub lifted_var: LiftedVar,
 }
+
+impl PartialEq for Lambda {
+    fn eq(&self, other: &Self) -> bool {
+        self as *const Self == other as *const Self 
+    }
+}
+
+impl Eq for Lambda {}
 
 pub enum LiftedVar {
     NotLifted,

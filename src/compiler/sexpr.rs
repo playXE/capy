@@ -22,7 +22,7 @@ pub enum Sexpr {
     Vector(P<Vec<Sexpr>>),
     Bytevector(P<Vec<u8>>),
     Global(Value),
-    Program(P<(u32, u32)>),
+    Program(u32),
     Identifier(P<Identifier>),
 
     SyntaxRules(P<SyntaxRules>),
@@ -576,7 +576,7 @@ impl Sexpr {
     {
         match self {
             Self::Global(global) => allocator.text(format!("#<global {}>", scm_symbol_str(*global))),
-            Self::Program(prog) => allocator.text(format!("#<program {} {}>", prog.0, prog.1)),
+            Self::Program(prog) => allocator.text(format!("#<program {}>", prog)),
             Self::Gensym(x) => allocator.text(format!("#<gensym {}>", x)),
             Self::LVar(lvar) => allocator
                 .text("#<lvar")

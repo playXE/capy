@@ -11,20 +11,20 @@ macro_rules! for_each_opcode {
             (op_nop, "nop", {})
             // Call a procedure. `proc` is the local corresponding to a procedure.
             // The three values below `proc` will be overwritten by the saved call
-            // frame data. The new frame will have space for NLOCALS locals: one 
+            // frame data. The new frame will have space for NLOCALS locals: one
             // for the procedure, and the rest for the arguments which should already
             // have been pushed onto the stack.
             //
             //
             // When the call returns, execution proceeds with the next
             // instruction There may be any number of values on the return stack;
-            // the precise number can be had by subtracting the address of 
+            // the precise number can be had by subtracting the address of
             // slot `proc - 1` from the post-call SP.
             (op_call, "call", { proc: u24, nlocals: u24 })
             // Call a procedure in the same compilation unit.
             //
-            // This instruction is just like "call", excep that instead of 
-            // dereferencing `proc` to find the call target, the call target is 
+            // This instruction is just like "call", excep that instead of
+            // dereferencing `proc` to find the call target, the call target is
             // known to be at `label`, a signed 32 bit offset from
             // the current IP.
             (op_call_label, "call-label", { proc: u24, nlocals: u24, label: u32 })
@@ -82,16 +82,16 @@ macro_rules! for_each_opcode {
             (op_box, "box", { dst: u16, src: u16 })
             (op_box_ref, "box-ref", { dst: u16, src: u16 })
             (op_box_set, "box-set", { dst: u16, src: u16 })
-            
+
             (op_make_vector, "make-vector", { dst: u16, len: u16, fill: u16 })
             (op_vector_ref, "vector-ref", { dst: u16, src: u16, idx: u16 })
             (op_vector_ref_imm, "vector-ref/immediate", { dst: u16, src: u16, idx: u32 })
             (op_vector_set, "vector-set", { dst: u16, idx: u16, src: u16 })
             (op_vector_set_imm, "vector-set/immediate", { dst: u16, idx: u32, src: u16 })
-            (op_program_ref, "program-ref", { dst: u16, src: u16, idx: u16 })
-            (op_program_ref_imm, "program-ref/immediate", { dst: u16, src: u16, idx: u32 })
-            (op_program_set, "program-set", { dst: u16, idx: u16, src: u16 })
-            (op_program_set_imm, "program-set/immediate", { dst: u16, idx: u32, src: u16 })
+            (op_program_ref, "program-ref", { dst: u16, src: u24, idx: u16 })
+            (op_program_ref_imm, "program-ref/immediate", { dst: u16, src: u24, idx: u32 })
+            (op_program_set, "program-set", { dst: u24, idx: u16, src: u16 })
+            (op_program_set_imm, "program-set/immediate", { dst: u24, idx: u32, src: u16 })
 
             // Creates a new program object with `vcode` at `offset` and `nfree` free variables.
             (op_make_program, "make-program", { dst: u16, nfree: u32, offset: u32 })
@@ -184,7 +184,7 @@ macro_rules! decl_opcodes {
                 impl Decode for [<$name: camel>] {
                     #[inline(always)]
                     unsafe fn read(stream: *const u8) -> Self {
-                        debug_assert_eq!(stream.wrapping_sub(1).read(), paste::paste!([<$name:upper>]));
+                        debug_assert_eq!(stream.wrapping_sub(1).read(), paste::paste!([<$name:upper>]), "expected opcode {} {:x} but found {:x}", stringify!($name), paste::paste!([<$name:upper>]), stream.wrapping_sub(1).read());
                         stream.cast::<Self>().read_unaligned()
                     }
                 }
@@ -253,4 +253,52 @@ macro_rules! disassemble {
     };
 }
 
-//for_each_opcode!(disassemble);
+for_each_opcode!(disassemble);
+
+pub fn disassemble(vcode: &[u8]) {
+    let mut pc = vcode.as_ptr();
+    let end = unsafe { pc.add(vcode.len()) };
+    let start_pc = pc;
+    unsafe {
+        while pc < end {
+            let start = pc;
+
+            let op = pc.read();
+            pc = pc.add(1);
+            let mut out = String::new();
+
+            match op {
+                op if op == OP_J => {
+                    let j = OpJ::read(pc);
+                    pc = pc.add(std::mem::size_of::<OpJ>());
+                    let target = pc.offset(j.offset as isize);
+                    let diff = target.offset_from(start_pc);
+                    out.push_str(&format!("(j {}) ; => {}", j.offset(), diff));
+                }
+
+                op if op == OP_JE => {
+                    let j = OpJe::read(pc);
+                    pc = pc.add(std::mem::size_of::<OpJe>());
+                    let target = pc.offset(j.offset as isize);
+                    let diff = target.offset_from(start_pc);
+                    out.push_str(&format!("(je {}) ; => {}", j.offset(), diff));
+                }
+                op if op == OP_MAKE_IMMEDIATE => {
+                    let make_immediate = OpMakeImmediate::read(pc);
+                    pc = pc.add(std::mem::size_of::<OpMakeImmediate>());
+                    out.push_str(&format!(
+                        "(make-immediate {} {:x})",
+                        make_immediate.dst(),
+                        make_immediate.value()
+                    ))
+                }
+                _ => {
+                    disassemble_from_stream(op, &mut pc, &mut out).unwrap();
+                }
+            }
+
+            let diff = start.offset_from(start_pc);
+            println!("{:<04}:\t{}", diff, out);
+        }
+    }
+}

@@ -145,7 +145,7 @@ impl<'a, W: std::io::Write> FASLPrinter<'a, W> {
 
             Sexpr::Program(program) => {
                 self.emit_u8(TypeId::Program as _)?;
-                self.emit_u32(program.0)?;
+                self.emit_u32(program)?;
             }
 
             Sexpr::Global(global) => {
