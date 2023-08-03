@@ -25,7 +25,6 @@ pub enum ThreadKind {
 }
 
 pub struct Thread {
-    
     pub mutator: MaybeUninit<Mutator<CapyVM>>,
     interpreter: MaybeUninit<InterpreterState>,
     pub id: u64,

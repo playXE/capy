@@ -1,4 +1,5 @@
 use super::encode::*;
+use super::u24::*;
 
 #[macro_export]
 macro_rules! for_each_opcode {
@@ -8,68 +9,137 @@ macro_rules! for_each_opcode {
             // tells interpreter that we're in loop, might enter JITed code from here.
             (op_loop_hint, "loop-hint", {})
             (op_nop, "nop", {})
-            // relative to FP load
-            (op_load, "load", { offset: i32})
-            // relative to FP store of value on top of stack
-            (op_store, "store", { offset: i32 })
+            // Call a procedure. `proc` is the local corresponding to a procedure.
+            // The three values below `proc` will be overwritten by the saved call
+            // frame data. The new frame will have space for NLOCALS locals: one 
+            // for the procedure, and the rest for the arguments which should already
+            // have been pushed onto the stack.
+            //
+            //
+            // When the call returns, execution proceeds with the next
+            // instruction There may be any number of values on the return stack;
+            // the precise number can be had by subtracting the address of 
+            // slot `proc - 1` from the post-call SP.
+            (op_call, "call", { proc: u24, nlocals: u24 })
+            // Call a procedure in the same compilation unit.
+            //
+            // This instruction is just like "call", excep that instead of 
+            // dereferencing `proc` to find the call target, the call target is 
+            // known to be at `label`, a signed 32 bit offset from
+            // the current IP.
+            (op_call_label, "call-label", { proc: u24, nlocals: u24, label: u32 })
+            // Tail-call the procedure in slot 0 with the arguments in the current stack frame.
+            // Requires that the procedure and all of the arguments have already been
+            // shuffled into position
             (op_tail_call, "tail-call", {})
-            (op_call, "call", { argc: u32 })
-            (op_ret, "ret", {})
-            (op_gloc_ref, "gloc-ref", { index: u32 })
-            (op_gloc_set, "gloc-set!", { index: u32 })
-            (op_static_ref, "static-ref", { offset: u32 })
-            (op_static_set, "static-set!", { offset: u32 })
-            (op_push_i32, "push.i32", { value: i32 })
-            (op_push_double, "push.double", { lo: u32, hi: u32 })
-            (op_push_true, "push.true", {})
-            (op_push_false, "push.false", {})
-            (op_push_null, "push.null", {})
-            (op_push_undef, "push.undef", {})
-            (op_assert_nargs_ee, "assert-nargs-ee", { argc: u32 })
-            (op_assert_nargs_ge, "assert-nargs-ge", { argc: u32 })
-            (op_assert_nargs_le, "assert-nargs-le", { argc: u32 })
+            // Same as `call-label` but now in tail position
+            (op_tail_call_label, "tail-call-label", { label: u32 })
+            // Return all values from a call frame
+            (op_return_values, "return-values", {})
+            // Receive a single return value from a call whose procedure was in `proc`,
+            // asserting that the call actually returned at least one value. Afterwards,
+            // resets the frame to `nlocals` locals.
+            (op_receive, "receive", { dest: u16, proc: u16, nlocals: u24 })
+            // Receive a return of multiple values from a call whose procedure was
+            // in PROC.  If fewer than NVALUES values were returned, signal an
+            // error.  Unless ALLOW-EXTRA? is true, require that the number of
+            // return values equals NVALUES exactly.  After receive-values has
+            // run, the values can be copied down via `mov'.
+            (op_receive_values, "receive-values", { proc: u24, allow_extra: bool, nvalues: u24 })
+            (op_assert_nargs_ee, "assert-nargs-ee", { n: u24 })
+            (op_assert_nargs_ge, "assert-nargs-ge", { n: u24 })
+            (op_assert_nargs_le, "assert-nargs-le", { n: u24 })
+            (op_assert_nargs_ee_locals, "assert-nargs-ee/locals", { expected: u16, nlocals: u16 })
+            (op_check_arguments, "arguments<=?", { expected: u24 })
+            (op_check_positional_arguments, "positional-arguments<=?", { nreq: u24, expected: u24 })
+            (op_bind_kwards, "bind-kwargs", { nreq: u24, flags: u8, nreq_and_opt: u24, ntotal: u24, kw_offset: u32 })
+            (op_bind_rest, "bind-rest", { dst: u24 })
+            (op_alloc_frame, "alloc-frame", { nlocals: u24 })
+            (op_reset_frame, "reset-frame", { nlocals: u24 })
+            (op_mov, "mov", { dst: u16, src: u16 })
+            (op_long_mov, "long-mov", { dst: u24, src: u24 })
+            (op_long_fmov, "long-fmov", { dst: u24, src: u24 })
+            (op_push, "push", { src: u24 })
+            (op_pop, "pop", { dst: u24 })
+            (op_drop, "drop", { n: u24 })
+            (op_shuffle_down, "shuffle-down", { from: u16, to: u16 })
+            (op_expand_apply_argument, "expand-apply-argument", {})
+            (op_subr_call, "subr-call", { idx: u24 })
+            (op_foreign_call, "foreign-call", { cif_idx: u16, ptr_idx: u16 })
+            (op_continuation_call, "continuation-call", { contregs: u24 })
+            (op_call_intrinsic, "call-intrinsic", { intrinsic: u32 })
+            (op_call_intrinsic_val, "call-intrinsic-val", { a: u24, intrinsic: u32 })
+            (op_call_intrinsic_val_val, "call-intrinsic-val-val", { a: u16, b: u16, intrinsic: u32 })
+            (op_call_intrinsic_ret, "call-intrinsic-ret", { dst: u24, intrinsic: u32 })
+            (op_call_intrinsic_ret_val, "call-intrinsic-ret-val", { dst: u16, a: u16, intrinsic: u32 })
+            (op_call_intrinsic_ret_val_val, "call-intrinsic-ret-val-val", { dst: u16, a: u16, b: u16, intrinsic: u32 })
+            (op_call_intrinsic_val_val_val, "call-intrinsic-val-val-val", { a: u16, b: u16, c: u16, intrinsic: u32 })
+            // Reads a value from instruction stream and sets `dst` to it.
+            (op_make_immediate, "make-immediate",  { dst: u16, value: u64 })
+            // Reads a value from constant pool and sets `dst` to it.
+            (op_make_non_immediate, "make-non-immediate", { dst: u24, offset: u32 })
+            (op_cons, "cons", { dst: u16, car: u16, cdr: u16 })
+            (op_box, "box", { dst: u16, src: u16 })
+            (op_box_ref, "box-ref", { dst: u16, src: u16 })
+            (op_box_set, "box-set", { dst: u16, src: u16 })
+            
+            (op_make_vector, "make-vector", { dst: u16, len: u16, fill: u16 })
+            (op_vector_ref, "vector-ref", { dst: u16, src: u16, idx: u16 })
+            (op_vector_ref_imm, "vector-ref/immediate", { dst: u16, src: u16, idx: u32 })
+            (op_vector_set, "vector-set", { dst: u16, idx: u16, src: u16 })
+            (op_vector_set_imm, "vector-set/immediate", { dst: u16, idx: u32, src: u16 })
+            (op_program_ref, "program-ref", { dst: u16, src: u16, idx: u16 })
+            (op_program_ref_imm, "program-ref/immediate", { dst: u16, src: u16, idx: u32 })
+            (op_program_set, "program-set", { dst: u16, idx: u16, src: u16 })
+            (op_program_set_imm, "program-set/immediate", { dst: u16, idx: u32, src: u16 })
 
+            // Creates a new program object with `vcode` at `offset` and `nfree` free variables.
+            (op_make_program, "make-program", { dst: u16, nfree: u32, offset: u32 })
+            // Fetches global variable from constant pool and sets `dst` to it.
+            (op_global_ref, "global-ref", { dst: u24, offset: u32})
+            // Sets global variable from constant pool to `src`.
+            (op_global_set, "global-set", { src: u24, offset: u32})
 
-            (op_equal_cmp, "equal.cmp", {})
-            (op_eqv_cmp, "eqv.cmp", {})
-            (op_eq_cmp, "eq.cmp", {})
-            (op_num_cmp, "num.cmp", {})
-            (op_jmp, "jmp", { offset: i32 })
+            (op_add, "add", { dst: u16, a: u16, b: u16 })
+            (op_add_imm, "add/immediate", { dst: u16, a: u16, b: i32 })
+            (op_sub, "sub", { dst: u16, a: u16, b: u16 })
+            (op_sub_imm, "sub/immediate", { dst: u16, a: u16, b: i32 })
+            (op_div, "div", { dst: u16, a: u16, b: u16 })
+            (op_quotient, "quotient", { dst: u16, a: u16, b: u16 })
+            (op_quotient_imm, "quotient/immediate", { dst: u16, a: u16, b: i32 })
+            (op_mul, "mul", { dst: u16, a: u16, b: u16 })
+            (op_mul_imm, "mul/immediate", { dst: u16, a: u16, b: i32 })
+            (op_mod, "mod", { dst: u16, a: u16, b: u16 })
+            (op_mod_imm, "mod/immediate", { dst: u16, a: u16, b: i32 })
+            (op_bitand, "bitand", { dst: u16, a: u16, b: u16 })
+            (op_bitand_imm, "bitand/immediate", { dst: u16, a: u16, b: i32 })
+            (op_bitor, "bitor", { dst: u16, a: u16, b: u16 })
+            (op_bitor_imm, "bitor/immediate", { dst: u16, a: u16, b: i32 })
+            (op_bitxor, "bitxor", { dst: u16, a: u16, b: u16 })
+            (op_bitxor_imm, "bitxor/immediate", { dst: u16, a: u16, b: i32 })
+            (op_bitnot, "bitnot", { dst: u16, src: u16 })
+            (op_arithmetic_shift, "arithmetic-shift", { dst: u16, a: u16, b: u16 })
+            (op_arithmetic_shift_imm, "arithmetic-shift/immediate", { dst: u16, a: u16, b: i32 })
+            (op_less, "<", { a: u16, b: u16 })
+            (op_less_imm, "</immediate", { a: u16, b: i32 })
+            (op_greater, ">", { a: u16, b: u16 })
+            (op_greater_imm, ">/immediate", { a: u16, b: i32 })
+            (op_less_equal, "<=", { a: u16, b: u16 })
+            (op_less_equal_imm, "<=/immediate", { a: u16, b: i32 })
+            (op_greater_equal, ">=", { a: u16, b: u16 })
+            (op_greater_equal_imm, ">=/immediate", { a: u16, b: i32 })
+            (op_numerically_equal, "=", { a: u16, b: u16 })
+            (op_equal_imm, "=/immediate", { a: u16, b: i32 })
+            (op_eq, "eq?", { a: u16, b: u16 })
+            (op_heap_tag_eq, "heap-tag-eq?", { obj: u24, tag: u32} )
+            (op_immediate_tag_eq, "immediate-tag-eq?", { obj: u24, tag: u32 })
+            (op_j, "j", { offset: i32 })
             (op_jl, "jl", { offset: i32 })
-            (op_jle, "jle", { offset: i32 })
             (op_jg, "jg", { offset: i32 })
+            (op_jle, "jle", { offset: i32 })
             (op_jge, "jge", { offset: i32 })
             (op_je, "je", { offset: i32 })
             (op_jne, "jne", { offset: i32 })
-
-            (op_closure, "closure", { argc: u32, offset: u32 })
-            (op_closure_ref, "closure-ref", { index: u32 })
-            (op_closure_set, "closure-set!", { index: u32 })
-            (op_car, "car", {})
-            (op_cdr, "cdr", {})
-            (op_cons, "cons", {})
-            (op_set_car, "set-car!", {})
-            (op_set_cdr, "set-cdr!", {})
-            (op_list, "list", { argc: u32 })
-            (op_listp, "list?", {})
-            (op_nullp, "null?", {})
-            (op_pairp, "pair?", {})
-            (op_symbolp, "symbol?", {})
-            (op_procedurep, "procedure?", {})
-            (op_stringp, "string?", {})
-            (op_numberp, "number?", {})
-            (op_integerp, "integer?", {})
-            (op_flonump, "flonum?", {})
-            (op_booleanp, "boolean?", {})
-            (op_vectorp, "vector?", {})
-            (op_fixnump, "fixnum?", {})
-            (op_vector_ref, "vector-ref", {  })
-            (op_vector_set, "vector-set!", { })
-            (op_vector, "vector", { argc: u32 })
-            (op_vector_ref_imm, "vector-ref/immeadiate", { index: u32 })
-            (op_vector_set_imm, "vector-set/immediate!", { index: u32 })
-
-
         }
     };
 }
@@ -130,7 +200,7 @@ macro_rules! decl_opcodes {
 
                         // print comma separated fields
                         if !fields.is_empty() {
-                            write!(f, " {}", fields.join(", "))?;
+                            write!(f, " {}", fields.join(" "))?;
                         }
                         Ok(())
                     }
@@ -171,7 +241,7 @@ macro_rules! disassemble {
                                 paste::paste! {
                                     let op = [<$name: camel>]::read(*stream);
                                     *stream = stream.add(std::mem::size_of::<[<$name: camel>]>());
-                                    write!(out, "{}", op)
+                                    write!(out, "({})", op)
                                 }
                             }
                         ),+

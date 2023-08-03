@@ -7,14 +7,14 @@ use std::{
 use mmtk::{
     memory_manager::{start_control_collector, start_worker},
     util::{
-        alloc::fill_alignment_gap,
+        alloc::{fill_alignment_gap, AllocatorSelector},
         copy::{CopySemantics, GCWorkerCopyContext},
         Address, ObjectReference,
     },
     vm::{
         edge_shape::{SimpleEdge, UnimplementedMemorySlice},
         *,
-    },
+    }, Mutator, AllocationSemantics, MutatorContext,
 };
 
 use crate::{
@@ -498,4 +498,20 @@ impl VMBinding for CapyVM {
     type VMReferenceGlue = ScmReferenceGlue;
     type VMScanning = ScmScanning;
     const USE_ALLOCATION_OFFSET: bool = false;
+}
+
+pub fn fast_path_allocator() -> fn(&mut Mutator<CapyVM>, usize) -> Address {
+    let vm = scm_virtual_machine();
+    let selector = mmtk::memory_manager::get_allocator_mapping(&vm.mmtk, AllocationSemantics::Default);
+
+    fn slow(mutator: &mut Mutator<CapyVM>, size: usize) -> Address {
+        mutator.alloc(size, 8, 0, AllocationSemantics::Default)
+    }
+
+    match selector {
+        AllocatorSelector::Malloc(_)
+        | AllocatorSelector::FreeList(_)
+        | AllocatorSelector::LargeObject(_) => slow,
+        _ => todo!()
+    }
 }

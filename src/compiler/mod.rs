@@ -8,6 +8,7 @@ pub mod pass3;
 pub mod loops;
 pub mod synrules;
 pub mod tree_il;
+pub mod compile_bytecode;
 pub mod constfold;
 pub mod assignment_elimination;
 

@@ -12,6 +12,12 @@ pub struct P<T> {
     inner: NonNull<Inner<T>>,
 }
 
+impl<T> Hash for P<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.inner.as_ptr().hash(state);
+    }
+}
+
 impl<T> P<T> {
     pub fn new(value: T) -> Self {
         let inner = Box::into_raw(Box::new(Inner {
@@ -109,11 +115,6 @@ impl<T: PartialEq> PartialEq for P<T> {
 
 impl<T: Eq> Eq for P<T> {}
 
-impl<T: Hash> Hash for P<T> {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.get().hash(state)
-    }
-}
 
 impl<T> AsRef<T> for P<T> {
     fn as_ref(&self) -> &T {

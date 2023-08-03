@@ -2,6 +2,7 @@ use std::mem::size_of;
 
 pub mod bitfield;
 pub mod env;
+pub mod pretty_hex;
 
 pub const fn nth_bit(n: usize) -> usize {
     if n >= size_of::<usize>() * 8 {

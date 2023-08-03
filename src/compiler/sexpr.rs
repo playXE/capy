@@ -1,3 +1,5 @@
+use std::hash::Hash;
+
 use crate::runtime::{object::scm_symbol_str, symbol::scm_intern, value::Value};
 
 use super::{
@@ -19,6 +21,8 @@ pub enum Sexpr {
     Pair(P<(Sexpr, Sexpr)>),
     Vector(P<Vec<Sexpr>>),
     Bytevector(P<Vec<u8>>),
+    Global(Value),
+    Program(P<(u32, u32)>),
     Identifier(P<Identifier>),
 
     SyntaxRules(P<SyntaxRules>),
@@ -26,6 +30,106 @@ pub enum Sexpr {
     PVRef(PVRef),
     Special(fn(Sexpr, &Cenv) -> Result<P<IForm>, String>),
     LVar(P<LVar>),
+}
+
+impl PartialEq for Sexpr {
+    fn eq(&self, other: &Self) -> bool {
+        sexp_eq(self, other)
+    }
+}
+
+impl Eq for Sexpr {}
+
+impl Hash for Sexpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        match self {
+            Self::Null => 0.hash(state),
+            Self::Undefined => 1.hash(state),
+            Self::Symbol(sym) => {
+                2.hash(state);
+                sym.hash(state);
+            }
+
+            Self::Gensym(sym) => {
+                3.hash(state);
+                sym.hash(state);
+            }
+
+            Self::Fixnum(num) => {
+                4.hash(state);
+                num.hash(state);
+            }
+
+            Self::Char(ch) => {
+                5.hash(state);
+                ch.hash(state);
+            }
+
+            Self::Flonum(num) => {
+                6.hash(state);
+                num.to_bits().hash(state);
+            }
+
+            Self::Boolean(b) => {
+                7.hash(state);
+                b.hash(state);
+            }
+
+            Self::String(s) => {
+                8.hash(state);
+                s.hash(state);
+            }
+
+            Self::Pair(pair) => {
+                9.hash(state);
+                pair.hash(state);
+            }
+
+            Self::Vector(vec) => {
+                10.hash(state);
+                vec.hash(state);
+            }
+
+            Self::Bytevector(vec) => {
+                11.hash(state);
+                vec.hash(state);
+            }
+
+            Self::Global(val) => {
+                12.hash(state);
+                val.hash(state);
+            }
+
+            Self::Program(prog) => {
+                13.hash(state);
+                prog.hash(state);
+            }
+
+            Self::Identifier(ident) => {
+                14.hash(state);
+                ident.hash(state);
+            }
+
+            Self::SyntaxRules(rules) => {
+                15.hash(state);
+                rules.hash(state);
+            }
+
+            Self::SyntaxPattern(pat) => {
+                16.hash(state);
+                pat.hash(state);
+            }
+
+            Self::Special(_) => 18.hash(state),
+
+            Self::LVar(lvar) => {
+                19.hash(state);
+                lvar.hash(state);
+            }
+
+            _ => 255.hash(state),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -471,6 +575,8 @@ impl Sexpr {
         D::Doc: Clone,
     {
         match self {
+            Self::Global(global) => allocator.text(format!("#<global {}>", scm_symbol_str(*global))),
+            Self::Program(prog) => allocator.text(format!("#<program {} {}>", prog.0, prog.1)),
             Self::Gensym(x) => allocator.text(format!("#<gensym {}>", x)),
             Self::LVar(lvar) => allocator
                 .text("#<lvar")
