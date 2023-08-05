@@ -24,9 +24,11 @@ pub enum ThreadKind {
     Worker,
 }
 
+#[repr(C)]
 pub struct Thread {
-    pub mutator: MaybeUninit<Mutator<CapyVM>>,
     interpreter: MaybeUninit<InterpreterState>,
+    pub mutator: MaybeUninit<Mutator<CapyVM>>,
+    
     pub id: u64,
     pub safepoint: *mut u8,
     pub gc_state: i8,

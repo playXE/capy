@@ -5,6 +5,7 @@ use super::u24::*;
 macro_rules! for_each_opcode {
     ($m: path) => {
         $m! {
+            (op_halt, "halt", {})
             (op_enter, "enter", {})
             // tells interpreter that we're in loop, might enter JITed code from here.
             (op_loop_hint, "loop-hint", {})
@@ -83,7 +84,7 @@ macro_rules! for_each_opcode {
             (op_box_ref, "box-ref", { dst: u16, src: u16 })
             (op_box_set, "box-set", { dst: u16, src: u16 })
 
-            (op_make_vector, "make-vector", { dst: u16, len: u16, fill: u16 })
+            (op_make_vector, "make-vector", { dst: u16, len: u32 })
             (op_vector_ref, "vector-ref", { dst: u16, src: u16, idx: u16 })
             (op_vector_ref_imm, "vector-ref/immediate", { dst: u16, src: u16, idx: u32 })
             (op_vector_set, "vector-set", { dst: u16, idx: u16, src: u16 })
@@ -94,7 +95,7 @@ macro_rules! for_each_opcode {
             (op_program_set_imm, "program-set/immediate", { dst: u24, idx: u32, src: u16 })
 
             // Creates a new program object with `vcode` at `offset` and `nfree` free variables.
-            (op_make_program, "make-program", { dst: u16, nfree: u32, offset: u32 })
+            (op_make_program, "make-program", { dst: u16, nfree: u32, offset: i32 })
             // Fetches global variable from constant pool and sets `dst` to it.
             (op_global_ref, "global-ref", { dst: u24, offset: u32})
             // Sets global variable from constant pool to `src`.
@@ -120,26 +121,30 @@ macro_rules! for_each_opcode {
             (op_bitnot, "bitnot", { dst: u16, src: u16 })
             (op_arithmetic_shift, "arithmetic-shift", { dst: u16, a: u16, b: u16 })
             (op_arithmetic_shift_imm, "arithmetic-shift/immediate", { dst: u16, a: u16, b: i32 })
-            (op_less, "<", { a: u16, b: u16 })
-            (op_less_imm, "</immediate", { a: u16, b: i32 })
-            (op_greater, ">", { a: u16, b: u16 })
-            (op_greater_imm, ">/immediate", { a: u16, b: i32 })
-            (op_less_equal, "<=", { a: u16, b: u16 })
-            (op_less_equal_imm, "<=/immediate", { a: u16, b: i32 })
-            (op_greater_equal, ">=", { a: u16, b: u16 })
-            (op_greater_equal_imm, ">=/immediate", { a: u16, b: i32 })
-            (op_numerically_equal, "=", { a: u16, b: u16 })
-            (op_equal_imm, "=/immediate", { a: u16, b: i32 })
-            (op_eq, "eq?", { a: u16, b: u16 })
-            (op_heap_tag_eq, "heap-tag-eq?", { obj: u24, tag: u32} )
-            (op_immediate_tag_eq, "immediate-tag-eq?", { obj: u24, tag: u32 })
+            (op_less, "<", { dst: u16, a: u16, b: u16 })
+            (op_less_imm, "</immediate", { dst: u16, a: u16, b: i32 })
+            (op_greater, ">", { dst: u16, a: u16, b: u16 })
+            (op_greater_imm, ">/immediate", { dst: u16, a: u16, b: i32 })
+            (op_less_equal, "<=", { dst: u16, a: u16, b: u16 })
+            (op_less_equal_imm, "<=/immediate", { dst: u16, a: u16, b: i32 })
+            (op_greater_equal, ">=", { dst: u16, a: u16, b: u16 })
+            (op_greater_equal_imm, ">=/immediate", { dst: u16, a: u16, b: i32 })
+            (op_numerically_equal, "=", { dst: u16, a: u16, b: u16 })
+            (op_equal_imm, "=/immediate", { dst: u16, a: u16, b: i32 })
+            (op_eq, "eq?", { dst: u16, a: u16, b: u16 })
+            (op_heap_tag_eq, "heap-tag-eq?", { dst: u16, obj: u24, tag: u32} )
+            (op_immediate_tag_eq, "immediate-tag-eq?", { dst: u16, obj: u24, tag: u32 })
+            (op_is_false, "false?", { dst: u16, obj: u16 })
+            (op_is_null, "null?", { dst: u16, obj: u16 })
+            (op_is_undefined, "undefined?", { dst: u16, obj: u16 })
+            (op_is_true, "true?", { dst: u16, obj: u16 })
+            (op_is_int32, "int32?", { dst: u16, obj: u16 })
+            (op_is_char, "char?", { dst: u16, obj: u16 })
+            (op_is_flonum, "flonum?", { dst: u16, obj: u16 })
+            
             (op_j, "j", { offset: i32 })
-            (op_jl, "jl", { offset: i32 })
-            (op_jg, "jg", { offset: i32 })
-            (op_jle, "jle", { offset: i32 })
-            (op_jge, "jge", { offset: i32 })
-            (op_je, "je", { offset: i32 })
-            (op_jne, "jne", { offset: i32 })
+            (op_jz, "jz", { src: u16, offset: i32})
+            (op_jnz, "jnz", { src: u16, offset: i32})
         }
     };
 }
@@ -276,12 +281,20 @@ pub fn disassemble(vcode: &[u8]) {
                     out.push_str(&format!("(j {}) ; => {}", j.offset(), diff));
                 }
 
-                op if op == OP_JE => {
-                    let j = OpJe::read(pc);
-                    pc = pc.add(std::mem::size_of::<OpJe>());
+                op if op == OP_JNZ => {
+                    let j = OpJnz::read(pc);
+                    pc = pc.add(std::mem::size_of::<OpJnz>());
                     let target = pc.offset(j.offset as isize);
                     let diff = target.offset_from(start_pc);
-                    out.push_str(&format!("(je {}) ; => {}", j.offset(), diff));
+                    out.push_str(&format!("(jnz {} {}) ; => {}", j.src(), j.offset(), diff));
+                }
+
+                op if op == OP_JZ => {
+                    let j = OpJz::read(pc);
+                    pc = pc.add(std::mem::size_of::<OpJz>());
+                    let target = pc.offset(j.offset as isize);
+                    let diff = target.offset_from(start_pc);
+                    out.push_str(&format!("(jz {} {}) ; => {}", j.src(), j.offset(), diff));
                 }
                 op if op == OP_MAKE_IMMEDIATE => {
                     let make_immediate = OpMakeImmediate::read(pc);
@@ -292,13 +305,29 @@ pub fn disassemble(vcode: &[u8]) {
                         make_immediate.value()
                     ))
                 }
+
+                op if op == OP_MAKE_PROGRAM => {
+                    let make_program = OpMakeProgram::read(pc);
+                    pc = pc.add(std::mem::size_of::<OpMakeProgram>());
+                    let label = pc.offset(make_program.offset() as isize);
+                        
+                    let diff = label.offset_from(start_pc);
+                    
+                    out.push_str(&format!(
+                        "(make-program {} {}) ; program at {:<02}",
+                        make_program.dst(),
+                        make_program.offset(),
+                        diff,
+                    ));
+
+                }
                 _ => {
                     disassemble_from_stream(op, &mut pc, &mut out).unwrap();
                 }
             }
 
             let diff = start.offset_from(start_pc);
-            println!("{:<04}:\t{}", diff, out);
+            println!("{:<02}:\t{}", diff, out);
         }
     }
 }

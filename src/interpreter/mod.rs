@@ -16,10 +16,11 @@ use crate::{
 use self::stackframe::{frame_dynamic_link, frame_previous_sp, StackElement};
 
 pub mod stackframe;
+pub mod engine;
 
 #[repr(C)]
 pub struct InterpreterState {
-    pub ip: *const u32,
+    pub ip: *const u8,
     pub sp: *mut StackElement,
     pub fp: *mut StackElement,
     pub stack_limit: *mut StackElement,

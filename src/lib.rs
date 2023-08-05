@@ -1,4 +1,4 @@
-#![feature(thread_local, offset_of)]
+#![feature(thread_local, offset_of, core_intrinsics)]
 pub mod bytecode;
 pub mod compiler;
 pub mod gc;

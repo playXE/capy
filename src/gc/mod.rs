@@ -14,7 +14,8 @@ use mmtk::{
     vm::{
         edge_shape::{SimpleEdge, UnimplementedMemorySlice},
         *,
-    }, Mutator, AllocationSemantics, MutatorContext,
+    },
+    AllocationSemantics, Mutator, MutatorContext,
 };
 
 use crate::{
@@ -115,7 +116,7 @@ impl ObjectModel<CapyVM> for ScmObjectModel {
     }
 
     fn get_current_size(object: ObjectReference) -> usize {
-        let reference = ScmCellRef(object);
+        let reference = ScmCellRef(unsafe { transmute(object) });
 
         match reference.header().type_id() {
             TypeId::Pair => size_of::<ScmPair>(),
@@ -364,7 +365,7 @@ impl Scanning<CapyVM> for ScmScanning {
         object: ObjectReference,
         edge_visitor: &mut EV,
     ) {
-        let mut reference = ScmCellRef(object);
+        let mut reference = ScmCellRef(unsafe { transmute(object) });
 
         match reference.header().type_id() {
             TypeId::Pair => {
@@ -502,7 +503,8 @@ impl VMBinding for CapyVM {
 
 pub fn fast_path_allocator() -> fn(&mut Mutator<CapyVM>, usize) -> Address {
     let vm = scm_virtual_machine();
-    let selector = mmtk::memory_manager::get_allocator_mapping(&vm.mmtk, AllocationSemantics::Default);
+    let selector =
+        mmtk::memory_manager::get_allocator_mapping(&vm.mmtk, AllocationSemantics::Default);
 
     fn slow(mutator: &mut Mutator<CapyVM>, size: usize) -> Address {
         mutator.alloc(size, 8, 0, AllocationSemantics::Default)
@@ -512,6 +514,6 @@ pub fn fast_path_allocator() -> fn(&mut Mutator<CapyVM>, usize) -> Address {
         AllocatorSelector::Malloc(_)
         | AllocatorSelector::FreeList(_)
         | AllocatorSelector::LargeObject(_) => slow,
-        _ => todo!()
+        _ => todo!(),
     }
 }

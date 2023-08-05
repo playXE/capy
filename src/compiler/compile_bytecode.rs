@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-use crate::bytecode::encode::*;
-use crate::bytecode::opcodes::*;
+use once_cell::sync::Lazy;
+
 use crate::bytecode::u24::u24;
 use crate::bytecodeassembler::*;
 use crate::compiler::sexpr::Sexpr;
 use crate::runtime::object::scm_symbol_str;
+use crate::runtime::object::TypeId;
 use crate::runtime::symbol::scm_intern;
 use crate::runtime::value::Value;
 
@@ -21,9 +22,7 @@ pub fn scan<const RESET_CALL: bool>(
     labels: &mut Vec<P<IForm>>,
 ) {
     match &**iform {
-        IForm::Define(def) => {
-            scan::<RESET_CALL>(&def.value, fs, bs, toplevel, labels)
-        }
+        IForm::Define(def) => scan::<RESET_CALL>(&def.value, fs, bs, toplevel, labels),
         IForm::Label(label) => {
             scan::<RESET_CALL>(&label.body, fs, bs, toplevel, labels);
         }
@@ -144,16 +143,10 @@ fn compute_frame_size(lam: P<Lambda>) -> usize {
             IForm::LSet(lset) => 1 + visit(&lset.value),
 
             IForm::Call(call) => {
-                if let IForm::GRef(gref) = &*call.proc {
-                    let sym = gref.name.unwrap_id();
-
-                    if PRIMCALL_TABLE.contains(&scm_symbol_str(sym)) {
-                        return call.args.iter().map(|arg| visit(arg)).sum::<usize>();
-                    }
-                }
-
                 1 + call.args.iter().map(|arg| visit(arg)).sum::<usize>() + 3 /* call frame size */
             }
+
+            IForm::PrimCall(_, args) => args.iter().map(|arg| visit(arg)).sum::<usize>(),
 
             IForm::If(cond) => {
                 let test = visit(&cond.cond);
@@ -170,14 +163,14 @@ fn compute_frame_size(lam: P<Lambda>) -> usize {
                 inits.max(body)
             }
 
+            IForm::Label(label) => visit(&label.body),
+
             _ => 1,
         }
     }
 
     1 + lam.lvars.len() + visit(&lam.body) + TEMPORARY_COUNT
 }
-
-const PRIMCALL_TABLE: &[&str] = &["box", "box-ref", "box-set!"];
 
 struct Env {
     prev: Option<P<Self>>,
@@ -188,7 +181,7 @@ struct Env {
     next_local: u32,
 }
 
-pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &HashMap<P<Lambda>, usize>) {
+pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &Vec<(P<Lambda>, usize)>) {
     fn lookup_lexical(sym: P<LVar>, mut env: &P<Env>) -> P<Env> {
         loop {
             if sym.as_ptr() == env.id.as_ptr() {
@@ -207,18 +200,17 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &HashMap<P
             id: sym.clone(),
             idx,
             closure: true,
-            
         })
     }
 
     fn push_local(name: Sexpr, lvar: P<LVar>, env: P<Env>) -> P<Env> {
         let idx = env.next_local;
-        
+
         P(Env {
             next_local: idx - 1,
             prev: Some(env),
             name,
-           
+
             id: lvar,
             idx,
             closure: false,
@@ -230,7 +222,7 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &HashMap<P
             next_local: env.next_local,
             prev: Some(env),
             name,
-           
+
             id: lvar,
             idx,
             closure: false,
@@ -253,7 +245,6 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &HashMap<P
             }),
             idx,
             closure: false,
-            
         })
     }
 
@@ -305,7 +296,6 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &HashMap<P
 
         let mut env = closure;
         for var in lvars.iter() {
-            
             env = push_local(var.name.clone(), var.clone(), env);
             println!("local {} at {}", var.name, env.idx);
         }
@@ -348,7 +338,7 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &HashMap<P
     struct State<'a> {
         frame_size: u32,
         labels: HashMap<P<IForm>, usize>,
-        closures: &'a HashMap<P<Lambda>, usize>,
+        closures: &'a Vec<(P<Lambda>, usize)>,
     }
     fn stack_height_under_local(idx: u32, frame_size: u32) -> u32 {
         frame_size - idx - 1
@@ -411,8 +401,8 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &HashMap<P
     }
 
     fn visit_if(cond: &If, asm: &mut Assembler, env: &P<Env>, ctx: Context, state: &mut State) {
-        for_effect(asm, &cond.cond, env, state);
-        let je = asm.emit_je();
+        let value = for_value(asm, &cond.cond, env, state); // for_effect(asm, &cond.cond, env, state);
+        let je = asm.emit_jnz(value.idx as _);
         for_context(asm, ctx, &cond.alternative, env, state);
         match ctx {
             Context::Tail => {
@@ -441,11 +431,7 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &HashMap<P
                 let l = lookup_lexical(lref.lvar.clone(), env);
 
                 if l.closure {
-                    asm.emit_load_free_variable(
-                        dst as _,
-                        u24::new(1 - state.frame_size as u32),
-                        l.idx,
-                    )
+                    asm.emit_load_free_variable(dst as _, u24::new(state.frame_size - 1), l.idx)
                 } else {
                     asm.emit_mov(dst as _, l.idx as _);
                 }
@@ -493,7 +479,7 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &HashMap<P
             }
 
             IForm::Lambda(lam) => {
-                let label = *state.closures.get(lam).expect("must be defined");
+                let label = state.closures.iter().find(|(l, _)| l == lam).unwrap().1;
                 if lam.free_lvars.is_empty() {
                     asm.emit_static_program(u24::new(dst), label as _);
                 } else {
@@ -515,8 +501,86 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &HashMap<P
                 asm.emit_make_immediate(dst as _, Value::encode_undefined_value().get_raw() as _);
             }
 
+            IForm::Call(call) => {
+                let mut env = push_frame(env.clone());
+                for arg in call.args.iter() {
+                    env = for_push(asm, arg, &env, state);
+                }
+                let proc_slot = stack_height(&env, state);
+
+                asm.emit_call(u24::new(proc_slot), call.args.len() as u32 + 1);
+                asm.emit_receive(
+                    stack_height_under_local(dst, state.frame_size) as _,
+                    proc_slot as _,
+                    u24::new(state.frame_size),
+                );
+            }
+
+            IForm::Label(label) => {
+                let pos = asm.code.len();
+                state.labels.insert(exp.clone(), pos);
+                for_value_at(asm, &label.body, env, dst, state);
+            }
+
+            IForm::Goto(_) => {
+                for_effect(asm, exp, env, state);
+            }
+
+            IForm::PrimCall(name, args) => match *name {
+                "list" => {
+                    let args = for_args(asm, state, args, env);
+                    asm.emit_make_immediate(0, Value::encode_null_value().get_raw() as _);
+                    for arg in args.iter().rev() {
+                        asm.emit_cons(0, *arg as u16, 0);
+                    }
+                    asm.emit_mov(dst as _, 0);
+                }
+
+                "vector" => {
+                    let args = for_args(asm, state, args, env);
+                    asm.emit_make_vector(0, args.len() as _);
+                    for (i, arg) in args.iter().enumerate() {
+                        asm.emit_vector_set_immediate(0, i as _, *arg as _);
+                    }
+
+                    asm.emit_mov(dst as _, 0);
+                }
+
+                _ => {
+                    let prim = PRIMITIVES.get(name).unwrap();
+                    if !prim.has_result {
+                        for_effect(asm, exp, env, state);
+                        asm.emit_make_immediate(
+                            dst as _,
+                            Value::encode_undefined_value().get_raw() as _,
+                        );
+                    } else {
+                        let args = for_args(asm, state, args, env);
+                        let mut rargs = vec![dst];
+                        rargs.extend_from_slice(&args);
+
+                        (prim.emit)(asm, &rargs);
+                    }
+                }
+            },
+
             _ => todo!(),
         }
+    }
+
+    fn for_args(
+        asm: &mut Assembler,
+        state: &mut State<'_>,
+        args: &[P<IForm>],
+        env: &P<Env>,
+    ) -> Vec<u32> {
+        let mut env = env.clone();
+        let mut cargs = vec![];
+        for arg in args.iter() {
+            env = for_value(asm, arg, &env, state);
+            cargs.push(env.idx);
+        }
+        cargs
     }
 
     fn for_effect(
@@ -527,17 +591,21 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &HashMap<P
     ) -> Option<P<Env>> {
         match &**exp {
             IForm::LSet(lset) => {
-                let env = for_value(asm, &lset.value, env, state);
                 let l = lookup_lexical(lset.lvar.clone(), &env);
+                if !l.closure {
+                    for_value_at(asm, &lset.value, env, l.idx, state);
+                } else {
+                    let env = for_value(asm, &lset.value, env, state);
 
-                if l.closure {
+                    //if l.closure {
                     asm.emit_store_free_variable(
                         u24::new(1 - state.frame_size as u32),
                         env.idx as _,
                         l.idx,
                     );
-                } else {
+                    //} else {
                     asm.emit_mov(l.idx as _, env.idx);
+                    //}
                 }
                 None
             }
@@ -559,6 +627,41 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &HashMap<P
             }
             IForm::Let(var) => visit_let(var, asm, env, Context::Effect, state),
             IForm::Const(_) | IForm::Lambda(_) | IForm::It | IForm::LRef(_) => None,
+            IForm::Call(call) => {
+                let mut env = push_frame(env.clone());
+                for arg in call.args.iter() {
+                    env = for_push(asm, arg, &env, state);
+                }
+                let proc_slot = stack_height(&env, state);
+
+                asm.emit_call(u24::new(proc_slot), call.args.len() as u32 + 1);
+                asm.emit_reset_frame(u24::new(state.frame_size));
+                None
+            }
+
+            IForm::Label(label) => {
+                let pos = asm.code.len();
+                state.labels.insert(exp.clone(), pos);
+                for_effect(asm, &label.body, env, state)
+            }
+
+            IForm::Goto(goto) => {
+                let label = goto.upgrade().expect("label must be alive!");
+                let pos = *state.labels.get(&label).unwrap();
+                let start = asm.code.len() + 1;
+                asm.emit_j_known(0);
+                let diff = pos as i32 - asm.code.len() as i32;
+                let code = &mut asm.code[start..start + 4];
+                code.copy_from_slice(&diff.to_le_bytes());
+                None
+            }
+
+            IForm::PrimCall(name, args) => {
+                let prim = PRIMITIVES.get(*name).unwrap();
+                let args = for_args(asm, state, args, env);
+                (prim.emit)(asm, &args);
+                None
+            }
             _ => Some(for_value(asm, exp, env, state)),
         }
     }
@@ -592,6 +695,32 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &HashMap<P
             IForm::Seq(seq) => visit_seq(seq, asm, env, Context::Tail, state),
             IForm::Let(var) => {
                 visit_let(var, asm, env, Context::Tail, state);
+            }
+            IForm::Call(call) => {
+                let base = stack_height(env, state);
+                let mut env = for_push(asm, &call.proc, env, state);
+                for arg in call.args.iter() {
+                    env = for_push(asm, arg, &env, state);
+                }
+
+                fn parallel_moves(asm: &mut Assembler, env: &P<Env>, base: u32, i: i32) {
+                    if 0 <= i {
+                        parallel_moves(asm, &env.prev.as_ref().unwrap(), base, i - 1);
+                        asm.emit_mov(env.idx + base, env.idx);
+                    }
+                }
+
+                parallel_moves(asm, &env, base, call.args.len() as i32);
+                asm.emit_reset_frame(u24::new(1 + call.args.len() as u32));
+                asm.emit_tail_call();
+            }
+            IForm::Goto(_) => {
+                for_effect(asm, exp, env, state);
+            }
+            IForm::Label(label) => {
+                let pos = asm.code.len();
+                state.labels.insert(exp.clone(), pos);
+                for_tail(asm, &label.body, env, state);
             }
             _ => {
                 for_value_at(asm, exp, env, 0, state);
@@ -627,7 +756,6 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &HashMap<P
 
     asm.emit_enter();
     let size = compute_frame_size(lam.clone());
-    println!("frame size: {}", size);
     asm.emit_prelude(lam.reqargs + 1, lam.optarg, size);
     let env = create_initial_env(&lam.lvars, &lam.free_lvars, size as _);
     let mut state = State {
@@ -640,21 +768,29 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &HashMap<P
 
 pub fn compile_bytecode(exp: P<IForm>) -> Assembler {
     let mut asm = Assembler::new();
-    let closures = scan_toplevel::<false>(exp.clone()).iter().map(|iform| {
-        let IForm::Lambda(lam) = &**iform else {unreachable!()};
-        lam.clone()
-    }).collect::<Vec<_>>();
-    
+    let closures = scan_toplevel::<false>(exp.clone())
+        .iter()
+        .map(|iform| {
+            let IForm::Lambda(lam) = &**iform else {
+                unreachable!()
+            };
+            lam.clone()
+        })
+        .collect::<Vec<_>>();
+
     let mut label = 0;
 
-    let closures = closures.iter().map(|lam| {
-        label += 1;
-        (lam.clone(), label - 1)
-    }).collect::<HashMap<P<Lambda>, usize>>();
+    let closures = closures
+        .iter()
+        .map(|lam| {
+            label += 1;
+            (lam.clone(), label - 1)
+        })
+        .collect::<Vec<(P<Lambda>, usize)>>();
 
     let mut actual_locations = HashMap::new();
 
-    for (closure,label) in closures.iter() {
+    for (closure, label) in closures.iter() {
         let pos = asm.code.len();
         compile_closure(&mut asm, closure.clone(), &closures);
         actual_locations.insert(*label, pos);
@@ -664,17 +800,150 @@ pub fn compile_bytecode(exp: P<IForm>) -> Assembler {
         match reloc {
             Reloc::Label { code_loc, index } => {
                 let label = *actual_locations.get(&(index as usize)).unwrap();
-                let diff = label as isize - code_loc as isize;
+
+                let diff = label as i32 - code_loc as i32;
                 let diff = diff as i32;
+
                 let diff = diff.to_le_bytes();
+                let code_loc = code_loc - 4;
                 asm.code[code_loc as usize] = diff[0];
                 asm.code[code_loc as usize + 1] = diff[1];
                 asm.code[code_loc as usize + 2] = diff[2];
                 asm.code[code_loc as usize + 3] = diff[3];
-            }
-            // TODO: More relocs for constants
+            } // TODO: More relocs for constants
         }
     }
 
     asm
 }
+
+pub struct Primitive {
+    pub nargs: usize,
+    pub predicate: bool,
+    pub has_result: bool,
+    pub emit: fn(&mut Assembler, &[u32]),
+}
+
+static PRIMITIVES: Lazy<HashMap<&'static str, Primitive>> = Lazy::new(|| {
+    let mut map = HashMap::new();
+
+    macro_rules! define_primitives {
+        ($(($name: literal, $nargs: literal, $predicate: literal, $has_result: literal, $asm: ident, $args: ident => $b: block))*) => {
+            $(map.insert($name, Primitive {
+                nargs: $nargs,
+                predicate: $predicate,
+                has_result: $has_result,
+                emit: |$asm: &mut Assembler, $args: &[u32]| {
+                    $b
+                }
+            });)*
+        };
+    }
+
+    define_primitives!(
+        ("+", 2, false, true, asm, args => {
+            asm.emit_add(args[0] as _, args[1] as _, args[2] as _);
+        })
+        ("-", 2, false, true, asm, args => {
+            asm.emit_sub(args[0] as _, args[1] as _, args[2] as _);
+        })
+
+        ("*", 2, false, true, asm, args => {
+            asm.emit_mul(args[0] as _, args[1] as _, args[2] as _);
+        })
+
+        ("/", 2, false, true, asm, args => {
+            asm.emit_div(args[0] as _, args[1] as _, args[2] as _);
+        })
+
+        ("<", 2, false, true, asm, args => {
+            asm.emit_less(args[0] as _, args[1] as _, args[2] as _);
+        })
+
+        ("<=", 2, false, true, asm, args => {
+            asm.emit_less_equal(args[0] as _, args[1] as _, args[2] as _);
+        })
+
+        (">", 2, false, true, asm, args => {
+            asm.emit_greater(args[0] as _, args[1] as _, args[2] as _);
+        })
+
+        (">=", 2, false, true, asm, args => {
+            asm.emit_greater_equal(args[0] as _, args[1] as _, args[2] as _);
+        })
+
+        ("=", 2, false, true, asm, args => {
+            asm.emit_numerically_equal(args[0] as _, args[1] as _, args[2] as _);
+        })
+
+        ("eq?", 2, true, true, asm, args => {
+            asm.emit_eq(args[0] as _, args[1] as _, args[2] as _);
+        })
+
+        ("false?", 1, true, true, asm, args => {
+            asm.emit_is_false(args[0] as _, args[1] as _);
+        })
+
+        ("true?", 1, true, true, asm, args => {
+            asm.emit_is_true(args[0] as _, args[1] as _);
+        })
+
+        ("fixnum?", 1, true, true, asm, args => {
+            asm.emit_is_int32(args[0] as _, args[1] as _);
+        })
+
+        ("flonum?", 1, true, true, asm, args => {
+            asm.emit_is_flonum(args[0] as _, args[1] as _);
+        })
+
+        ("null?", 1, true, true, asm, args => {
+            asm.emit_is_null(args[0] as _, args[1] as _);
+        })
+
+        ("undefined?", 1, true, true, asm, args => {
+            asm.emit_is_undefined(args[0] as _, args[1] as _);
+        })
+
+        ("char?", 1, true, true, asm, args => {
+            asm.emit_is_char(args[0] as _, args[1] as _);
+        })
+
+        ("pair?", 1, true, true, asm, args => {
+            asm.emit_heap_tag_eq(args[0] as _, args[1] as _, TypeId::Pair as _);
+        })
+
+        ("vector?", 1, true, true, asm, args => {
+            asm.emit_heap_tag_eq(args[0] as _, args[1] as _, TypeId::Vector as _);
+        })
+
+        ("bytevector?", 1, true, true, asm, args => {
+            asm.emit_heap_tag_eq(args[0] as _, args[1] as _, TypeId::Bytevector as _);
+        })
+
+        ("string?", 1, true, true, asm, args => {
+            asm.emit_heap_tag_eq(args[0] as _, args[1] as _, TypeId::String as _);
+        })
+
+        ("symbol?", 1, true, true, asm, args => {
+            asm.emit_heap_tag_eq(args[0] as _, args[1] as _, TypeId::Symbol as _);
+        })
+
+        ("program?", 1, true, true, asm, args => {
+            asm.emit_heap_tag_eq(args[0] as _, args[1] as _, TypeId::Program as _);
+        })
+
+        ("make-box", 1, false, true, asm, args => {
+            asm.emit_make_box(args[0] as _, args[1] as _);
+        })
+
+        ("box-ref", 1, false, true, asm, args => {
+            asm.emit_box_ref(args[0] as _, args[1] as _);
+        })
+
+        ("box-set!", 2, false, true, asm, args => {
+            asm.emit_box_set(args[0], args[1]);
+        })
+    );
+
+    map
+});

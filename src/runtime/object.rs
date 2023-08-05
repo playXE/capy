@@ -1,4 +1,4 @@
-use std::mem::size_of;
+use std::mem::{size_of, transmute};
 
 use mmtk::{
     memory_manager::object_reference_write,
@@ -64,36 +64,41 @@ impl ScmCellHeader {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd)]
-pub struct ScmCellRef(pub ObjectReference);
+pub struct ScmCellRef(pub usize);
 
 impl ScmCellRef {
     pub fn from_address(addr: Address) -> Self {
-        Self(ObjectReference::from_address::<CapyVM>(addr))
+        Self(unsafe { transmute(addr) })
     }
 
     pub fn to_address(self) -> Address {
-        self.0.to_address::<CapyVM>()
+        unsafe { transmute(self) }
     }
 
     #[inline]
     pub fn slot_ref(self, offset: usize) -> Value {
         unsafe {
-            let address = self.0.to_raw_address().add(offset * size_of::<Value>());
-            address.load::<Value>()
+            let address = self.0 + offset * size_of::<Value>();
+            (address as *const Value).read()
         }
     }
     #[inline]
     pub fn slot_set(self, thread: &mut Thread, offset: usize, value: Value) {
         unsafe {
-            let slot = self.0.to_raw_address().add(offset * size_of::<Value>());
-            let edge = SimpleEdge::from_address(slot);
-            debug_assert_ne!(self.0, ObjectReference::NULL);
+            let slot = self.0 + (offset * size_of::<Value>());
+            let edge = transmute::<_, SimpleEdge>(slot); //SimpleEdge::from_address(slot);
+            debug_assert_ne!(self.0, 0);
             if value.is_object() {
-                debug_assert_ne!(value.get_object().0, ObjectReference::NULL);
-                object_reference_write(&mut thread.mutator(), self.0, edge, value.get_object().0);
+                debug_assert_ne!(value.get_object().0, 0);
+                object_reference_write(
+                    &mut thread.mutator(),
+                    transmute(self.0),
+                    edge,
+                    transmute(value),
+                );
             } else {
                 debug_assert!(!value.is_empty());
-                slot.store(value);
+                (slot as *mut Value).write(value);
             }
         }
     }
@@ -101,32 +106,33 @@ impl ScmCellRef {
     #[inline]
     pub fn raw_load<T: Copy>(self, offset: usize) -> T {
         unsafe {
-            let address = self.0.to_raw_address().add(offset);
-            address.load::<T>()
+            let address = self.0 + offset;
+            (address as *const T).read()
         }
     }
 
     #[inline]
     pub fn raw_store<T>(self, offset: usize, value: T) {
         unsafe {
-            let address = self.0.to_raw_address().add(offset);
-            address.store(value);
+            let address = self.0 + offset;
+            (address as *mut T).write(value);
         }
     }
 
     #[inline]
     pub fn edge(self, offset: usize) -> SimpleEdge {
-        SimpleEdge::from_address(self.0.to_raw_address().add(offset))
+        //SimpleEdge::from_address(self.0.to_raw_address().add(offset))
+        unsafe { transmute(self.0 + offset) }
     }
 
     #[inline]
     pub fn header(self) -> ScmCellHeader {
-        unsafe { self.0.to_raw_address().load::<ScmCellHeader>() }
+        unsafe { (self.0 as *const ScmCellHeader).read() }
     }
 
     #[inline]
     pub fn cast_as<T>(&mut self) -> &mut T {
-        unsafe { &mut *self.0.to_raw_address().to_mut_ptr() }
+        unsafe { &mut *(self.0 as *mut T) }
     }
 }
 
@@ -195,12 +201,14 @@ pub fn scm_set_car(cell: Value, thread: &mut Thread, value: Value) {
     let mut pair = cell.get_object();
     let pair = pair.cast_as::<ScmPair>();
     if value.is_object() {
-        object_reference_write(
-            thread.mutator(),
-            cell.get_object().0,
-            SimpleEdge::from_address(Address::from_ptr(&mut pair.car)),
-            value.get_object().0,
-        );
+        unsafe {
+            object_reference_write(
+                thread.mutator(),
+                transmute(cell.get_object().0),
+                transmute(&mut pair.car),
+                transmute(value),
+            );
+        }
     } else {
         pair.car = value;
     }
@@ -211,12 +219,14 @@ pub fn scm_set_cdr(cell: Value, thread: &mut Thread, value: Value) {
     let mut pair = cell.get_object();
     let pair = pair.cast_as::<ScmPair>();
     if value.is_object() {
-        object_reference_write(
-            thread.mutator(),
-            cell.get_object().0,
-            SimpleEdge::from_address(Address::from_ptr(&mut pair.cdr)),
-            value.get_object().0,
-        );
+        unsafe {
+            object_reference_write(
+                thread.mutator(),
+                transmute(cell.get_object().0),
+                transmute(&mut pair.cdr),
+                transmute(value),
+            );
+        }
     } else {
         pair.cdr = value;
     }
@@ -256,14 +266,14 @@ pub fn scm_vector_set(vector: Value, thread: &mut Thread, index: u32, value: Val
     let vec = v.cast_as::<ScmVector>();
 
     if value.is_object() {
-        object_reference_write(
-            thread.mutator(),
-            vector.get_object().0,
-            SimpleEdge::from_address(Address::from_mut_ptr(unsafe {
-                vec.values.as_mut_ptr().add(index as usize)
-            })),
-            value.get_object().0,
-        );
+        unsafe {
+            object_reference_write(
+                thread.mutator(),
+                transmute(vector),
+                transmute(vec.values.as_mut_ptr().add(index as usize)),
+                transmute(value),
+            );
+        }
     } else {
         unsafe {
             vec.values.as_mut_ptr().add(index as usize).write(value);
@@ -371,14 +381,14 @@ pub fn scm_program_set_free_variable(
     let prog = prog.cast_as::<ScmProgram>();
 
     if value.is_object() {
-        object_reference_write(
-            thread.mutator(),
-            program.get_object().0,
-            SimpleEdge::from_address(Address::from_mut_ptr(unsafe {
-                prog.free.as_mut_ptr().add(index as usize)
-            })),
-            value.get_object().0,
-        );
+        unsafe {
+            object_reference_write(
+                thread.mutator(),
+                transmute(program),
+                transmute(prog.free.as_mut_ptr().add(index as usize)),
+                transmute(value),
+            );
+        }
     } else {
         unsafe {
             prog.free.as_mut_ptr().add(index as usize).write(value);
@@ -442,12 +452,15 @@ pub fn scm_gloc_set(value: Value, thread: &mut Thread, new_value: Value) {
     let mut gloc = value.get_object();
     let gloc = gloc.cast_as::<ScmGloc>();
     if new_value.is_object() {
-        object_reference_write(
-            thread.mutator(),
-            value.get_object().0,
-            SimpleEdge::from_address(Address::from_mut_ptr(&mut gloc.value)),
-            new_value.get_object().0,
-        );
+        unsafe {
+            object_reference_write(
+                thread.mutator(),
+                transmute(value),
+                transmute(&mut gloc.value),
+                //SimpleEdge::from_address(Address::from_mut_ptr(&mut gloc.value)),
+                transmute(new_value),
+            );
+        }
     } else {
         gloc.value = new_value;
     }

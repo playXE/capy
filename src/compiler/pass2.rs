@@ -16,8 +16,10 @@ pub struct Pass2Ctx {
 use crate::compiler::{expand::expand_inline_procedure, sexpr::Sexpr};
 
 use super::{
+    constfold::USUAL_CONSTANT_FOLDING_TABLE,
     loops::recover_loops_rec,
     pass2p2::{pass2_substitute, scan_toplevel},
+    primitives::resolve_primitives,
     tree_il::*,
     P,
 };
@@ -32,6 +34,44 @@ pub fn pass2_rec(
         IForm::Define(def) => {
             let expr = pass2_rec(def.value.clone(), penv, false, ctx)?;
             def.value = expr;
+            Ok(iform)
+        }
+
+        IForm::PrimCall(name, args) => {
+            for arg in args.iter_mut() {
+                *arg = pass2_rec(arg.clone(), penv, false, ctx)?;
+            }
+
+            if let Some(entry) = USUAL_CONSTANT_FOLDING_TABLE
+                .get(name)
+                .filter(|_| args.iter().all(|x| x.is_const()))
+                .filter(|entry| {
+                    args.len() == entry.predicates.len()
+                        && entry
+                            .predicates
+                            .iter()
+                            .zip(args.iter())
+                            .all(|(pred, arg)| pred(arg.as_const().unwrap()))
+                })
+            {
+                let consts = args
+                    .iter()
+                    .map(|x| {
+                        if let IForm::Const(x) = &**x {
+                            x.clone()
+                        } else {
+                            unreachable!()
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let res = (entry.fold)(&consts);
+
+                if let Some(res) = res {
+                    ctx.changed = true;
+                    return Ok(P(IForm::Const(res)));
+                }
+            }
+
             Ok(iform)
         }
 
@@ -232,8 +272,6 @@ pub fn pass2_intermediate_lrefs_removal(lvars: &[P<LVar>], body: P<IForm>) {
                                 if let Some(_) = lref.lvar.initval.clone() {
                                     lref.lvar.ref_count -= 1;
                                     lref.lvar.initval = Some(P(IForm::Const(Sexpr::Undefined)));
-
-                                    
                                 }
                             }
                         }
@@ -255,7 +293,7 @@ pub fn pass2_lref_eliminate(mut iform: P<IForm>) -> P<IForm> {
                 IForm::Const(value) => {
                     lvar.ref_count -= 1;
                     *orig = IForm::Const(value.clone());
-                    
+
                     return orig;
                 }
 
@@ -314,7 +352,7 @@ pub fn pass2_remove_unused_lvars(
                 continue;
             } else {
                 ctx.changed = true;
-                
+
                 match init {
                     None => unreachable!(),
                     Some(mut init) => match &mut *init {
@@ -588,7 +626,6 @@ pub fn pass2_branch_cut(
     else_form: P<IForm>,
 ) -> Option<P<IForm>> {
     if let IForm::Const(c) = &*test_form {
-       
         let val_form = if c.to_boolean() { then_form } else { else_form };
 
         Some(if let IForm::It = &*val_form {
@@ -735,6 +772,7 @@ pub fn pass2(mut iform: P<IForm>, recover_loops: bool) -> Result<P<IForm>, Strin
     loop {
         scan_toplevel::<true>(iform.clone()); // compute bound and free variables in each lambda
         iform.count_refs();
+        iform = resolve_primitives(iform.clone());
         if recover_loops {
             ctx.changed = false;
             ctx.inline = true;
@@ -742,7 +780,7 @@ pub fn pass2(mut iform: P<IForm>, recover_loops: bool) -> Result<P<IForm>, Strin
             iform = pass2_rec(iform.clone(), &mut Vec::with_capacity(4), true, &mut ctx)?;
             // TODO: recover loops here
             scan_toplevel::<true>(iform.clone()); // compute bound and free variables in each lambda
-            iform.count_refs();         
+            iform.count_refs();
             iform = recover_loops_rec(iform, &mut vec![], false, &mut ctx.changed);
             scan_toplevel::<true>(iform.clone()); // compute bound and free variables in each lambda
             iform.count_refs();

@@ -69,6 +69,14 @@ impl Assembler {
         OpCons::new(dst, car, cdr).write(self);
     }
 
+    pub fn emit_make_vector(&mut self, dst: u16, len: u32) {
+        OpMakeVector::new(dst, len).write(self);
+    }
+
+    pub fn emit_vector_set_immediate(&mut self, dst: u16, imm: u32, val: u16) {
+        OpVectorSetImm::new(dst, imm, val).write(self);
+    }
+
     pub fn emit_global_ref(&mut self, dst: u24, name: Value) {
         let name = self.intern_constant(Sexpr::Global(name));
         OpGlobalRef::new(dst, name as _).write(self);
@@ -82,7 +90,6 @@ impl Assembler {
     pub fn emit_make_non_immediate(&mut self, dst: u24, data: Sexpr) {
         let index = self.intern_constant(data);
         OpMakeNonImmediate::new(dst, index).write(self);
-       
     }
 
     pub fn emit_make_immediate(&mut self, dst: u16, imm: u64) {
@@ -92,7 +99,7 @@ impl Assembler {
     pub fn emit_make_program(&mut self, dst: u16, nfree: u32, closure_idx: u32) {
         OpMakeProgram::new(dst, nfree, 0).write(self);
         let reloc = Reloc::Label {
-            code_loc: self.code.len() as u32 - 4,
+            code_loc: self.code.len() as u32,
             index: closure_idx,
         };
 
@@ -120,14 +127,17 @@ impl Assembler {
         OpProgramSetImm::new(dst, idx, src).write(self);
     }
 
-    pub fn emit_je(&mut self) -> impl FnOnce(&mut Assembler) {
+    pub fn emit_jnz(&mut self, src: u16) -> impl FnOnce(&mut Assembler) {
         let off = self.code.len();
-        OpJe::new(0).write(self);
+        OpJnz::new(src, i32::MAX).write(self);
+        let end = self.code.len();
         move |this| {
-            let diff = this.code.len() - off - 5;
+            let diff = this.code.len() - off - 7;
             let diff = diff as u32;
 
             let diff_bytes = diff.to_le_bytes();
+            let off = off + 2;
+            println!("{} {}", off, end);
             this.code[off + 1] = diff_bytes[0];
             this.code[off + 2] = diff_bytes[1];
             this.code[off + 3] = diff_bytes[2];
@@ -151,6 +161,10 @@ impl Assembler {
         }
     }
 
+    pub fn emit_j_known(&mut self, off: i32) {
+        OpJ::new(off).write(self);
+    }
+
     pub fn emit_return_values(&mut self) {
         OpReturnValues::new().write(self);
     }
@@ -172,6 +186,111 @@ impl Assembler {
 
         self.emit_alloc_frame(nlocals);
     }
+
+    pub fn emit_call(&mut self, proc: u24, nlocals: u32) {
+        OpCall::new(proc, u24::new(nlocals)).write(self);
+    }
+
+    pub fn emit_reset_frame(&mut self, nlocals: u24) {
+        OpResetFrame::new(nlocals).write(self);
+    }
+
+    pub fn emit_receive(&mut self, dst: u16, proc: u16, nlocals: u24) {
+        OpReceive::new(dst, proc, nlocals).write(self);
+    }
+
+    pub fn emit_tail_call(&mut self) {
+        OpTailCall::new().write(self);
+    }
+
+    pub fn emit_add(&mut self, dst: u16, src1: u16, src2: u16) {
+        OpAdd::new(dst, src1, src2).write(self);
+    }
+
+    pub fn emit_sub(&mut self, dst: u16, src1: u16, src2: u16) {
+        OpSub::new(dst, src1, src2).write(self);
+    }
+
+    pub fn emit_mul(&mut self, dst: u16, src1: u16, src2: u16) {
+        OpMul::new(dst, src1, src2).write(self);
+    }
+
+    pub fn emit_div(&mut self, dst: u16, src1: u16, src2: u16) {
+        OpDiv::new(dst, src1, src2).write(self);
+    }
+
+    pub fn emit_quotient(&mut self, dst: u16, src1: u16, src2: u16) {
+        OpQuotient::new(dst, src1, src2).write(self);
+    }
+
+    pub fn emit_less(&mut self, dst: u16, src1: u16, src2: u16) {
+        OpLess::new(dst, src1, src2).write(self);
+    }
+
+    pub fn emit_greater(&mut self, dst: u16, src1: u16, src2: u16) {
+        OpGreater::new(dst, src1, src2).write(self);
+    }
+
+    pub fn emit_less_equal(&mut self, dst: u16, src1: u16, src2: u16) {
+        OpLessEqual::new(dst, src1, src2).write(self);
+    }
+
+    pub fn emit_greater_equal(&mut self, dst: u16, src1: u16, src2: u16) {
+        OpGreaterEqual::new(dst, src1, src2).write(self);
+    }
+
+    pub fn emit_numerically_equal(&mut self, dst: u16, src1: u16, src2: u16) {
+        OpNumericallyEqual::new(dst, src1, src2).write(self);
+    }
+
+    pub fn emit_eq(&mut self, dst: u16, src1: u16, src2: u16) {
+        OpEq::new(dst, src1, src2).write(self);
+    }
+
+    pub fn emit_heap_tag_eq(&mut self, dst: u16, obj: u32, tag: u32) {
+        OpHeapTagEq::new(dst, u24::new(obj), tag).write(self);
+    }
+
+    pub fn emit_immediate_tag_eq(&mut self, dst: u16, obj: u24, tag: u32) {
+        OpImmediateTagEq::new(dst, obj, tag).write(self);
+    }
+
+    pub fn emit_is_false(&mut self, dst: u16, obj: u16) {
+        OpIsFalse::new(dst, obj).write(self);
+    }
+
+    pub fn emit_is_int32(&mut self, dst: u16, obj: u16) {
+        OpIsInt32::new(dst, obj).write(self);
+    }
+
+    pub fn emit_is_undefined(&mut self, dst: u16, obj: u16) {
+        OpIsUndefined::new(dst, obj).write(self);
+    }
+
+    pub fn emit_is_null(&mut self, dst: u16, obj: u16) {
+        OpIsNull::new(dst, obj).write(self);
+    }
+
+    pub fn emit_is_flonum(&mut self, dst: u16, obj: u16) {
+        OpIsFlonum::new(dst, obj).write(self);
+    }
+
+    pub fn emit_is_true(&mut self, dst: u16, obj: u16) {
+        OpIsTrue::new(dst, obj).write(self);
+    }
+
+    pub fn emit_is_char(&mut self, dst: u16, obj: u16) {
+        OpIsChar::new(dst, obj).write(self);
+    }
+
+    pub fn emit_make_box(&mut self, dst: u16, obj: u16) {
+        OpBox::new(dst, obj).write(self);
+    }
+
+    pub fn emit_box_ref(&mut self, dst: u16, obj: u16) {
+        OpBoxRef::new(dst, obj).write(self);
+    }
+
 }
 
 pub enum Reloc {

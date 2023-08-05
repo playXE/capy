@@ -1,4 +1,5 @@
 #![allow(unused_imports)]
+extern crate fscheme;
 use fscheme::{
     bytecode::opcodes::disassemble,
     bytecodeassembler::fasl::FASLPrinter,
@@ -20,7 +21,7 @@ use fscheme::{
     vm::{scm_init, scm_virtual_machine, thread::Thread},
 };
 use r7rs_parser::expr::NoIntern;
-/*
+/* 
 fn make_tree(thread: &mut Thread, depth: i32) -> Value {
     thread.safepoint();
     if depth == 0 {
@@ -64,8 +65,9 @@ fn main() {
 
     let _ = scm_init(builder.build());
 
-
-    let depth = 21;
+    let depth = std::env::var("DEPTH")
+        .map(|s| s.parse::<i32>().unwrap())
+        .unwrap_or(10);
     let min_depth = 4;
     let max_depth = depth;
 
@@ -146,7 +148,7 @@ fn main() {
                 syntax_env: syntax_env.clone(),
             },
             true,
-            false,
+            true,
         )
         .unwrap();
 

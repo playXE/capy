@@ -15,11 +15,25 @@ pub enum IForm {
     Lambda(P<Lambda>),
     Label(Label),
     Call(Call),
+    PrimCall(&'static str, Vec<P<IForm>>),
+    PrimRef(&'static str),
     Let(Let),
     Goto(Weak<IForm>),
 }
 
+impl PartialEq for IForm {
+    fn eq(&self, other: &Self) -> bool {
+        self as *const _ == other as *const _
+    }
+}
 
+impl Eq for IForm {}
+
+impl Hash for IForm {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        (self as *const Self).hash(state)
+    }
+}
 
 impl IForm {
     pub fn lref_lvar(&self) -> Option<&P<LVar>> {
@@ -31,6 +45,17 @@ impl IForm {
 
     pub fn is_lref(&self) -> bool {
         matches!(self, Self::LRef(_))
+    }
+
+    pub fn is_const(&self) -> bool {
+        matches!(self, Self::Const(_))
+    }
+
+    pub fn as_const(&self) -> Option<&Sexpr> {
+        match self {
+            Self::Const(x) => Some(x),
+            _ => None,
+        }
     }
 
     pub fn is_transparent(&self) -> bool {
@@ -220,7 +245,7 @@ pub struct Lambda {
 
 impl PartialEq for Lambda {
     fn eq(&self, other: &Self) -> bool {
-        self as *const Self == other as *const Self 
+        self as *const Self == other as *const Self
     }
 }
 
@@ -285,6 +310,28 @@ impl IForm {
         D::Doc: Clone,
     {
         match self {
+            IForm::PrimCall(name, args) => {
+                let args_pret = allocator.intersperse(
+                    args.iter().map(|arg| arg.pretty::<REF, _>(allocator)),
+                    allocator.line(),
+                );
+
+                allocator
+                    .text("primcall")
+                    .append(allocator.space())
+                    .append(allocator.text(name.to_owned()))
+                    .append(allocator.space())
+                    .append(args_pret)
+                    .group()
+                    .parens()
+            }
+
+            IForm::PrimRef(name) => allocator
+                .text("primref")
+                .append(allocator.space())
+                .append(allocator.text(name.to_owned()))
+                .group()
+                .parens(),
             IForm::Goto(goto) => {
                 let label = goto.upgrade().expect("must be alive!");
                 allocator

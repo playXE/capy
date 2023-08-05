@@ -1,7 +1,7 @@
 //! Assignment elimination transformation
 //!
-//! Destructively walks the tree and transforms `lset` to `cell-set!` and `lref` to `cell-ref` for all
-//! mutable variables. All mutable variables are boxed with `make-cell` call.
+//! Destructively walks the tree and transforms `lset` to `box-set!` and `lref` to `box-ref` for all
+//! mutable variables. All mutable variables are boxed with `make-box` call.
 
 use std::collections::HashMap;
 
@@ -63,7 +63,6 @@ fn make_make_cell(value: P<IForm>) -> IForm {
 fn assignment_elimination_rec(mut tree: P<IForm>) -> P<IForm> {
     match &mut *tree {
         IForm::LRef(lref) => {
-           
             if !lref.lvar.is_immutable() {
                 *tree = make_cell_ref(lref.lvar.clone());
             }
@@ -72,7 +71,11 @@ fn assignment_elimination_rec(mut tree: P<IForm>) -> P<IForm> {
         }
 
         IForm::LSet(lset) => {
-            println!("is mutable {}: {}", lset.lvar.name, !lset.lvar.is_immutable());
+            println!(
+                "is mutable {}: {}",
+                lset.lvar.name,
+                !lset.lvar.is_immutable()
+            );
             if !lset.lvar.is_immutable() {
                 *tree = make_cell_set(
                     lset.lvar.clone(),
@@ -155,7 +158,7 @@ fn assignment_elimination_rec(mut tree: P<IForm>) -> P<IForm> {
                 inits,
                 body,
             }));
-            
+
             lambda.body = bindings;
 
             tree
@@ -167,14 +170,16 @@ fn assignment_elimination_rec(mut tree: P<IForm>) -> P<IForm> {
         }
 
         IForm::Let(var) => {
-
-            var.lvars.iter_mut().zip(var.inits.iter_mut()).for_each(|(lvar, init)| {
-                if !lvar.is_immutable() {
-                    let make_cell = make_make_cell(init.clone());
-                    lvar.boxed = true;
-                    *init = P(make_cell);
-                }
-            }); 
+            var.lvars
+                .iter_mut()
+                .zip(var.inits.iter_mut())
+                .for_each(|(lvar, init)| {
+                    if !lvar.is_immutable() {
+                        let make_cell = make_make_cell(init.clone());
+                        lvar.boxed = true;
+                        *init = P(make_cell);
+                    }
+                });
             var.inits.iter_mut().for_each(|init| {
                 *init = assignment_elimination_rec(init.clone());
             });
@@ -182,7 +187,15 @@ fn assignment_elimination_rec(mut tree: P<IForm>) -> P<IForm> {
             tree
         }
 
-        IForm::It | IForm::GRef(_) | IForm::Const(_) | IForm::Goto(_) => tree
+        IForm::PrimCall(_, args) => {
+            for arg in args {
+                *arg = assignment_elimination_rec(arg.clone());
+            }
+
+            tree
+        }
+
+        IForm::It | IForm::GRef(_) | IForm::Const(_) | IForm::Goto(_) | IForm::PrimRef(_) => tree,
     }
 }
 
@@ -192,7 +205,6 @@ fn assignment_elimination_substitute(
     substitute: &HashMap<P<LVar>, P<LVar>>,
 ) -> P<IForm> {
     match &mut *tree {
-        
         IForm::LRef(lref) => {
             if let Some(new_lvar) = substitute.get(&lref.lvar) {
                 lref.lvar = new_lvar.clone();
@@ -268,6 +280,14 @@ fn assignment_elimination_substitute(
             tree
         }
 
-        IForm::Const(_) | IForm::It | IForm::GRef(_) | IForm::Goto(_) => tree,
+        IForm::PrimCall(_, args) => {
+            for arg in args {
+                *arg = assignment_elimination_substitute(arg.clone(), substitute);
+            }
+
+            tree
+        }
+
+        IForm::Const(_) | IForm::It | IForm::GRef(_) | IForm::Goto(_) | IForm::PrimRef(_) => tree,
     }
 }

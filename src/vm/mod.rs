@@ -15,6 +15,7 @@ pub mod safepoint;
 pub mod signals;
 pub mod sync;
 pub mod thread;
+pub mod intrinsics;
 
 pub struct VirtualMachine {
     pub mmtk: mmtk::MMTK<CapyVM>,

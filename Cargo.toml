@@ -3,8 +3,6 @@ name = "fscheme"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
 paste = "1.0"
 mmtk = { git = "https://github.com/mmtk/mmtk-core" }
@@ -34,5 +32,11 @@ winapi = { version = "0.3", features = [
     
 ] }
 
+
+
 [profile.release]
-lto = true
+lto = "fat"
+codegen-units = 1
+
+[profile.release.package.mmtk]
+opt-level = 2

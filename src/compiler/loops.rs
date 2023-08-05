@@ -57,7 +57,10 @@ fn is_misused(x: &IForm, tail: bool, lvar: P<LVar>, formals: &[P<LVar>]) -> bool
                         .any(|x| is_misused(x, false, lvar.clone(), formals))
             }
         }
-
+        IForm::PrimCall(_, args) => {
+            args.iter()
+                .any(|x| is_misused(x, false, lvar.clone(), formals))
+        }
         IForm::Define(def) => is_misused(&def.value, tail, lvar, formals),
         _ => false,
     }
@@ -97,7 +100,7 @@ fn is_captured(x: &IForm, in_lambda: bool, lvar: P<LVar>) -> bool {
         IForm::Label(x) => is_captured(&x.body, in_lambda, lvar),
 
         IForm::Lambda(lam) => is_captured(&lam.body, true, lvar),
-
+        IForm::PrimCall(_, args) => args.iter().any(|x| is_captured(x, in_lambda, lvar.clone())),
         _ => false,
     }
 }
@@ -236,7 +239,14 @@ pub fn recover_loops_rec(
 
         IForm::It => iform,
         IForm::Goto(_) => iform,
+        IForm::PrimCall(_, args) => {
+            for arg in args.iter_mut() {
+                *arg = recover_loops_rec(arg.clone(), penv, false, changed);
+            }
 
+            iform
+        }
+        IForm::PrimRef(_) => iform,
         IForm::Let(var) => {
             let iter = var.lvars.iter().zip(var.inits.iter());
 
@@ -367,6 +377,14 @@ fn optimize_loop(_binding: P<IForm>, lvar: P<LVar>, lambda: P<Lambda>, init: Vec
                 cond.cond = rewrite(cond.cond.clone(), lvar, formals, label.clone());
                 cond.consequent = rewrite(cond.consequent.clone(), lvar, formals, label.clone());
                 cond.alternative = rewrite(cond.alternative.clone(), lvar, formals, label.clone());
+                x
+            }
+
+            IForm::PrimCall(_, args) => {
+                args.iter_mut().for_each(|x| {
+                    *x = rewrite(x.clone(), lvar, formals, label.clone());
+                });
+
                 x
             }
 

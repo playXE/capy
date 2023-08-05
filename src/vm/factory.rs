@@ -1,11 +1,11 @@
-use std::mem::size_of;
+use std::mem::{size_of, transmute};
 
 use mmtk::{util::ObjectReference, AllocationSemantics, MutatorContext};
 
 use crate::{
     runtime::object::{Header, ScmCellHeader, ScmCellRef, TypeId},
     runtime::{
-        object::{ScmBytevector, ScmGloc, ScmProgram, ScmString, ScmSymbol, ScmVector},
+        object::{ScmBytevector, ScmGloc, ScmPair, ScmProgram, ScmString, ScmSymbol, ScmVector},
         value::Value,
     },
     utils::round_up,
@@ -18,31 +18,31 @@ impl Thread {
         unsafe {
             let mutator = self.mutator.assume_init_mut();
             let mem = mutator.alloc(
-                size_of::<ScmCellHeader>() + size_of::<Value>() * 2,
+                size_of::<ScmPair>(),
                 size_of::<usize>(),
                 0,
                 AllocationSemantics::Default,
             );
 
-            mem.store::<ScmCellHeader>(ScmCellHeader {
-                as_header: Header {
-                    type_id: TypeId::Pair,
-                    pad: [0; 4],
-                    flags: 0,
+            mem.store::<ScmPair>(ScmPair {
+                header: ScmCellHeader {
+                    as_header: Header {
+                        type_id: TypeId::Pair,
+                        pad: [0; 4],
+                        flags: 0,
+                    },
                 },
+                car,
+                cdr,
             });
-
-            mem.add(size_of::<ScmCellHeader>()).store(car);
-            mem.add(size_of::<ScmCellHeader>() + size_of::<Value>())
-                .store(cdr);
-            let reference = ObjectReference::from_raw_address(mem);
+            let reference = transmute::<_, ObjectReference>(mem);
             mutator.post_alloc(
                 reference,
-                size_of::<ScmCellHeader>() + size_of::<Value>() * 2,
+                size_of::<ScmPair>(),
                 AllocationSemantics::Default,
             );
 
-            ScmCellRef(reference).into()
+            ScmCellRef(transmute(reference)).into()
         }
     }
 
@@ -72,10 +72,10 @@ impl Thread {
                 cursor = cursor.add(1);
             }
 
-            let reference = ObjectReference::from_raw_address(mem);
+            let reference = transmute::<_, ObjectReference>(mem);
             mutator.post_alloc(reference, size, AllocationSemantics::Default);
 
-            ScmCellRef(reference).into()
+            Value::encode_object_value(ScmCellRef(transmute(reference)))
         }
     }
 
@@ -104,10 +104,10 @@ impl Thread {
 
             let data = (*mem.to_mut_ptr::<ScmBytevector>()).data.as_mut_ptr();
             data.write_bytes(init, n);
-            let reference = ObjectReference::from_raw_address(mem);
+            let reference = transmute::<_, ObjectReference>(mem);
             mutator.post_alloc(reference, size, semantics);
 
-            ScmCellRef(reference).into()
+            Value::encode_object_value(ScmCellRef(transmute(reference)))
         }
     }
 
@@ -136,10 +136,10 @@ impl Thread {
 
             let data = (*mem.to_mut_ptr::<ScmBytevector>()).data.as_mut_ptr();
             data.copy_from_nonoverlapping(slice.as_ptr(), slice.len());
-            let reference = ObjectReference::from_raw_address(mem);
+            let reference = transmute::<_, ObjectReference>(mem);
             mutator.post_alloc(reference, size, semantics);
 
-            ScmCellRef(reference).into()
+            Value::encode_object_value(ScmCellRef(transmute(reference)))
         }
     }
 
@@ -170,10 +170,10 @@ impl Thread {
             name.copy_from_nonoverlapping(str.as_ptr(), str.len());
             *name.add(str.len()) = 0;
 
-            let reference = ObjectReference::from_raw_address(mem);
+            let reference = transmute::<_, ObjectReference>(mem);
             mutator.post_alloc(reference, size, semantics);
 
-            ScmCellRef(reference).into()
+            Value::encode_object_value(ScmCellRef(transmute(reference)))
         }
     }
 
@@ -217,10 +217,10 @@ impl Thread {
                 free = free.add(1);
             }
 
-            let reference = ObjectReference::from_raw_address(mem);
+            let reference = transmute::<_, ObjectReference>(mem);
             mutator.post_alloc(reference, size, semantics);
 
-            ScmCellRef(reference).into()
+            Value::encode_object_value(ScmCellRef(transmute(reference)))
         }
     }
 
@@ -265,10 +265,10 @@ impl Thread {
             let name = (*addr).name.as_mut_ptr();
             name.copy_from_nonoverlapping(str.as_bytes().as_ptr(), str.len());
             name.add(str.len()).write(0);
-            let reference = ObjectReference::from_raw_address(mem);
+            let reference = transmute::<_, ObjectReference>(mem);
             mutator.post_alloc(reference, size, AllocationSemantics::Default);
 
-            ScmCellRef(reference).into()
+            Value::encode_object_value(ScmCellRef(transmute(reference)))
         }
     }
 
@@ -290,10 +290,10 @@ impl Thread {
                 value,
             });
 
-            let reference = ObjectReference::from_raw_address(mem);
+            let reference = transmute::<_, ObjectReference>(mem);
             mutator.post_alloc(reference, size, AllocationSemantics::Default);
 
-            Value::encode_object_value(ScmCellRef(reference))
+            Value::encode_object_value(ScmCellRef(transmute(reference)))
         }
     }
 }

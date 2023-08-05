@@ -58,7 +58,7 @@ pub struct StackFrame {
 #[repr(C)]
 pub union StackElement {
     pub as_value: Value,
-    pub as_vcode: *const u32,
+    pub as_vcode: *const u8,
     pub as_mcode: *const u8,
     pub as_usize: usize,
     pub as_s64: i64,
@@ -82,13 +82,13 @@ pub unsafe fn set_frame_machine_return_address(fp: *mut StackElement, mra: *cons
 }
 
 #[inline]
-pub unsafe fn frame_virtual_return_address(fp: *mut StackElement) -> *const u32 {
+pub unsafe fn frame_virtual_return_address(fp: *mut StackElement) -> *const u8 {
     fp.add(1).read().as_vcode
 }
 
 #[inline]
-pub unsafe fn set_frame_virtual_return_address(fp: *mut StackElement, vra: *const u32) {
-    fp.add(1).cast::<*const u32>().write(vra);
+pub unsafe fn set_frame_virtual_return_address(fp: *mut StackElement, vra: *const u8) {
+    fp.add(1).cast::<*const u8>().write(vra);
 }
 
 #[inline]
