@@ -1,15 +1,17 @@
+use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-use once_cell::sync::Lazy;
-
+use crate::bytecode::opcodes::CAPY_BYTECODE_MAGIC;
+use crate::bytecode::opcodes::OP_NOP;
 use crate::bytecode::u24::u24;
+use crate::bytecodeassembler::fasl::FASLPrinter;
 use crate::bytecodeassembler::*;
 use crate::compiler::sexpr::Sexpr;
-use crate::runtime::object::scm_symbol_str;
 use crate::runtime::object::TypeId;
 use crate::runtime::symbol::scm_intern;
 use crate::runtime::value::Value;
+use crate::utils::is_aligned;
 
 use super::tree_il::*;
 use super::P;
@@ -327,6 +329,7 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &Vec<(P<La
         }
     }
     #[derive(Clone, Copy)]
+    #[allow(dead_code)]
     enum Context {
         Effect,
         Value,
@@ -519,6 +522,7 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &Vec<(P<La
             IForm::Label(label) => {
                 let pos = asm.code.len();
                 state.labels.insert(exp.clone(), pos);
+                asm.emit_loop_hint();
                 for_value_at(asm, &label.body, env, dst, state);
             }
 
@@ -642,6 +646,7 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &Vec<(P<La
             IForm::Label(label) => {
                 let pos = asm.code.len();
                 state.labels.insert(exp.clone(), pos);
+                asm.emit_loop_hint();
                 for_effect(asm, &label.body, env, state)
             }
 
@@ -720,6 +725,7 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &Vec<(P<La
             IForm::Label(label) => {
                 let pos = asm.code.len();
                 state.labels.insert(exp.clone(), pos);
+                asm.emit_loop_hint();
                 for_tail(asm, &label.body, env, state);
             }
             _ => {
@@ -766,7 +772,7 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &Vec<(P<La
     for_context(asm, Context::Tail, &lam.body, &env, &mut state);
 }
 
-pub fn compile_bytecode(exp: P<IForm>) -> Assembler {
+pub fn compile_bytecode(exp: P<IForm>, output: &mut Vec<u8>) {
     let mut asm = Assembler::new();
     let closures = scan_toplevel::<false>(exp.clone())
         .iter()
@@ -778,6 +784,12 @@ pub fn compile_bytecode(exp: P<IForm>) -> Assembler {
         })
         .collect::<Vec<_>>();
 
+    let IForm::Lambda(toplevel_lam) = &*exp else {
+        unreachable!()
+    };
+
+    let toplevel_lam = toplevel_lam.clone();
+
     let mut label = 0;
 
     let closures = closures
@@ -788,12 +800,40 @@ pub fn compile_bytecode(exp: P<IForm>) -> Assembler {
         })
         .collect::<Vec<(P<Lambda>, usize)>>();
 
+    let toplevel_ix = closures
+        .iter()
+        .position(|(lam, _)| lam.as_ptr() == toplevel_lam.as_ptr())
+        .unwrap();
+    let toplevel_ix = closures[toplevel_ix].1;
+
     let mut actual_locations = HashMap::new();
+
+    struct Data {
+        start: usize,
+        end: usize,
+        nargs: u32,
+        optarg: bool,
+        name: Value,
+    }
+
+    let mut closure_data = Vec::new();
 
     for (closure, label) in closures.iter() {
         let pos = asm.code.len();
         compile_closure(&mut asm, closure.clone(), &closures);
+        let end = asm.code.len();
         actual_locations.insert(*label, pos);
+        closure_data.push(Data {
+            start: pos,
+            end,
+            nargs: closure.reqargs,
+            optarg: closure.optarg,
+            name: closure
+                .name
+                .as_ref()
+                .map(|x| scm_intern(x))
+                .unwrap_or(Value::encode_null_value()),
+        });
     }
 
     while let Some(reloc) = asm.relocs.pop() {
@@ -814,7 +854,46 @@ pub fn compile_bytecode(exp: P<IForm>) -> Assembler {
         }
     }
 
-    asm
+    let constants = Sexpr::Vector(P(std::mem::take(&mut asm.constants)));
+    let data = Sexpr::Vector(P(closure_data
+        .into_iter()
+        .map(|data| {
+            Sexpr::Vector(P(vec![
+                Sexpr::Fixnum(data.start as _),
+                Sexpr::Fixnum(data.end as _),
+                Sexpr::Fixnum(data.nargs as _),
+                Sexpr::Boolean(data.optarg),
+                if data.name.is_null() {
+                    Sexpr::Null
+                } else {
+                    Sexpr::Symbol(data.name)
+                },
+            ]))
+        })
+        .collect::<Vec<Sexpr>>()));
+    let label = actual_locations[&toplevel_ix];
+    let entrypoint = Sexpr::Program(label as _);
+
+    let data_section = Sexpr::Vector(P(vec![constants, data, entrypoint]));
+    
+    
+    output.reserve(asm.code.len() + 8 + 128);
+    output.extend_from_slice(&CAPY_BYTECODE_MAGIC.to_le_bytes());
+    let code_len_pos = output.len();
+    output.extend_from_slice(&(asm.code.len() as u32).to_le_bytes());
+    let code_start_pos = output.len();
+    output.extend_from_slice(&asm.code);
+    while !is_aligned(output.len(), 4, 0) {
+        output.push(OP_NOP);
+    }
+    let code_end_pos = output.len();
+    let actual_length = code_end_pos - code_start_pos;
+    output[code_len_pos..code_len_pos + 4].copy_from_slice(&(actual_length as u32).to_le_bytes());
+    let start = output.len();
+    FASLPrinter::new(output)
+        .put(data_section)
+        .expect("write to vector must always succeed");
+    println!("constants len: {}", output.len() - start);
 }
 
 pub struct Primitive {
@@ -822,6 +901,7 @@ pub struct Primitive {
     pub predicate: bool,
     pub has_result: bool,
     pub emit: fn(&mut Assembler, &[u32]),
+    pub immediate_emit: Option<fn(&mut Assembler, &[u32])>,
 }
 
 static PRIMITIVES: Lazy<HashMap<&'static str, Primitive>> = Lazy::new(|| {
@@ -835,7 +915,8 @@ static PRIMITIVES: Lazy<HashMap<&'static str, Primitive>> = Lazy::new(|| {
                 has_result: $has_result,
                 emit: |$asm: &mut Assembler, $args: &[u32]| {
                     $b
-                }
+                },
+                immediate_emit: None,
             });)*
         };
     }

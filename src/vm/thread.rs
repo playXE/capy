@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicI8, Ordering};
 use std::{mem::MaybeUninit, panic::AssertUnwindSafe};
 
 use mmtk::memory_manager::bind_mutator;
+use mmtk::util::ObjectReference;
 use mmtk::Mutator;
 
 use crate::gc::CapyVM;
@@ -28,13 +29,14 @@ pub enum ThreadKind {
 pub struct Thread {
     interpreter: MaybeUninit<InterpreterState>,
     pub mutator: MaybeUninit<Mutator<CapyVM>>,
-    
+
     pub id: u64,
     pub safepoint: *mut u8,
     pub gc_state: i8,
     pub kind: ThreadKind,
     pub handles: MaybeUninit<HandleMemory>,
     pub stackchain: StackChain,
+    pub local_finalization_queue: MaybeUninit<Vec<(ObjectReference, Box<dyn FnOnce()>)>>,
 }
 
 impl Thread {
@@ -166,6 +168,37 @@ impl Thread {
         let th = threads();
         th.add_thread(self as *mut Thread);
         self.interpreter = MaybeUninit::new(InterpreterState::new());
+        self.local_finalization_queue = MaybeUninit::new(Vec::with_capacity(128));
+    }
+
+    pub fn register_cleaner(&mut self, object: ObjectReference, cleaner: Box<dyn FnOnce()>) {
+        unsafe {
+            let queue = self.local_finalization_queue.assume_init_mut();
+            let cap = queue.capacity();
+            queue.push((object, cleaner));
+            if queue.capacity() != cap {
+                self.flush_cleaner_queue();
+            }
+        }
+    }
+
+    pub fn flush_cleaner_queue(&mut self) {
+        let queue = unsafe { self.local_finalization_queue.assume_init_mut() };
+        // Flush queue to global queue
+        let vm = scm_virtual_machine();
+        // acquire global queue lock, it might enter safepoint while acquiring lock.
+        let mut global = vm.finalization_registry.lock(true);
+        global.extend(queue.drain(..));
+    }
+
+    /// Same as above except does not enter safepoint while acquiring global lock.
+    pub(crate) fn flush_cleaner_queue_in_gc(&mut self) {
+        let queue = unsafe { self.local_finalization_queue.assume_init_mut() };
+        // Flush queue to global queue
+        let vm = scm_virtual_machine();
+    
+        let mut global = vm.finalization_registry.lock(false);
+        global.extend(queue.drain(..));
     }
 
     pub(crate) fn register_worker(&mut self, controller: bool) {
@@ -307,4 +340,5 @@ static mut THREAD: Thread = Thread {
     kind: ThreadKind::None,
     handles: MaybeUninit::uninit(),
     stackchain: null_mut(),
+    local_finalization_queue: MaybeUninit::uninit(),
 };

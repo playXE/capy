@@ -9,7 +9,8 @@ use crate::{
 pub struct Assembler {
     pub relocs: Vec<Reloc>,
     pub code: Vec<u8>,
-    pub constants: HashMap<Sexpr, u32>,
+    pub constants: Vec<Sexpr>,
+    pub constant_map: HashMap<Sexpr, u32>,
 }
 
 impl InstructionStream for Assembler {
@@ -33,7 +34,8 @@ impl Assembler {
         Self {
             relocs: Vec::new(),
             code: Vec::new(),
-            constants: HashMap::new(),
+            constants: Vec::with_capacity(16),
+            constant_map: HashMap::with_capacity(16),
         }
     }
 
@@ -107,11 +109,14 @@ impl Assembler {
     }
 
     pub fn intern_constant(&mut self, constant: Sexpr) -> u32 {
+        
+        if let Some(&ix) = self.constant_map.get(&constant) {
+            return ix;
+        }
         let ix = self.constants.len();
-        self.constants
-            .entry(constant.into())
-            .or_insert_with(|| ix as _)
-            .clone()
+        self.constants.push(constant.clone());
+        self.constant_map.insert(constant, ix as u32);
+        ix as u32
     }
 
     pub fn emit_static_program(&mut self, dst: u24, closure_idx: u32) {
@@ -171,6 +176,10 @@ impl Assembler {
 
     pub fn emit_enter(&mut self) {
         OpEnter::new().write(self);
+    }
+
+    pub fn emit_loop_hint(&mut self) {
+        OpLoopHint::new().write(self);
     }
 
     pub fn emit_alloc_frame(&mut self, size: usize) {

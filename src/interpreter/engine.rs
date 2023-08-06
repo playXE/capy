@@ -128,10 +128,20 @@ pub unsafe  extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
             }
 
             OP_ENTER => {
-
+                thread.interpreter().sp = sp;
+                thread.interpreter().ip = ip;
+                thread.safepoint();
+                sp = thread.interpreter().sp;
+                ip = thread.interpreter().ip;
             }
 
-            OP_LOOP_HINT => {}
+            OP_LOOP_HINT => {
+                thread.interpreter().sp = sp;
+                thread.interpreter().ip = ip;
+                thread.safepoint();
+                sp = thread.interpreter().sp;
+                ip = thread.interpreter().ip;
+            }
 
 
             OP_CALL => {
@@ -324,7 +334,35 @@ pub unsafe  extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 reset_frame!(to+n);
             }
 
+            OP_J => {
+                let j = OpJ::read(ip);
+                ip = ip.add(size_of::<OpJ>());
 
+                ip = ip.offset(j.offset() as isize);
+            }
+
+            OP_JNZ => {
+                
+                let jnz = OpJnz::read(ip);
+                ip = ip.add(size_of::<OpJnz>());
+
+                let val = sp_ref!(jnz.src());
+                if !val.is_false() {
+                    ip = ip.offset(jnz.offset() as isize);
+                }
+            }
+
+            OP_JZ => {
+                let jz = OpJz::read(ip);
+                ip = ip.add(size_of::<OpJz>());
+
+                let val = sp_ref!(jz.src());
+                if val.is_false() {
+                    ip = ip.offset(jz.offset() as isize);
+                }
+            }
+
+            
 
             _ => ()
 

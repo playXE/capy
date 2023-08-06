@@ -104,7 +104,5 @@
 )
 
 
-(let loop ([i 0])
-    (if (< i 100)
-        (loop (+ i 1))
-        i))
+(let ([x (+ 42 y)])
+    (lambda () x))

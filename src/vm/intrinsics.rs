@@ -20,7 +20,7 @@ pub unsafe extern "C" fn cons_rest(thread: &mut Thread, base: u32) -> Value {
     let mut n = frame_num_locals(thread.interpreter().fp, thread.interpreter().sp) - base as isize;
 
     while n != 0 {
-        let obj = thread.make_cons(Value::encode_null_value(), Value::encode_null_value());
+        let obj = thread.make_cons::<false>(Value::encode_null_value(), Value::encode_null_value());
         obj.get_object().cast_as::<ScmPair>().car = *frame_local(thread.interpreter().fp, base as isize + n);
         obj.get_object().cast_as::<ScmPair>().cdr = *rest;
         *rest = obj;

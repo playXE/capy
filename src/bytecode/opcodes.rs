@@ -141,7 +141,7 @@ macro_rules! for_each_opcode {
             (op_is_int32, "int32?", { dst: u16, obj: u16 })
             (op_is_char, "char?", { dst: u16, obj: u16 })
             (op_is_flonum, "flonum?", { dst: u16, obj: u16 })
-            
+
             (op_j, "j", { offset: i32 })
             (op_jz, "jz", { src: u16, offset: i32})
             (op_jnz, "jnz", { src: u16, offset: i32})
@@ -260,7 +260,7 @@ macro_rules! disassemble {
 
 for_each_opcode!(disassemble);
 
-pub fn disassemble(vcode: &[u8]) {
+pub fn disassemble<const ADDR_INSN: bool>(vcode: &[u8]) {
     let mut pc = vcode.as_ptr();
     let end = unsafe { pc.add(vcode.len()) };
     let start_pc = pc;
@@ -278,7 +278,11 @@ pub fn disassemble(vcode: &[u8]) {
                     pc = pc.add(std::mem::size_of::<OpJ>());
                     let target = pc.offset(j.offset as isize);
                     let diff = target.offset_from(start_pc);
-                    out.push_str(&format!("(j {}) ; => {}", j.offset(), diff));
+                    if !ADDR_INSN {
+                        out.push_str(&format!("(j {}) ; => {}", j.offset(), diff));
+                    } else {
+                        out.push_str(&format!("(j {}) ; => {:p}", j.offset(), target));
+                    }
                 }
 
                 op if op == OP_JNZ => {
@@ -286,7 +290,11 @@ pub fn disassemble(vcode: &[u8]) {
                     pc = pc.add(std::mem::size_of::<OpJnz>());
                     let target = pc.offset(j.offset as isize);
                     let diff = target.offset_from(start_pc);
-                    out.push_str(&format!("(jnz {} {}) ; => {}", j.src(), j.offset(), diff));
+                    if !ADDR_INSN {
+                        out.push_str(&format!("(jnz {} {}) ; => {}", j.src(), j.offset(), diff));
+                    } else {
+                        out.push_str(&format!("(jnz {} {}) ; => {:p}", j.src(), j.offset(), target));
+                    }
                 }
 
                 op if op == OP_JZ => {
@@ -294,7 +302,11 @@ pub fn disassemble(vcode: &[u8]) {
                     pc = pc.add(std::mem::size_of::<OpJz>());
                     let target = pc.offset(j.offset as isize);
                     let diff = target.offset_from(start_pc);
-                    out.push_str(&format!("(jz {} {}) ; => {}", j.src(), j.offset(), diff));
+                    if !ADDR_INSN {
+                        out.push_str(&format!("(jz {} {}) ; => {}", j.src(), j.offset(), diff));
+                    } else {
+                        out.push_str(&format!("(jz {} {}) ; => {:p}", j.src(), j.offset(), target));
+                    }
                 }
                 op if op == OP_MAKE_IMMEDIATE => {
                     let make_immediate = OpMakeImmediate::read(pc);
@@ -310,24 +322,36 @@ pub fn disassemble(vcode: &[u8]) {
                     let make_program = OpMakeProgram::read(pc);
                     pc = pc.add(std::mem::size_of::<OpMakeProgram>());
                     let label = pc.offset(make_program.offset() as isize);
-                        
-                    let diff = label.offset_from(start_pc);
-                    
-                    out.push_str(&format!(
-                        "(make-program {} {}) ; program at {:<02}",
-                        make_program.dst(),
-                        make_program.offset(),
-                        diff,
-                    ));
 
+                    let diff = label.offset_from(start_pc);
+                    if !ADDR_INSN {
+                        out.push_str(&format!(
+                            "(make-program {} {}) ; program at {:<02}",
+                            make_program.dst(),
+                            make_program.offset(),
+                            diff,
+                        ));
+                    } else {
+                        out.push_str(&format!(
+                            "(make-program {} {}) ; program at {:p}",
+                            make_program.dst(),
+                            make_program.offset(),
+                            label,
+                        ));
+                    }
                 }
                 _ => {
                     disassemble_from_stream(op, &mut pc, &mut out).unwrap();
                 }
             }
-
-            let diff = start.offset_from(start_pc);
-            println!("{:<02}:\t{}", diff, out);
+            if !ADDR_INSN {
+                let diff = start.offset_from(start_pc);
+                println!("{:<02}:\t{}", diff, out);
+            } else {
+                println!("{:p}:\t{}", start, out);
+            }
         }
     }
 }
+
+pub const CAPY_BYTECODE_MAGIC: u32 = 0x43504330;

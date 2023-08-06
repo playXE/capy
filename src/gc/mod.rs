@@ -118,40 +118,44 @@ impl ObjectModel<CapyVM> for ScmObjectModel {
     fn get_current_size(object: ObjectReference) -> usize {
         let reference = ScmCellRef(unsafe { transmute(object) });
 
-        match reference.header().type_id() {
-            TypeId::Pair => size_of::<ScmPair>(),
+        round_up(
+            match reference.header().type_id() {
+                TypeId::Pair => size_of::<ScmPair>(),
 
-            TypeId::Box => size_of::<ScmBox>(),
+                TypeId::Box => size_of::<ScmBox>(),
 
-            TypeId::Vector => {
-                scm_vector_length(reference.into()) as usize * size_of::<Value>()
-                    + size_of::<ScmVector>()
-            }
-            TypeId::String => {
-                let len = scm_string_str(reference.into()).len() + 1;
-                let size = size_of::<ScmString>();
-                round_up(len + size, 8, 0)
-            }
+                TypeId::Vector => {
+                    scm_vector_length(reference.into()) as usize * size_of::<Value>()
+                        + size_of::<ScmVector>()
+                }
+                TypeId::String => {
+                    let len = scm_string_str(reference.into()).len() + 1;
+                    let size = size_of::<ScmString>();
+                    len + size
+                }
 
-            TypeId::Symbol => {
-                let len = scm_symbol_str(reference.into()).len() + 1;
-                let size = size_of::<ScmSymbol>();
-                round_up(len + size, 8, 0)
-            }
+                TypeId::Symbol => {
+                    let len = scm_symbol_str(reference.into()).len() + 1;
+                    let size = size_of::<ScmSymbol>();
+                    len + size
+                }
 
-            TypeId::Bytevector => {
-                let len = scm_bytevector_length(reference.into()) as usize;
-                let size = size_of::<ScmBytevector>();
-                round_up(len + size, 8, 0)
-            }
+                TypeId::Bytevector => {
+                    let len = scm_bytevector_length(reference.into()) as usize;
+                    let size = size_of::<ScmBytevector>();
+                    len + size
+                }
 
-            TypeId::Program => {
-                let len = scm_program_num_free_vars(reference.into());
-                len as usize * size_of::<Value>() + size_of::<ScmProgram>()
-            }
+                TypeId::Program => {
+                    let len = scm_program_num_free_vars(reference.into());
+                    len as usize * size_of::<Value>() + size_of::<ScmProgram>()
+                }
 
-            _ => unreachable!(),
-        }
+                _ => unreachable!(),
+            },
+            8,
+            0,
+        )
     }
 
     fn get_size_when_copied(object: ObjectReference) -> usize {
@@ -248,7 +252,7 @@ impl Collection<CapyVM> for ScmCollection {
             {
                 mutator_visitor((*mutator).mutator.assume_init_mut());
             }*/
-
+            scm_virtual_machine().gc_counter += 1;
             scm_virtual_machine().safepoint_lock_data = Some(transmute(mutators));
         }
     }
@@ -313,9 +317,13 @@ impl Collection<CapyVM> for ScmCollection {
 
     fn prepare_mutator<T: mmtk::MutatorContext<CapyVM>>(
         _tls_worker: mmtk::util::VMWorkerThread,
-        _tls_mutator: mmtk::util::VMMutatorThread,
+        tls_mutator: mmtk::util::VMMutatorThread,
         _m: &T,
     ) {
+        unsafe {
+            let thread: &mut Thread = transmute(tls_mutator);
+            thread.flush_cleaner_queue_in_gc();
+        }
     }
 }
 
@@ -394,6 +402,11 @@ impl Scanning<CapyVM> for ScmScanning {
                     let free_var = scm_program_free_var_mut(program, i);
                     free_var.visit_edge(edge_visitor);
                 }
+
+                program
+                    .cast_as::<ScmProgram>()
+                    .constants
+                    .visit_edge(edge_visitor);
             }
 
             TypeId::Subroutine => {
@@ -410,6 +423,17 @@ impl Scanning<CapyVM> for ScmScanning {
                 }
             }
 
+            /*TypeId::HashTable => {
+                let htable = Value::encode_object_value(reference);
+                let mut htable = htable.get_object();
+                let htable = htable.cast_as::<ScmHashTable>();
+
+                // set "rehash" flag for hashtable, it will be rehashed at mutator time
+                // on next hashtable access.
+                htable.rehash = true;
+                htable.datum.visit_edge(edge_visitor);
+                htable.handlers.visit_edge(edge_visitor);
+            }*/
             _ => (),
         }
     }
@@ -453,6 +477,15 @@ impl Scanning<CapyVM> for ScmScanning {
         }
         unsafe {
             vm.images.visit_roots(&mut factory);
+
+            let env = vm.toplevel_environment.get_mut();
+
+            for bucket in env.buckets.iter_mut() {
+                if bucket.is_object() {
+                    let edge: SimpleEdge = SimpleEdge::from_address(transmute(bucket));
+                    edges.push(edge);
+                }
+            }
         }
 
         factory.create_process_edge_roots_work(edges);
@@ -488,6 +521,24 @@ impl Scanning<CapyVM> for ScmScanning {
     }
 
     fn prepare_for_roots_re_scanning() {}
+
+    fn process_weak_refs(
+        _worker: &mut mmtk::scheduler::GCWorker<CapyVM>,
+        _tracer_context: impl ObjectTracerContext<CapyVM>,
+    ) -> bool {
+        let vm = scm_virtual_machine();
+        let mut queue = vm.finalization_registry.lock(false);
+        let mut new_queue = Vec::with_capacity(queue.len());
+
+        while let Some((object, cleaner)) = queue.pop() {
+            if object.is_reachable() {
+                new_queue.push((object.get_forwarded_object().unwrap_or(object), cleaner));
+            } else {
+                cleaner();
+            }
+        }
+        false
+    }
 }
 
 impl VMBinding for CapyVM {
@@ -501,6 +552,7 @@ impl VMBinding for CapyVM {
     const USE_ALLOCATION_OFFSET: bool = false;
 }
 
+// FIXME: Waiting for this PR to get merged: https://github.com/mmtk/mmtk-core/pull/889
 pub fn fast_path_allocator() -> fn(&mut Mutator<CapyVM>, usize) -> Address {
     let vm = scm_virtual_machine();
     let selector =

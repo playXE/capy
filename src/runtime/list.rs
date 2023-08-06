@@ -38,7 +38,7 @@ pub fn scm_map(mut proc: impl FnMut(&Value) -> Value, list: Value) -> Value {
         let value = scm_car(*list);
         gc_frame!(thread.stackchain() => value = value);
         *value = proc(&value);
-        let pair = thread.make_cons(*value, Value::encode_null_value());
+        let pair = thread.make_cons::<false>(*value, Value::encode_null_value());
         if tail.is_null() {
             *result = pair.into();
         } else {
@@ -83,7 +83,7 @@ macro_rules! scm_cons {
             let car = $car;
             let cdr = $cdr;
             $crate::gc_frame!(thread.stackchain() => car = car, cdr = cdr);
-            thread.make_cons(*car, *cdr)
+            thread.make_cons::<false>(*car, *cdr)
         }
     };
 }
@@ -107,7 +107,7 @@ pub fn scm_append(ls2: &Rooted, ls1: &Rooted) -> Value {
     *ls1 = scm_cdr(*ls1);
 
     while ls1.is_pair() {
-        let pair = thread.make_cons(scm_car(*ls1), Value::encode_null_value());
+        let pair = thread.make_cons::<false>(scm_car(*ls1), Value::encode_null_value());
         scm_set_cdr(*tail, thread, pair.into());
         *tail = pair.into();
         *ls1 = scm_cdr(*ls1);

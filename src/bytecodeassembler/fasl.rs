@@ -69,7 +69,13 @@ impl<'a, W: std::io::Write> FASLPrinter<'a, W> {
                         self.scan(elt.clone());
                     }
 
-                    continue;
+                    return;
+                }
+
+                Sexpr::Global(global) => {
+                    let n = self.lites.len();
+                    self.lites.insert(Sexpr::Symbol(global), n);
+                    return;
                 }
 
                 _ => break,
@@ -171,6 +177,7 @@ impl<'a, W: std::io::Write> FASLPrinter<'a, W> {
             Sexpr::Pair(_) => {
                 self.put_list(obj)?;
             }
+            
 
             _ => (),
         }
@@ -189,15 +196,17 @@ impl<'a, W: std::io::Write> FASLPrinter<'a, W> {
 
         for i in 0..lites.len() {
             let symbol = lites[i].0.clone();
-
+            let id = lites[i].1.clone();
             match symbol {
                 Sexpr::Symbol(sym) => {
                     self.emit_u8(TypeId::Symbol as _)?;
+                    self.emit_u32(id as _)?; // id
                     self.emit_u32(scm_symbol_str(sym).len() as _)?;
                     self.write_bytes(scm_symbol_str(sym).as_bytes())?;
                 }
                 Sexpr::String(str) => {
                     self.emit_u8(TypeId::String as _)?;
+                    self.emit_u32(id as _)?; // id
                     self.emit_u32(str.len() as _)?;
                     self.write_bytes(str.as_bytes())?;
                 }

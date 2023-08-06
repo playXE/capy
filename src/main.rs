@@ -1,7 +1,8 @@
 #![allow(unused_imports)]
 extern crate fscheme;
+
 use fscheme::{
-    bytecode::opcodes::disassemble,
+    bytecode::{opcodes::disassemble, image::load_image_from_memory},
     bytecodeassembler::fasl::FASLPrinter,
     compiler::{
         compile,
@@ -14,8 +15,8 @@ use fscheme::{
     },
     gc_frame,
     runtime::{
-        object::{scm_car, scm_cdr, scm_set_car, scm_set_cdr},
-        value::Value,
+        object::{scm_car, scm_cdr, scm_set_car, scm_set_cdr, *, TypeId},
+        value::Value
     },
     utils::pretty_hex::{self, pretty_hex, PrettyHex},
     vm::{scm_init, scm_virtual_machine, thread::Thread},
@@ -121,6 +122,8 @@ fn main() {
     );
     //builder.set_option("stress_factor", &(128 * 1024).to_string());
     let _ = scm_init(builder.build());
+
+
     let mut interner = NoIntern;
     let src = std::fs::read_to_string("test.scm").unwrap();
     let mut parser = r7rs_parser::parser::Parser::new(&mut interner, &src, false);
@@ -174,8 +177,10 @@ fn main() {
         lifted_var: fscheme::compiler::tree_il::LiftedVar::Candidate,
     });
 
-    let asm = compile_bytecode(P(IForm::Lambda(lam)));
-    println!("{}", pretty_hex(&asm.code));
+    let mut bcode = vec![];
+    compile_bytecode(P(IForm::Lambda(lam)), &mut bcode);
+    println!("{}", pretty_hex(&bcode));
 
-    disassemble(&asm.code);
+    let image = load_image_from_memory(&bcode, None).unwrap_or_else(|_| unreachable!());
+    image.disassemble();
 }

@@ -14,14 +14,19 @@ use crate::{
 use super::thread::Thread;
 
 impl Thread {
-    pub fn make_cons(&mut self, car: Value, cdr: Value) -> Value {
+    pub fn make_cons<const IMMORTAL: bool>(&mut self, car: Value, cdr: Value) -> Value {
         unsafe {
+            let semantics = if IMMORTAL {
+                AllocationSemantics::Immortal
+            } else {
+                AllocationSemantics::Default
+            };
             let mutator = self.mutator.assume_init_mut();
             let mem = mutator.alloc(
                 size_of::<ScmPair>(),
                 size_of::<usize>(),
                 0,
-                AllocationSemantics::Default,
+                semantics,
             );
 
             mem.store::<ScmPair>(ScmPair {
@@ -39,19 +44,24 @@ impl Thread {
             mutator.post_alloc(
                 reference,
                 size_of::<ScmPair>(),
-                AllocationSemantics::Default,
+                semantics,
             );
 
             ScmCellRef(transmute(reference)).into()
         }
     }
 
-    pub fn make_vector(&mut self, len: usize, fill: Value) -> Value {
-        let size = round_up(size_of::<ScmCellHeader>() + size_of::<Value>() * len, 8, 0);
+    pub fn make_vector<const IMMORTAL: bool>(&mut self, len: usize, fill: Value) -> Value {
+        let size = round_up(size_of::<ScmVector>() + len * size_of::<Value>(), 8, 0);
 
         unsafe {
+            let semantics = if IMMORTAL {
+                AllocationSemantics::Immortal
+            } else {
+                AllocationSemantics::Default
+            };
             let mutator = self.mutator();
-            let mem = mutator.alloc(size, size_of::<usize>(), 0, AllocationSemantics::Default);
+            let mem = mutator.alloc(size, size_of::<usize>(), 0, semantics);
 
             mem.store(ScmVector {
                 header: ScmCellHeader {
@@ -73,7 +83,7 @@ impl Thread {
             }
 
             let reference = transmute::<_, ObjectReference>(mem);
-            mutator.post_alloc(reference, size, AllocationSemantics::Default);
+            mutator.post_alloc(reference, size, semantics);
 
             Value::encode_object_value(ScmCellRef(transmute(reference)))
         }
@@ -204,6 +214,7 @@ impl Thread {
                         flags: 0,
                     },
                 },
+                constants: Value::encode_undefined_value(),
                 vcode: vcode as *mut u8,
                 nfree: num_free_vars as _,
                 free: [],

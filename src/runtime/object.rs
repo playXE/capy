@@ -1,14 +1,11 @@
 use std::mem::{size_of, transmute};
 
-use mmtk::{
-    memory_manager::object_reference_write,
-    util::{Address, ObjectReference},
-    vm::edge_shape::SimpleEdge,
-};
+use mmtk::{memory_manager::object_reference_write, util::Address, vm::edge_shape::SimpleEdge};
 
-use crate::{runtime::value::Value, vm::thread::Thread};
+use crate::{runtime::value::Value, utils::bitfield::BitField, vm::thread::Thread};
 
-use crate::gc::CapyVM;
+pub type HashStateSpec = BitField<2, 59, false>;
+pub type ImmutSpec = BitField<1, 55, false>;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 #[repr(u16)]
@@ -36,7 +33,14 @@ pub enum TypeId {
     Rational,
     Complex,
     Bignum,
+    HashTable,
 }
+
+
+pub const HASH_STATE_UNHASHED: u8 = 0;
+pub const HASH_STATE_HASHED: u8 = 1;
+pub const HASH_STATE_HASHED_AND_MOVED: u8 = 2;
+pub const HASHCODE_OFFSET: isize = -(size_of::<usize>() as isize);
 
 #[cfg(target_pointer_width = "64")]
 pub type Pad = [u8; 4];
@@ -61,6 +65,20 @@ impl ScmCellHeader {
     pub fn type_id(self) -> TypeId {
         unsafe { self.as_header.type_id }
     }
+
+    pub fn hash_state(self) -> u8 {
+        unsafe {
+            HashStateSpec::decode(self.as_word) as u8 
+        }
+    }
+
+    pub fn set_hash_state(&mut self, state: u8) {
+        unsafe {
+            self.as_word = HashStateSpec::update(state as _, self.as_word);
+        }
+    }
+
+
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd)]
@@ -235,7 +253,7 @@ pub fn scm_set_cdr(cell: Value, thread: &mut Thread, value: Value) {
 pub fn scm_vector_ref(vector: Value, index: u32) -> Value {
     debug_assert!(vector.is_vector());
     unsafe {
-        debug_assert!(index < vector.get_object().cast_as::<ScmVector>().length as u32);
+        debug_assert!(index < vector.get_object().cast_as::<ScmVector>().length as u32, "index out of bounds: {} >= {}", index, vector.get_object().cast_as::<ScmVector>().length as u32);
         vector
             .get_object()
             .cast_as::<ScmVector>()
@@ -265,7 +283,7 @@ pub fn scm_vector_set(vector: Value, thread: &mut Thread, index: u32, value: Val
     let mut v = vector.get_object();
     let vec = v.cast_as::<ScmVector>();
 
-    if value.is_object() {
+    /*if value.is_object() {
         unsafe {
             object_reference_write(
                 thread.mutator(),
@@ -274,7 +292,7 @@ pub fn scm_vector_set(vector: Value, thread: &mut Thread, index: u32, value: Val
                 transmute(value),
             );
         }
-    } else {
+    } else */ {
         unsafe {
             vec.values.as_mut_ptr().add(index as usize).write(value);
         }
@@ -576,6 +594,7 @@ pub struct ScmGloc {
 pub struct ScmProgram {
     pub header: ScmCellHeader,
     pub vcode: *const u8,
+    pub constants: Value,
     pub nfree: usize,
     pub free: [Value; 0],
 }

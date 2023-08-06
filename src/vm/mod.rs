@@ -1,11 +1,13 @@
 use std::{collections::HashMap, mem::transmute};
 
-use crate::{bytecode::image::ImageRegistry, gc::CapyVM, runtime::value::Value};
+use mmtk::util::ObjectReference;
+
+use crate::{bytecode::image::ImageRegistry, gc::CapyVM, runtime::{value::Value, environment::Environment}};
 
 use self::{
     sync::{
         monitor::Monitor,
-        mutex::{MutexGuard, RawMutex},
+        mutex::{MutexGuard, RawMutex, Mutex},
     },
     thread::Thread,
 };
@@ -24,9 +26,16 @@ pub struct VirtualMachine {
     pub(crate) symtable: HashMap<&'static str, Value>,
     pub(crate) symtab_lock: RawMutex,
     pub(crate) images: ImageRegistry,
+    pub(crate) finalization_registry: Mutex<Vec<(ObjectReference, Box<dyn FnOnce()>)>>,
+    pub(crate) gc_counter: u64,
+    pub(crate) toplevel_environment: Mutex<Environment>,
 }
 
-impl VirtualMachine {}
+impl VirtualMachine {
+    pub fn get_cell(&self, key: Value) -> Value {
+        self.toplevel_environment.lock(true).get_cell(Thread::current(), key)
+    }
+}
 
 pub fn scm_init(mmtk: mmtk::MMTK<CapyVM>) -> &'static mut VirtualMachine {
     safepoint::init();
@@ -37,6 +46,9 @@ pub fn scm_init(mmtk: mmtk::MMTK<CapyVM>) -> &'static mut VirtualMachine {
         symtab_lock: RawMutex::INIT,
         symtable: HashMap::with_capacity(128),
         images: ImageRegistry::new(),
+        finalization_registry: Mutex::new(Vec::with_capacity(128)),
+        gc_counter: 0,
+        toplevel_environment: Mutex::new(Environment::new()),
     }));
 
     unsafe {
@@ -53,7 +65,9 @@ pub fn scm_init(mmtk: mmtk::MMTK<CapyVM>) -> &'static mut VirtualMachine {
     }
 }
 
-impl VirtualMachine {}
+impl VirtualMachine {
+
+}
 
 static mut VIRTUAL_MACHINE: *mut VirtualMachine = std::ptr::null_mut();
 

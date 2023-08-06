@@ -7,7 +7,7 @@ use mmtk::{
 
 use crate::runtime::object::ScmCellRef;
 
-use super::pure_nan::{pure_nan, purify_nan};
+use super::{pure_nan::{pure_nan, purify_nan}, object::TypeId};
 
 #[derive(Clone, Copy)]
 #[repr(transparent)]
@@ -323,6 +323,37 @@ impl Value {
         if self.is_object() {
             // Pointers in Value are transparent, we can directly pass them as edge
             visitor.visit_edge(SimpleEdge::from_address(Address::from_mut_ptr(self)));
+        }
+    }
+
+    pub fn cast_as<'a, T>(self) -> &'a mut T {
+        unsafe {
+            assert!(self.is_object());
+            &mut *(self.0.ptr as *mut T)
+        }
+    }
+
+    pub fn type_of(self) -> TypeId {
+        if self.is_object() {
+            self.get_object().header().type_id()
+        } else {
+            if self.is_true() {
+                TypeId::True
+            } else if self.is_false() {
+                TypeId::False
+            } else if self.is_int32() {
+                TypeId::Int32
+            } else if self.is_double() {
+                TypeId::Double
+            } else if self.is_char() {
+                TypeId::Char
+            } else if self.is_undefined() {
+                TypeId::Undefined
+            } else if self.is_null() {
+                TypeId::Null
+            } else {
+                unreachable!()
+            }
         }
     }
 }
