@@ -1,5 +1,6 @@
 use std::{
     mem::size_of,
+    panic::AssertUnwindSafe,
     ptr::{null, null_mut},
 };
 
@@ -11,12 +12,18 @@ use mmtk::{
 use crate::{
     gc::virtual_memory::{PlatformVirtualMemory, VirtualMemory, VirtualMemoryImpl},
     runtime::value::Value,
+    vm::{intrinsics::get_callee_vcode, thread::Thread, BOOT_CONTINUATION_CODE},
 };
 
-use self::stackframe::{frame_dynamic_link, frame_previous_sp, StackElement};
+use self::stackframe::{
+    frame_dynamic_link, frame_local, frame_previous_sp, set_frame_dynamic_link,
+    set_frame_machine_return_address, set_frame_virtual_return_address, StackElement,
+};
 
-pub mod stackframe;
 pub mod engine;
+pub mod stackframe;
+
+pub const NUM_ENGINES: usize = 1;
 
 #[repr(C)]
 pub struct InterpreterState {
@@ -34,6 +41,7 @@ pub struct InterpreterState {
     pub stack_top: *mut StackElement,
     pub mra_after_abort: *const u8,
     pub stack_memory: VirtualMemory,
+    pub engines: [unsafe extern "C-unwind" fn(&mut Thread) -> Value; 1],
 }
 
 #[repr(C)]
@@ -59,6 +67,7 @@ impl InterpreterState {
             stack_bottom: null_mut(),
             stack_top: null_mut(),
             mra_after_abort: null(),
+            engines: [engine::rust_engine],
             stack_memory: VirtualMemory::null(),
         };
         unsafe {
@@ -77,7 +86,7 @@ impl InterpreterState {
             while sp < fp {
                 let value = sp.cast::<Value>();
                 if (*value).is_object() {
-                    println!("????");
+                  
                     let edge = SimpleEdge::from_address(Address::from_ptr(value));
                     edges.push(edge);
                 }
@@ -147,6 +156,23 @@ impl InterpreterState {
         self.sp = self.stack_top;
         self.compare_result = None;
     }
+
+    pub unsafe fn push_sp(&mut self, new_sp: *mut StackElement) {
+        self.increase_sp(new_sp, false)
+    }
+
+    pub unsafe fn restore_sp(&mut self, new_sp: *mut StackElement) {
+        self.increase_sp(new_sp, true)
+    }
+
+    unsafe fn increase_sp(&mut self, new_sp: *mut StackElement, restore: bool) {
+        if !restore && new_sp < self.stack_limit {
+            // FIXME: Expand stack
+            std::process::abort();
+        } else {
+            self.sp = new_sp;
+        }
+    }
 }
 
 fn allocate_stack(mut size: usize) -> VirtualMemory {
@@ -159,4 +185,60 @@ fn allocate_stack(mut size: usize) -> VirtualMemory {
         "stack",
     )
     .expect("Failed to allocate stack")
+}
+
+pub fn scm_call_n(thread: &mut Thread, proc: Value, args: &[Value]) -> Result<Value, Value> {
+    let return_nlocals = 0;
+    let call_nlocals = args.len() + 1;
+    let frame_size = 3;
+
+    /* Check that we have enough space for the two stack frames: the
+    innermost one that makes the call, and its continuation which
+    receives the resulting value(s) and returns from the engine
+    call.  */
+    let stack_reserve_words = call_nlocals + frame_size + return_nlocals + frame_size;
+    unsafe {
+        let new_sp = thread.interpreter().sp.sub(stack_reserve_words);
+        thread.interpreter().push_sp(new_sp);
+        let call_fp = thread.interpreter().sp.add(call_nlocals);
+        let return_fp = call_fp.add(return_nlocals + frame_size);
+
+        set_frame_virtual_return_address(return_fp, thread.interpreter().ip);
+        set_frame_machine_return_address(return_fp, null());
+        set_frame_dynamic_link(return_fp, thread.interpreter().fp);
+
+        thread.interpreter().ip = BOOT_CONTINUATION_CODE.as_ptr();
+
+        set_frame_virtual_return_address(call_fp, thread.interpreter().ip);
+        set_frame_machine_return_address(call_fp, null());
+        set_frame_dynamic_link(call_fp, return_fp);
+        *frame_local(call_fp, 0) = proc;
+
+        for i in 0..args.len() {
+            *frame_local(call_fp, i as isize + 1) = args[i];
+        }
+       
+        thread.interpreter().fp = call_fp;
+
+        {
+            let call = AssertUnwindSafe(|| {
+                thread.interpreter().ip = get_callee_vcode(thread);
+
+                (thread.interpreter().engines[0])(thread)
+            });
+
+            let result = std::panic::catch_unwind(|| call());
+
+            match result {
+                Ok(val) => return Ok(val),
+                Err(err) => {
+                    if let Some(val) = err.downcast_ref::<Value>() {
+                        return Err(*val);
+                    } else {
+                        std::panic::resume_unwind(err);
+                    }
+                }
+            }
+        }
+    }
 }

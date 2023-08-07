@@ -76,7 +76,7 @@ impl Image {
 
             
         }
-        println!("Constants section:");
+        //println!("Constants section:");
         {   
             for _ in 0..scm_vector_length(self.constants) {
                 
@@ -91,6 +91,7 @@ pub fn load_image_from_memory(
     _resolver: Option<&dyn Fn(&str) -> Result<Value, Value>>,
 ) -> Result<Arc<Image>, Value> {
     unsafe {
+        mmtk::memory_manager::disable_collection(&scm_virtual_machine().mmtk);
         let magic = u32::from_le_bytes([memory[0], memory[1], memory[2], memory[3]]);
         if magic != CAPY_BYTECODE_MAGIC {
             return Err(scm_intern("invalid-image"));
@@ -122,6 +123,8 @@ pub fn load_image_from_memory(
                 edge,
                 transmute(constants),
             );
+          
+            assert!(program.cast_as::<ScmProgram>().constants == constants && program.cast_as::<ScmProgram>().constants.is_vector());
         }
 
         let image = Arc::new(Image {
@@ -137,6 +140,10 @@ pub fn load_image_from_memory(
         vm.images.lock.lock(true);
         vm.images.images.push(image.clone());
         vm.images.lock.unlock();
+        mmtk::memory_manager::enable_collection(&scm_virtual_machine().mmtk);
+        if scm_virtual_machine().disassemble {
+            image.disassemble();
+        }
 
         Ok(image)
     }

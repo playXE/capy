@@ -1,5 +1,5 @@
 [package]
-name = "fscheme"
+name = "capy"
 version = "0.1.0"
 edition = "2021"
 
@@ -16,6 +16,7 @@ once_cell = "1.8"
 num-traits = "0.2"
 env_logger = "*"
 elf = "0.7"
+pico-args = "0.5"
 r7rs-parser = { git = "https://github.com/playxe/r7rs-parser" }
 pretty = { version = "0.12", features = ["termcolor"]}
 termcolor = "1.1"
@@ -38,6 +39,14 @@ winapi = { version = "0.3", features = [
 [profile.release]
 lto = "fat"
 codegen-units = 1
-
+opt-level = "s"
 [profile.release.package.mmtk]
 opt-level = 2
+
+[[bin]]
+name = "capy-boot"
+path = "src/bin/boot.rs"
+
+[[bin]]
+name = "capy-vm"
+path = "src/bin/vm.rs"

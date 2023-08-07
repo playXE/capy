@@ -5,7 +5,7 @@ use mmtk::{util::ObjectReference, AllocationSemantics, MutatorContext};
 use crate::{
     runtime::object::{Header, ScmCellHeader, ScmCellRef, TypeId},
     runtime::{
-        object::{ScmBytevector, ScmGloc, ScmPair, ScmProgram, ScmString, ScmSymbol, ScmVector},
+        object::{ScmBytevector, ScmGloc, ScmPair, ScmProgram, ScmString, ScmSymbol, ScmVector, ScmBox},
         value::Value,
     },
     utils::round_up,
@@ -299,6 +299,30 @@ impl Thread {
                 },
                 name,
                 value,
+            });
+
+            let reference = transmute::<_, ObjectReference>(mem);
+            mutator.post_alloc(reference, size, AllocationSemantics::Default);
+
+            Value::encode_object_value(ScmCellRef(transmute(reference)))
+        }
+    }
+
+    pub fn make_box(&mut self) -> Value {
+        let size = round_up(size_of::<ScmBox>(), 8, 0);
+
+        unsafe {
+            let mutator = self.mutator.assume_init_mut();
+            let mem = mutator.alloc(size, size_of::<usize>(), 0, AllocationSemantics::Default);
+            mem.store(ScmBox {
+                header: ScmCellHeader {
+                    as_header: Header {
+                        type_id: TypeId::Box,
+                        pad: [0; 4],
+                        flags: 0,
+                    },
+                },
+                value: Value::encode_null_value()
             });
 
             let reference = transmute::<_, ObjectReference>(mem);

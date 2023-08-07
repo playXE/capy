@@ -5,13 +5,13 @@ use mmtk::{
     vm::{edge_shape::SimpleEdge, EdgeVisitor},
 };
 
-use crate::runtime::object::ScmCellRef;
+use crate::runtime::object::*;
 
 use super::{pure_nan::{pure_nan, purify_nan}, object::TypeId};
 
 #[derive(Clone, Copy)]
 #[repr(transparent)]
-pub struct Value(EncodedValueDescriptor);
+pub struct Value(pub EncodedValueDescriptor);
 
 impl Hash for Value {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
@@ -21,7 +21,7 @@ impl Hash for Value {
 
 #[derive(Clone, Copy)]
 #[repr(C)]
-pub(crate) union EncodedValueDescriptor {
+pub union EncodedValueDescriptor {
     pub as_int64: i64,
     pub ptr: usize,
 }
@@ -328,7 +328,7 @@ impl Value {
 
     pub fn cast_as<'a, T>(self) -> &'a mut T {
         unsafe {
-            assert!(self.is_object());
+            debug_assert!(self.is_object());
             &mut *(self.0.ptr as *mut T)
         }
     }
@@ -354,6 +354,77 @@ impl Value {
             } else {
                 unreachable!()
             }
+        }
+    }
+}
+
+impl std::fmt::Display for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.is_null() {
+            write!(f, "()")
+        } else if self.is_undefined() {
+            write!(f, "#<undefined>")
+        } else if self.is_true() {
+            write!(f, "#t")
+        } else if self.is_false() {
+            write!(f, "#f")
+        } else if self.is_int32() {
+            write!(f, "{}", self.get_int32())
+        } else if self.is_double() {
+            write!(f, "{}", self.get_double())
+        } else if self.is_pair() {
+            let mut lst = *self;
+
+            write!(f, "(")?;
+
+            loop {
+                write!(f, "{}", scm_car(lst))?;
+
+                lst = scm_cdr(lst);
+
+                if lst.is_null() {
+                    break;
+                }
+
+                if lst.is_pair() {
+                    write!(f, " ")?;
+                } else {
+                    write!(f, " . {}", lst)?;
+                    break;
+                }
+            }
+
+            write!(f, ")")
+        } else if self.is_vector() {
+            let mut vec = *self;
+
+            write!(f, "#(")?;
+
+            loop {
+                write!(f, "{}", scm_vector_ref(vec, 0))?;
+
+                vec = scm_vector_ref(vec, 1);
+
+                if vec.is_null() {
+                    break;
+                }
+
+                write!(f, " ")?;
+            }
+
+            write!(f, ")")
+        } else if self.is_string() {
+            write!(f, "\"{}\"", scm_string_str(*self))
+        } else if self.is_symbol() {
+            write!(f, "{}", scm_symbol_str(*self))
+        } else if self.is_char() {
+            write!(f, "#\\{}", self.get_char())
+        } else if self.is_box() {
+            write!(f, "#<box {}>", self.cast_as::<ScmBox>().value)
+        } else if self.is_program() {
+            write!(f, "#<program at {:p}>", self.cast_as::<ScmProgram>().vcode)
+        } else {
+            write!(f, "#<unknown {:x}>", self.get_raw())
         }
     }
 }

@@ -103,6 +103,8 @@
     )
 )
 
+(define-syntax make-function 
+    (syntax-rules ()
+        ((_) (lambda (x y) (+ x y)))))
 
-(let ([x (+ 42 y)])
-    (lambda () x))
+((make-function) 1 2)

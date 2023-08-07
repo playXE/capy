@@ -253,6 +253,11 @@ pub fn resolve_primitives(mut exp: P<IForm>) -> P<IForm> {
             exp
         }
 
+        IForm::Lambda(lam) => {
+            lam.body = resolve_primitives(lam.body.clone());
+            exp
+        }
+
         _ => exp,
     }
 }

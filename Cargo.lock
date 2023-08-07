@@ -62,6 +62,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "capy"
+version = "0.1.0"
+dependencies = [
+ "cfg-if",
+ "elf",
+ "env_logger",
+ "errno",
+ "libc",
+ "log",
+ "mmtk",
+ "murmur3",
+ "num-traits",
+ "once_cell",
+ "parking_lot",
+ "parking_lot_core",
+ "paste",
+ "pico-args",
+ "pretty",
+ "r7rs-parser",
+ "termcolor",
+ "winapi",
+]
+
+[[package]]
 name = "cargo-lock"
 version = "8.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -252,29 +276,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a62bc1cf6f830c2ec14a513a9fb124d0a213a629668a4186f329db21fe045652"
 dependencies = [
  "percent-encoding",
-]
-
-[[package]]
-name = "fscheme"
-version = "0.1.0"
-dependencies = [
- "cfg-if",
- "elf",
- "env_logger",
- "errno",
- "libc",
- "log",
- "mmtk",
- "murmur3",
- "num-traits",
- "once_cell",
- "parking_lot",
- "parking_lot_core",
- "paste",
- "pretty",
- "r7rs-parser",
- "termcolor",
- "winapi",
 ]
 
 [[package]]
@@ -626,6 +627,12 @@ dependencies = [
  "thiserror",
  "ucd-trie",
 ]
+
+[[package]]
+name = "pico-args"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5be167a7af36ee22fe3115051bc51f6e6c7054c9348e28deb4f49bd6f705a315"
 
 [[package]]
 name = "pkg-config"

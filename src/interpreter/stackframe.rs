@@ -105,7 +105,7 @@ pub unsafe fn set_frame_dynamic_link(fp: *mut StackElement, dl: *mut StackElemen
 
 #[inline]
 pub unsafe fn frame_slot(fp: *mut StackElement, index: isize) -> *mut StackElement {
-    fp.offset(index).sub(1)
+    ((fp as isize) - (index * 8) - 8) as _
 }
 
 #[inline]

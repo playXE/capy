@@ -56,7 +56,7 @@ impl<'a, const IMMORTAL: bool, R: std::io::Read + AsRef<[u8]>> FASLReader<'a, IM
         let count = self.read_u32()?;
         self.lites = HashMap::with_capacity(count as _);
         let mut buf = vec![0u8; 256];
-        println!("count: {}", count);
+       
         for _ in 0..count {
             let tag = self.read_u8()?;
             let uid = self.read_u32()?;
@@ -72,12 +72,12 @@ impl<'a, const IMMORTAL: bool, R: std::io::Read + AsRef<[u8]>> FASLReader<'a, IM
             })?;
             match tag {
                 x if x == TypeId::Symbol as u8 => {
-                    println!("symbol: {}", str);
+                  
                     self.lites.insert(uid, scm_intern(str));
                 }
 
                 x if x == TypeId::String as u8 => {
-                    println!("string: {}", str);
+                  
                     // allocate string in immortal space, it cannot be garbage collected.
                     let str = Thread::current().make_string::<true>(str);
                     self.lites.insert(uid, str);

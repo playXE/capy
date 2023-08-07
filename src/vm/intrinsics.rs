@@ -11,7 +11,7 @@ pub unsafe extern "C" fn get_callee_vcode(thread: &mut Thread) -> *const u8 {
 
     thread.interpreter().ip = frame_virtual_return_address(thread.interpreter().fp);
 
-    todo!("throw error");
+    todo!("throw error: {}", proc);
 }
 
 pub unsafe extern "C" fn cons_rest(thread: &mut Thread, base: u32) -> Value {

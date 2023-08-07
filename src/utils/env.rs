@@ -1,51 +1,45 @@
 #![allow(dead_code)]
-fn read_float_and_factor_from_env(var: &str) -> Option<(f64, usize)> {
-    let value = std::env::var(var);
-
-    match value {
-        Ok(mut value) => {
-            if value.len() > 0 {
-                if value.len() > 1
-                    && (value.as_bytes()[value.len() - 1] == 'b' as u8
-                        || value.as_bytes()[value.len() - 1] == 'B' as u8)
-                {
-                    value = value.as_str()[0..value.len() - 1].to_string();
-                }
-                let mut realvalue = value.as_str()[0..value.len() - 1].to_string();
-
-                let at = value.len() - 1;
-                let factor;
-                if value.as_bytes()[at] == 'g' as u8 || value.as_bytes()[at] == 'G' as u8 {
-                    factor = 1024 * 1024 * 1024;
-                } else if value.as_bytes()[at] == 'm' as u8 || value.as_bytes()[at] == 'M' as u8 {
-                    factor = 1024 * 1024;
-                } else if value.as_bytes()[at] == 'k' as u8 || value.as_bytes()[at] == 'K' as u8 {
-                    factor = 1024;
-                } else {
-                    realvalue = value;
-                    factor = 1;
-                }
-
-                match realvalue.parse::<f64>() {
-                    Ok(x) => Some((x, factor)),
-                    _ => None,
-                }
-            } else {
-                None
-            }
+pub fn read_float_and_factor_from_str(value: &str) -> Option<(f64, usize)> {
+    let mut value = value.to_string();
+    if value.len() > 0 {
+        if value.len() > 1
+            && (value.as_bytes()[value.len() - 1] == 'b' as u8
+                || value.as_bytes()[value.len() - 1] == 'B' as u8)
+        {
+            value = value.as_str()[0..value.len() - 1].to_string();
         }
-        _ => None,
+        let mut realvalue = value.as_str()[0..value.len() - 1].to_string();
+
+        let at = value.len() - 1;
+        let factor;
+        if value.as_bytes()[at] == 'g' as u8 || value.as_bytes()[at] == 'G' as u8 {
+            factor = 1024 * 1024 * 1024;
+        } else if value.as_bytes()[at] == 'm' as u8 || value.as_bytes()[at] == 'M' as u8 {
+            factor = 1024 * 1024;
+        } else if value.as_bytes()[at] == 'k' as u8 || value.as_bytes()[at] == 'K' as u8 {
+            factor = 1024;
+        } else {
+            realvalue = value;
+            factor = 1;
+        }
+
+        match realvalue.parse::<f64>() {
+            Ok(x) => Some((x, factor)),
+            _ => None,
+        }
+    } else {
+        None
     }
 }
 
-pub fn read_uint_from_env(var: &str) -> Option<usize> {
-    let (value, factor) = read_float_and_factor_from_env(var)?;
+pub fn read_uint_from_str(value: &str) -> Option<usize> {
+    let (value, factor) = read_float_and_factor_from_str(value)?;
 
     Some(value as usize * factor)
 }
 
-pub fn read_float_from_env(var: &str) -> Option<f64> {
-    read_float_and_factor_from_env(var).map(|x| x.0)
+pub fn read_float_from_str(value: &str) -> Option<f64> {
+    read_float_and_factor_from_str(value).map(|x| x.0)
 }
 
 cfg_if::cfg_if! {

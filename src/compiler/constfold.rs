@@ -198,6 +198,50 @@ table! {
             _ => None
         }
     }
+
+    "not", (always) => (args) {
+        Some(Sexpr::Boolean(matches!(args[0], Sexpr::Boolean(false))))
+    }
+
+    "true?", (always) => (args) {
+        Some(Sexpr::Boolean(matches!(args[0], Sexpr::Boolean(true))))
+    }
+
+    "false?", (always) => (args) {
+        Some(Sexpr::Boolean(matches!(args[0], Sexpr::Boolean(false))))
+    }
+
+    "boolean?", (always) => (args) {
+        Some(Sexpr::Boolean(matches!(args[0], Sexpr::Boolean(_))))
+    }
+
+    "fixnum?", (always) => (args) {
+        Some(Sexpr::Boolean(matches!(args[0], Sexpr::Fixnum(_))))
+    }
+
+    "flonum?", (always) => (args) {
+        Some(Sexpr::Boolean(matches!(args[0], Sexpr::Flonum(_))))
+    }
+
+    "number?", (always) => (args) {
+        Some(Sexpr::Boolean(matches!(args[0], Sexpr::Fixnum(_) | Sexpr::Flonum(_))))
+    }
+
+    "string?", (always) => (args) {
+        Some(Sexpr::Boolean(matches!(args[0], Sexpr::String(_))))
+    }
+
+    "symbol?", (always) => (args) {
+        Some(Sexpr::Boolean(matches!(args[0], Sexpr::Symbol(_) | Sexpr::Identifier(_) | Sexpr::Gensym(_))))
+    }
+
+    "vector?", (always) => (args) {
+        Some(Sexpr::Boolean(matches!(args[0], Sexpr::Vector(_))))
+    }
+
+    "pair?", (always) => (args) {
+        Some(Sexpr::Boolean(matches!(args[0], Sexpr::Pair(_))))
+    }
 }
 
 pub fn usual_constant_folding_table() -> Vec<FoldingEntry> {

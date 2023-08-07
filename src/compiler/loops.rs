@@ -313,6 +313,7 @@ fn optimize_loop(_binding: P<IForm>, lvar: P<LVar>, lambda: P<Lambda>, init: Vec
                         .args
                         .iter()
                         .zip(formals.iter())
+                        .rev()
                         .map(|(form, lvar)| {
                             P(IForm::LSet(LSet {
                                 lvar: lvar.clone(),

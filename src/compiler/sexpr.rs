@@ -185,6 +185,7 @@ pub fn sexp_eq(x: &Sexpr, y: &Sexpr) -> bool {
         (Sexpr::Pair(x), Sexpr::Pair(y)) => x.as_ptr() == y.as_ptr(),
         (Sexpr::Vector(x), Sexpr::Vector(y)) => x.as_ptr() == y.as_ptr(),
         (Sexpr::Bytevector(x), Sexpr::Bytevector(y)) => x.as_ptr() == y.as_ptr(),
+        (Sexpr::Global(g), Sexpr::Global(g2)) => g == g2,
         _ => false,
     }
 }

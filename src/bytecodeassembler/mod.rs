@@ -11,6 +11,7 @@ pub struct Assembler {
     pub code: Vec<u8>,
     pub constants: Vec<Sexpr>,
     pub constant_map: HashMap<Sexpr, u32>,
+    pub patch_programs: Vec<(u32, u32)>,
 }
 
 impl InstructionStream for Assembler {
@@ -36,6 +37,7 @@ impl Assembler {
             code: Vec::new(),
             constants: Vec::with_capacity(16),
             constant_map: HashMap::with_capacity(16),
+            patch_programs: Vec::new(), 
         }
     }
 
@@ -84,9 +86,9 @@ impl Assembler {
         OpGlobalRef::new(dst, name as _).write(self);
     }
 
-    pub fn emit_global_set(&mut self, dst: u24, name: Value) {
+    pub fn emit_global_set(&mut self, src: u24, name: Value) {
         let name = self.intern_constant(Sexpr::Global(name));
-        OpGlobalSet::new(dst, name as _).write(self);
+        OpGlobalSet::new(src, name as _).write(self);
     }
 
     pub fn emit_make_non_immediate(&mut self, dst: u24, data: Sexpr) {
@@ -121,6 +123,7 @@ impl Assembler {
 
     pub fn emit_static_program(&mut self, dst: u24, closure_idx: u32) {
         let index = self.intern_constant(Sexpr::Program(closure_idx));
+        self.patch_programs.push((index, closure_idx));
         OpMakeNonImmediate::new(dst, index).write(self);
     }
 
@@ -198,6 +201,10 @@ impl Assembler {
 
     pub fn emit_call(&mut self, proc: u24, nlocals: u32) {
         OpCall::new(proc, u24::new(nlocals)).write(self);
+    }
+
+    pub fn emit_shuffle_down(&mut self, from: u32, to: u32) {
+        OpShuffleDown::new(from as _, to as _).write(self);
     }
 
     pub fn emit_reset_frame(&mut self, nlocals: u24) {
@@ -298,6 +305,30 @@ impl Assembler {
 
     pub fn emit_box_ref(&mut self, dst: u16, obj: u16) {
         OpBoxRef::new(dst, obj).write(self);
+    }
+
+    pub fn emit_bind_rest(&mut self, dst: u24) {
+        OpBindRest::new(dst).write(self);
+    }
+
+    pub fn emit_car(&mut self, dst: u16, obj: u16) {
+        OpCar::new(dst, obj).write(self);
+    }
+
+    pub fn emit_cdr(&mut self, dst: u16, obj: u16) {
+        OpCdr::new(dst, obj).write(self);
+    }
+
+    pub fn emit_vector_ref(&mut self, dst: u16, src: u16, idx: u16) {
+        OpVectorRef::new(dst, src, idx).write(self);
+    }
+
+    pub fn emit_vector_set(&mut self, dst: u16, src: u16, idx: u16) {
+        OpVectorSet::new(dst, src, idx).write(self);
+    }
+
+    pub fn emit_vector_length(&mut self, dst: u16, src: u16) {
+        OpVectorLength::new(dst, src).write(self);
     }
 
 }

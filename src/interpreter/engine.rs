@@ -1,43 +1,55 @@
+use std::cmp::Ordering;
 use std::intrinsics::unlikely;
-use std::mem::size_of;
+use std::mem::{size_of, transmute};
 use std::ptr::null;
 
+use mmtk::memory_manager::object_reference_write;
+
 use crate::bytecode::encode::Decode;
+use crate::runtime::equality::scm_compare;
+use crate::runtime::object::*;
 use crate::runtime::value::Value;
-use crate::vm::intrinsics::{get_callee_vcode, cons_rest};
+use crate::vm::intrinsics::{cons_rest, get_callee_vcode};
 use crate::vm::thread::Thread;
 
 use super::stackframe::StackElement;
 use super::stackframe::*;
 use crate::bytecode::opcodes::*;
-pub unsafe  extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
+pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
     let mut ip: *const u8 = thread.interpreter().ip;
     let mut sp: *mut StackElement = thread.interpreter().sp;
     let mut op: u8;
 
     macro_rules! cache_sp {
         () => {
-            sp = thread.interpreter().sp; 
+            sp = thread.interpreter().sp;
         };
     }
-
-    macro_rules! cahce_registers {
+    #[allow(unused_macros)]
+    macro_rules! cache_registers {
         () => {
             ip = thread.interpreter().ip;
             cache_sp!();
         };
     }
 
+    #[allow(unused_macros)]
     macro_rules! fp_slot {
         ($i: expr) => {
-            frame_slot(thread.interpreter().vp, $i as isize)
-        }
+            frame_slot(thread.interpreter().fp, $i as isize)
+        };
+    }
+
+    macro_rules! current_program {
+        () => {
+            *frame_local(thread.interpreter().fp, 0)
+        };
     }
 
     macro_rules! fp_ref {
         ($i: expr) => {
             frame_local(thread.interpreter().fp, $i as isize)
-        }
+        };
     }
 
     macro_rules! fp_set {
@@ -46,9 +58,15 @@ pub unsafe  extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
         };
     }
 
+    macro_rules! sp_slot {
+        ($i: expr) => {
+            sp.offset($i as _)
+        };
+    }
+
     macro_rules! sp_ref {
         ($i: expr) => {
-            sp.offset($i as _).read().as_value 
+            sp.offset($i as _).read().as_value
         };
     }
 
@@ -78,7 +96,7 @@ pub unsafe  extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
 
     macro_rules! frame_locals_count {
         () => {
-            thread.interpreter().fp.offset_from(sp)  
+            thread.interpreter().fp.offset_from(sp)
         };
     }
 
@@ -101,7 +119,6 @@ pub unsafe  extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
     }
 
     loop {
-
         op = ip.read();
         ip = ip.add(1);
 
@@ -109,8 +126,8 @@ pub unsafe  extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
             OP_HALT => {
                 let frame_size = 3;
                 let first_value = frame_size;
-                let nvals = frame_locals_count_from!(first_value);
 
+                let nvals = frame_locals_count_from!(first_value);
                 let ret = if nvals == 1 {
                     *fp_ref!(first_value)
                 } else {
@@ -143,7 +160,6 @@ pub unsafe  extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 ip = thread.interpreter().ip;
             }
 
-
             OP_CALL => {
                 let call = OpCall::read(ip);
                 ip = ip.add(size_of::<OpCall>());
@@ -156,6 +172,7 @@ pub unsafe  extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 thread.interpreter().fp = new_fp;
 
                 reset_frame!(call.nlocals().value() as isize);
+             
                 ip = get_callee_vcode(thread);
                 cache_sp!();
             }
@@ -163,14 +180,15 @@ pub unsafe  extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
             OP_TAIL_CALL => {
                 ip = get_callee_vcode(thread);
                 cache_sp!();
+                
             }
 
             OP_RETURN_VALUES => {
                 let old_fp = thread.interpreter().fp;
                 thread.interpreter().fp = frame_dynamic_link(old_fp);
+
                 ip = frame_virtual_return_address(old_fp);
             }
-
 
             OP_RECEIVE => {
                 let receive = OpReceive::read(ip);
@@ -197,13 +215,17 @@ pub unsafe  extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 let rest = receive_values.allow_extra();
 
                 if rest {
-                    if unlikely(frame_locals_count!() < proc.value() as isize + nvalues.value() as isize) {
+                    if unlikely(
+                        frame_locals_count!() < proc.value() as isize + nvalues.value() as isize,
+                    ) {
                         sync_sp!();
                         sync_ip!();
                         todo!("no values error"); // FIXME: Throw error
                     }
                 } else {
-                    if unlikely(frame_locals_count!() != proc.value() as isize + nvalues.value() as isize) {
+                    if unlikely(
+                        frame_locals_count!() != proc.value() as isize + nvalues.value() as isize,
+                    ) {
                         sync_sp!();
                         sync_ip!();
                         todo!("no values error"); // FIXME: Throw error
@@ -216,6 +238,7 @@ pub unsafe  extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 ip = ip.add(size_of::<OpAssertNargsEe>());
 
                 if unlikely(frame_locals_count!() != assert_nargs_ee.n().value() as isize) {
+                    println!("{} {}", frame_locals_count!(), assert_nargs_ee.n().value());
                     sync_sp!();
                     sync_ip!();
                     todo!("no values error"); // FIXME: Throw error
@@ -250,7 +273,6 @@ pub unsafe  extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                     reset_frame!(dst + 1);
                     sp_set!(0, rest);
                 }
-
             }
 
             OP_ALLOC_FRAME => {
@@ -265,9 +287,10 @@ pub unsafe  extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 ip = ip.add(size_of::<OpResetFrame>());
 
                 reset_frame!(reset_frame.nlocals().value());
+             
             }
 
-            OP_MOV =>{ 
+            OP_MOV => {
                 let mov = OpMov::read(ip);
                 ip = ip.add(size_of::<OpMov>());
 
@@ -312,7 +335,7 @@ pub unsafe  extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
             OP_DROP => {
                 let drop = OpDrop::read(ip);
                 ip = ip.add(size_of::<OpDrop>());
-               
+
                 sp = sp.add(drop.n().value() as _);
                 thread.interpreter().sp = sp;
             }
@@ -324,14 +347,14 @@ pub unsafe  extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 let nlocals = frame_locals_count!();
                 let from = shuffle_down.from() as u32;
                 let to = shuffle_down.to() as u32;
-                
+
                 let mut n = 0;
                 while from + n < nlocals as u32 {
-                    fp_set!(to+n, *fp_ref!(from + n));
+                    fp_set!(to + n, *fp_ref!(from + n));
                     n += 1;
                 }
 
-                reset_frame!(to+n);
+                reset_frame!(to + n);
             }
 
             OP_J => {
@@ -342,7 +365,6 @@ pub unsafe  extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
             }
 
             OP_JNZ => {
-                
                 let jnz = OpJnz::read(ip);
                 ip = ip.add(size_of::<OpJnz>());
 
@@ -362,10 +384,556 @@ pub unsafe  extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 }
             }
 
-            
+            OP_MAKE_IMMEDIATE => {
+                let make_immediate = OpMakeImmediate::read(ip);
+                ip = ip.add(size_of::<OpMakeImmediate>());
 
-            _ => ()
+                let value = Value(crate::runtime::value::EncodedValueDescriptor {
+                    as_int64: make_immediate.value() as i64,
+                });
+                sp_set!(make_immediate.dst(), value);
+            }
 
+            OP_MAKE_NON_IMMEDIATE => {
+                let make_non_immediate = OpMakeNonImmediate::read(ip);
+                ip = ip.add(size_of::<OpMakeNonImmediate>());
+
+                let program = current_program!();
+                let constants = scm_vector_ref(
+                    program.cast_as::<ScmProgram>().constants,
+                    make_non_immediate.offset(),
+                );
+                
+                sp_set!(make_non_immediate.dst().value(), constants);
+            }
+
+            OP_GLOBAL_REF => {
+                let global_ref = OpGlobalRef::read(ip);
+                ip = ip.add(size_of::<OpGlobalRef>());
+
+                let program = current_program!();
+                let global = scm_vector_ref(
+                    program.cast_as::<ScmProgram>().constants,
+                    global_ref.offset(),
+                );
+                let value = global.cast_as::<ScmGloc>().value;
+                sp_set!(global_ref.dst().value(), value);
+            }
+
+            OP_GLOBAL_SET => {
+                let global_set = OpGlobalSet::read(ip);
+                ip = ip.add(size_of::<OpGlobalSet>());
+
+                let program = current_program!();
+
+                let global = scm_vector_ref(
+                    program.cast_as::<ScmProgram>().constants,
+                    global_set.offset(),
+                );
+                let gloc = global.cast_as::<ScmGloc>();
+                let src = sp_ref!(global_set.src().value());
+                if src.is_object() {
+                    object_reference_write(
+                        thread.mutator(),
+                        transmute(gloc as *mut ScmGloc),
+                        transmute(&mut gloc.value),
+                        transmute(src),
+                    );
+                } else {
+                    gloc.value = src;
+                }
+            }
+
+            OP_BOX => {
+                let box_ = OpBox::read(ip);
+                ip = ip.add(size_of::<OpBox>());
+                sync_sp!();
+                sync_ip!();
+
+                let boxed = thread.make_box();
+                let src = sp_ref!(box_.src());
+                boxed.cast_as::<ScmBox>().value = src;
+            }
+
+            OP_BOX_SET => {
+                let box_set = OpBoxSet::read(ip);
+                ip = ip.add(size_of::<OpBoxSet>());
+
+                let boxed = sp_ref!(box_set.dst());
+                let src = sp_ref!(box_set.src());
+                if src.is_object() {
+                    object_reference_write(
+                        thread.mutator(),
+                        transmute(boxed.cast_as::<ScmBox>() as *mut ScmBox),
+                        transmute(&mut boxed.cast_as::<ScmBox>().value),
+                        transmute(src),
+                    );
+                } else {
+                    boxed.cast_as::<ScmBox>().value = src;
+                }
+            }
+
+            OP_BOX_REF => {
+                let box_ref = OpBoxRef::read(ip);
+                ip = ip.add(size_of::<OpBoxRef>());
+
+                let boxed = sp_ref!(box_ref.src());
+                let value = boxed.cast_as::<ScmBox>().value;
+                sp_set!(box_ref.dst(), value);
+            }
+
+            OP_CONS => {
+                let cons = OpCons::read(ip);
+                ip = ip.add(size_of::<OpCons>());
+                sync_sp!();
+                sync_ip!();
+                let cell = thread
+                    .make_cons::<false>(Value::encode_null_value(), Value::encode_null_value());
+                let pair = cell.cast_as::<ScmPair>();
+                pair.car = sp_ref!(cons.car());
+                pair.cdr = sp_ref!(cons.cdr());
+
+                sp_set!(cons.dst(), cell);
+            }
+
+            OP_MAKE_VECTOR => {
+                let make_vector = OpMakeVector::read(ip);
+                ip = ip.add(size_of::<OpMakeVector>());
+                sync_sp!();
+                sync_ip!();
+                let v =
+                    thread.make_vector::<false>(make_vector.len() as _, Value::encode_null_value());
+                sp_set!(make_vector.dst(), v);
+            }
+
+            OP_VECTOR_REF_IMM => {
+                let vector_ref_imm = OpVectorRefImm::read(ip);
+                ip = ip.add(size_of::<OpVectorRefImm>());
+
+                let vector = sp_ref!(vector_ref_imm.src());
+                let imm = vector_ref_imm.idx();
+
+                if scm_vector_length(vector) <= imm {
+                    todo!("vector-ref-imm: out of bounds")
+                }
+
+                let value = scm_vector_ref(vector, imm);
+                sp_set!(vector_ref_imm.dst(), value);
+            }
+
+            OP_VECTOR_SET_IMM => {
+                let vector_set_imm = OpVectorSetImm::read(ip);
+                ip = ip.add(size_of::<OpVectorSetImm>());
+
+                let vector = sp_ref!(vector_set_imm.dst());
+                let imm = vector_set_imm.idx();
+                let src = sp_ref!(vector_set_imm.src());
+
+                if scm_vector_length(vector) <= imm {
+                    todo!("vector-set-imm: out of bounds")
+                }
+
+                scm_vector_set(vector, thread, imm, src);
+            }
+
+            OP_VECTOR_REF => {
+                let vector_ref = OpVectorRef::read(ip);
+                ip = ip.add(size_of::<OpVectorRef>());
+
+                let vector = sp_ref!(vector_ref.src());
+                let idx = sp_ref!(vector_ref.idx());
+                if !idx.is_int32() {
+                    todo!("vector-ref: index is not int32")
+                }
+                let idx = idx.get_int32();
+                if idx as u32 >= scm_vector_length(vector) {
+                    todo!("vector-ref: out of bounds")
+                }
+                let value = scm_vector_ref(vector, idx as _);
+                sp_set!(vector_ref.dst(), value);
+            }
+
+            OP_PROGRAM_REF_IMM => {
+                let program_ref_imm = OpProgramRefImm::read(ip);
+                ip = ip.add(size_of::<OpProgramRefImm>());
+
+                let program = sp_ref!(program_ref_imm.src().value());
+                let var = scm_program_free_variable(program, program_ref_imm.idx());
+                sp_set!(program_ref_imm.dst(), var);
+            }
+
+            OP_PROGRAM_SET_IMM => {
+                let program_set_imm = OpProgramSetImm::read(ip);
+                ip = ip.add(size_of::<OpProgramSetImm>());
+
+                let program = sp_ref!(program_set_imm.dst().value());
+                let var = sp_ref!(program_set_imm.src());
+                scm_program_set_free_variable(program, thread, program_set_imm.idx(), var);
+            }
+
+            OP_MAKE_PROGRAM => {
+                let make_program = OpMakeProgram::read(ip);
+                ip = ip.add(size_of::<OpMakeProgram>());
+
+                let nfree = make_program.nfree();
+                let offset = make_program.offset();
+                let label = ip.offset(offset as isize);
+
+                let program = thread.make_program::<false>(label, nfree);
+                program.cast_as::<ScmProgram>().constants =
+                    current_program!().cast_as::<ScmProgram>().constants;
+                sp_set!(make_program.dst(), program);
+            }
+
+            OP_ADD => {
+                let add = OpAdd::read(ip);
+                ip = ip.add(size_of::<OpAdd>());
+
+                let a = sp_ref!(add.a());
+                let b = sp_ref!(add.b());
+
+                if a.is_int32() && b.is_int32() {
+                    if let Some(result) = a.get_int32().checked_add(b.get_int32()) {
+                        sp_set!(add.dst(), Value::encode_int32(result));
+                        continue;
+                    }
+                } else {
+                    todo!("slow add")
+                }
+            }
+
+            OP_SUB => {
+                let sub = OpSub::read(ip);
+                ip = ip.add(size_of::<OpSub>());
+
+                let a = sp_ref!(sub.a());
+                let b = sp_ref!(sub.b());
+
+                if a.is_int32() && b.is_int32() {
+                    if let Some(result) = a.get_int32().checked_sub(b.get_int32()) {
+                        sp_set!(sub.dst(), Value::encode_int32(result));
+                        continue;
+                    }
+                } else {
+                    todo!("slow sub")
+                }
+            }
+
+            OP_MUL => {
+                let mul = OpMul::read(ip);
+                ip = ip.add(size_of::<OpMul>());
+
+                let a = sp_ref!(mul.a());
+                let b = sp_ref!(mul.b());
+                if a.is_int32() && b.is_int32() {
+                    
+                    if let Some(result) = a.get_int32().checked_mul(b.get_int32()) {
+                        sp_set!(mul.dst(), Value::encode_int32(result));
+                        continue;
+                    }
+                } else {
+                    todo!("slow mul")
+                }
+            }
+
+            OP_DIV => {
+                let div = OpDiv::read(ip);
+                ip = ip.add(size_of::<OpDiv>());
+
+                let a = sp_ref!(div.a());
+                let b = sp_ref!(div.b());
+
+                if a.is_int32() && b.is_int32() {
+                    if let Some(result) = a.get_int32().checked_div(b.get_int32()) {
+                        sp_set!(div.dst(), Value::encode_int32(result));
+                        continue;
+                    }
+                } else {
+                    todo!("slow div")
+                }
+            }
+
+            OP_QUOTIENT => {
+                let quotient = OpQuotient::read(ip);
+                ip = ip.add(size_of::<OpQuotient>());
+
+                let a = sp_ref!(quotient.a());
+                let b = sp_ref!(quotient.b());
+
+                if a.is_int32() && b.is_int32() {
+                    if let Some(result) = a.get_int32().checked_div(b.get_int32()) {
+                        sp_set!(quotient.dst(), Value::encode_int32(result));
+                        continue;
+                    }
+                } else {
+                    todo!("slow quotient")
+                }
+            }
+
+            OP_MOD => {
+                let modulo = OpMod::read(ip);
+                ip = ip.add(size_of::<OpMod>());
+
+                let a = sp_ref!(modulo.a());
+                let b = sp_ref!(modulo.b());
+
+                if a.is_int32() && b.is_int32() {
+                    if let Some(result) = a.get_int32().checked_rem(b.get_int32()) {
+                        sp_set!(modulo.dst(), Value::encode_int32(result));
+                        continue;
+                    }
+                } else {
+                    todo!("slow modulo")
+                }
+            }
+
+            OP_LESS => {
+                let less = OpLess::read(ip);
+                ip = ip.add(size_of::<OpLess>());
+
+                let a = sp_ref!(less.a());
+                let b = sp_ref!(less.b());
+
+                let cmp = scm_compare(a, b);
+
+                match cmp {
+                    Ok(Some(Ordering::Less)) => {
+                        sp_set!(less.dst(), Value::encode_bool_value(true));
+                        continue;
+                    }
+
+                    Ok(_) => {
+                        sp_set!(less.dst(), Value::encode_bool_value(false));
+                        continue;
+                    }
+
+                    Err(_) => {
+                        todo!("error")
+                    }
+                }
+            }
+
+            OP_GREATER => {
+                let greater = OpGreater::read(ip);
+                ip = ip.add(size_of::<OpGreater>());
+
+                let a = sp_ref!(greater.a());
+                let b = sp_ref!(greater.b());
+
+                let cmp = scm_compare(a, b);
+
+                match cmp {
+                    Ok(Some(Ordering::Greater)) => {
+                        sp_set!(greater.dst(), Value::encode_bool_value(true));
+                        continue;
+                    }
+
+                    Ok(_) => {
+                        sp_set!(greater.dst(), Value::encode_bool_value(false));
+                        continue;
+                    }
+
+                    Err(_) => {
+                        todo!("error")
+                    }
+                }
+            }
+
+            OP_LESS_EQUAL => {
+                let less_equal = OpLessEqual::read(ip);
+                ip = ip.add(size_of::<OpLessEqual>());
+
+                let a = sp_ref!(less_equal.a());
+                let b = sp_ref!(less_equal.b());
+
+                let cmp = scm_compare(a, b);
+
+                match cmp {
+                    Ok(Some(Ordering::Less)) | Ok(Some(Ordering::Equal)) => {
+                        sp_set!(less_equal.dst(), Value::encode_bool_value(true));
+                        continue;
+                    }
+
+                    Ok(_) => {
+                        sp_set!(less_equal.dst(), Value::encode_bool_value(false));
+                        continue;
+                    }
+
+                    Err(_) => {
+                        todo!("error")
+                    }
+                }
+            }
+
+            OP_GREATER_EQUAL => {
+                let greater_equal = OpGreaterEqual::read(ip);
+                ip = ip.add(size_of::<OpGreaterEqual>());
+
+                let a = sp_ref!(greater_equal.a());
+                let b = sp_ref!(greater_equal.b());
+
+                let cmp = scm_compare(a, b);
+
+                match cmp {
+                    Ok(Some(Ordering::Greater)) | Ok(Some(Ordering::Equal)) => {
+                        sp_set!(greater_equal.dst(), Value::encode_bool_value(true));
+                        continue;
+                    }
+
+                    Ok(_) => {
+                        sp_set!(greater_equal.dst(), Value::encode_bool_value(false));
+                        continue;
+                    }
+
+                    Err(_) => {
+                        todo!("error")
+                    }
+                }
+            }
+            OP_NUMERICALLY_EQUAL => {
+                let numerically_equal = OpNumericallyEqual::read(ip);
+                ip = ip.add(size_of::<OpNumericallyEqual>());
+
+                let a = sp_ref!(numerically_equal.a());
+                let b = sp_ref!(numerically_equal.b());
+                
+                let cmp = scm_compare(a, b);
+
+                match cmp {
+                    Ok(Some(Ordering::Equal)) => {
+                        sp_set!(numerically_equal.dst(), Value::encode_bool_value(true));
+                        continue;
+                    }
+
+                    Ok(_) => {
+                        sp_set!(numerically_equal.dst(), Value::encode_bool_value(false));
+                        continue;
+                    }
+
+                    Err(_) => {
+                        todo!("error")
+                    }
+                }
+            }
+
+            OP_EQ => {
+                let eq = OpEq::read(ip);
+                ip = ip.add(size_of::<OpEq>());
+
+                let a = sp_ref!(eq.a());
+                let b = sp_ref!(eq.b());
+
+                sp_set!(eq.dst(), Value::encode_bool_value(a == b));
+            }
+
+            OP_HEAP_TAG_EQ => {
+                let heap_tag_eq = OpHeapTagEq::read(ip);
+                ip = ip.add(size_of::<OpHeapTagEq>());
+
+                let src = sp_ref!(heap_tag_eq.src().value());
+                let tag = heap_tag_eq.tag();
+
+                sp_set!(
+                    heap_tag_eq.dst(),
+                    Value::encode_bool_value(
+                        src.is_object() && src.get_object().header().type_id() as u32 == tag
+                    )
+                );
+            }
+
+            OP_IS_FALSE => {
+                let is_false = OpIsFalse::read(ip);
+                ip = ip.add(size_of::<OpIsFalse>());
+
+                let src = sp_ref!(is_false.src());
+
+                sp_set!(is_false.dst(), Value::encode_bool_value(src.is_false()));
+            }
+
+            OP_IS_TRUE => {
+                let is_true = OpIsTrue::read(ip);
+                ip = ip.add(size_of::<OpIsTrue>());
+
+                let src = sp_ref!(is_true.src());
+
+                sp_set!(is_true.dst(), Value::encode_bool_value(src.is_true()));
+            }
+
+            OP_IS_NULL => {
+                let is_null = OpIsNull::read(ip);
+                ip = ip.add(size_of::<OpIsNull>());
+
+                let src = sp_ref!(is_null.src());
+
+                sp_set!(is_null.dst(), Value::encode_bool_value(src.is_null()));
+            }
+
+            OP_IS_UNDEFINED => {
+                let is_undefined = OpIsUndefined::read(ip);
+                ip = ip.add(size_of::<OpIsUndefined>());
+
+                let src = sp_ref!(is_undefined.src());
+
+                sp_set!(
+                    is_undefined.dst(),
+                    Value::encode_bool_value(src.is_undefined())
+                );
+            }
+
+            OP_IS_INT32 => {
+                let is_int32 = OpIsInt32::read(ip);
+                ip = ip.add(size_of::<OpIsInt32>());
+
+                let src = sp_ref!(is_int32.src());
+
+                sp_set!(is_int32.dst(), Value::encode_bool_value(src.is_int32()));
+            }
+
+            OP_IS_CHAR => {
+                let is_char = OpIsChar::read(ip);
+                ip = ip.add(size_of::<OpIsChar>());
+
+                let src = sp_ref!(is_char.src());
+
+                sp_set!(is_char.dst(), Value::encode_bool_value(src.is_char()));
+            }
+
+            OP_IS_FLONUM => {
+                let is_flonum = OpIsFlonum::read(ip);
+                ip = ip.add(size_of::<OpIsFlonum>());
+
+                let src = sp_ref!(is_flonum.src());
+
+                sp_set!(is_flonum.dst(), Value::encode_bool_value(src.is_double()));
+            }
+
+            OP_CAR => {
+                let car = OpCar::read(ip);
+                ip = ip.add(size_of::<OpCar>());
+
+                let src = sp_ref!(car.src());
+
+                if unlikely(!src.is_pair()) {
+                    todo!("error")
+                }
+
+                sp_set!(car.dst(), scm_car(src));
+            }
+
+            OP_CDR => {
+                let cdr = OpCdr::read(ip);
+                ip = ip.add(size_of::<OpCdr>());
+
+                let src = sp_ref!(cdr.src());
+
+                if unlikely(!src.is_pair()) {
+                    todo!("error")
+                }
+
+                sp_set!(cdr.dst(), scm_cdr(src));
+            }
+
+            _ => (),
         }
     }
 }

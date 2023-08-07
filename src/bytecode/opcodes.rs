@@ -24,7 +24,7 @@ macro_rules! for_each_opcode {
             (op_call, "call", { proc: u24, nlocals: u24 })
             // Call a procedure in the same compilation unit.
             //
-            // This instruction is just like "call", excep that instead of
+            // This instruction is just like "call", except that instead of
             // dereferencing `proc` to find the call target, the call target is
             // known to be at `label`, a signed 32 bit offset from
             // the current IP.
@@ -89,6 +89,7 @@ macro_rules! for_each_opcode {
             (op_vector_ref_imm, "vector-ref/immediate", { dst: u16, src: u16, idx: u32 })
             (op_vector_set, "vector-set", { dst: u16, idx: u16, src: u16 })
             (op_vector_set_imm, "vector-set/immediate", { dst: u16, idx: u32, src: u16 })
+            (op_vector_length, "vector-length", { dst: u16, src: u16 })
             (op_program_ref, "program-ref", { dst: u16, src: u24, idx: u16 })
             (op_program_ref_imm, "program-ref/immediate", { dst: u16, src: u24, idx: u32 })
             (op_program_set, "program-set", { dst: u24, idx: u16, src: u16 })
@@ -132,19 +133,22 @@ macro_rules! for_each_opcode {
             (op_numerically_equal, "=", { dst: u16, a: u16, b: u16 })
             (op_equal_imm, "=/immediate", { dst: u16, a: u16, b: i32 })
             (op_eq, "eq?", { dst: u16, a: u16, b: u16 })
-            (op_heap_tag_eq, "heap-tag-eq?", { dst: u16, obj: u24, tag: u32} )
-            (op_immediate_tag_eq, "immediate-tag-eq?", { dst: u16, obj: u24, tag: u32 })
-            (op_is_false, "false?", { dst: u16, obj: u16 })
-            (op_is_null, "null?", { dst: u16, obj: u16 })
-            (op_is_undefined, "undefined?", { dst: u16, obj: u16 })
-            (op_is_true, "true?", { dst: u16, obj: u16 })
-            (op_is_int32, "int32?", { dst: u16, obj: u16 })
-            (op_is_char, "char?", { dst: u16, obj: u16 })
-            (op_is_flonum, "flonum?", { dst: u16, obj: u16 })
+            (op_heap_tag_eq, "heap-tag-eq?", { dst: u16, src: u24, tag: u32} )
+            (op_immediate_tag_eq, "immediate-tag-eq?", { dst: u16, src: u24, tag: u32 })
+            (op_is_false, "false?", { dst: u16, src: u16 })
+            (op_is_null, "null?", { dst: u16, src: u16 })
+            (op_is_undefined, "undefined?", { dst: u16, src: u16 })
+            (op_is_true, "true?", { dst: u16, src: u16 })
+            (op_is_int32, "int32?", { dst: u16, src: u16 })
+            (op_is_char, "char?", { dst: u16, src: u16 })
+            (op_is_flonum, "flonum?", { dst: u16, src: u16 })
 
             (op_j, "j", { offset: i32 })
             (op_jz, "jz", { src: u16, offset: i32})
             (op_jnz, "jnz", { src: u16, offset: i32})
+
+            (op_car, "car", { dst: u16, src: u16 })
+            (op_cdr, "cdr", { dst: u16, src: u16 })
         }
     };
 }
@@ -326,15 +330,17 @@ pub fn disassemble<const ADDR_INSN: bool>(vcode: &[u8]) {
                     let diff = label.offset_from(start_pc);
                     if !ADDR_INSN {
                         out.push_str(&format!(
-                            "(make-program {} {}) ; program at {:<02}",
+                            "(make-program {} {} {}) ; program at {:<02}",
                             make_program.dst(),
+                            make_program.nfree(),
                             make_program.offset(),
                             diff,
                         ));
                     } else {
                         out.push_str(&format!(
-                            "(make-program {} {}) ; program at {:p}",
+                            "(make-program {} {} {}) ; program at {:p}",
                             make_program.dst(),
+                            make_program.nfree(),
                             make_program.offset(),
                             label,
                         ));

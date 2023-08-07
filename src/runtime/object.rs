@@ -283,7 +283,7 @@ pub fn scm_vector_set(vector: Value, thread: &mut Thread, index: u32, value: Val
     let mut v = vector.get_object();
     let vec = v.cast_as::<ScmVector>();
 
-    /*if value.is_object() {
+    if value.is_object() {
         unsafe {
             object_reference_write(
                 thread.mutator(),
@@ -292,7 +292,7 @@ pub fn scm_vector_set(vector: Value, thread: &mut Thread, index: u32, value: Val
                 transmute(value),
             );
         }
-    } else */ {
+    } else {
         unsafe {
             vec.values.as_mut_ptr().add(index as usize).write(value);
         }
@@ -364,7 +364,7 @@ pub fn scm_program_num_free_vars(program: Value) -> u32 {
 pub fn scm_program_free_variable(program: Value, index: u32) -> Value {
     debug_assert!(program.is_program());
     unsafe {
-        debug_assert!(index < program.get_object().cast_as::<ScmProgram>().nfree as u32);
+        debug_assert!(index < program.get_object().cast_as::<ScmProgram>().nfree as u32, "index out of bounds: {} >= {}", index, program.get_object().cast_as::<ScmProgram>().nfree as u32);
         program
             .get_object()
             .cast_as::<ScmProgram>()

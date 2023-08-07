@@ -112,6 +112,12 @@ pub fn scan<const RESET_CALL: bool>(
             lam.bound_lvars = lbs;
         }
 
+        IForm::PrimCall(_, args) => {
+            args.iter().for_each(|arg| {
+                scan::<RESET_CALL>(arg, fs, bs, toplevel, labels);
+            });
+        }
+
         _ => (),
     }
 }
@@ -189,8 +195,12 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &Vec<(P<La
             if sym.as_ptr() == env.id.as_ptr() {
                 return env.clone();
             }
+           
 
-            env = env.prev.as_ref().expect("symbol not found");
+            env = env
+                .prev
+                .as_ref()
+                .expect(&format!("symbol not found: {}", sym.name));
         }
     }
 
@@ -299,7 +309,6 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &Vec<(P<La
         let mut env = closure;
         for var in lvars.iter() {
             env = push_local(var.name.clone(), var.clone(), env);
-            println!("local {} at {}", var.name, env.idx);
         }
 
         env
@@ -348,7 +357,7 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &Vec<(P<La
     }
 
     fn stack_height(env: &P<Env>, state: &State) -> u32 {
-        stack_height_under_local(env.idx, state.frame_size)
+        stack_height_under_local(env.next_local, state.frame_size)
     }
 
     fn visit_let(
@@ -422,6 +431,39 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &Vec<(P<La
         }
     }
 
+    fn for_values_at(
+        asm: &mut Assembler,
+        exp: &P<IForm>,
+        env: &P<Env>,
+        height: u32,
+        state: &mut State,
+    ) {
+        match &**exp {
+            IForm::Call(call) => {
+                let env = push_frame(env.clone());
+                let from = stack_height(&env, state);
+                let mut tmp = for_push(asm, &call.proc, &env, state);
+                for arg in call.args.iter() {
+                    tmp = for_push(asm, arg, &tmp, state);
+                }
+                asm.emit_call(u24::new(from), 1 + call.args.len() as u32);
+                if from != height {
+                    asm.emit_shuffle_down(from, height);
+                }
+            }
+
+            IForm::Let(var) => {
+                visit_let(var, asm, env, Context::ValuesAt(height), state);
+            }
+            IForm::If(cond) => visit_if(cond, asm, env, Context::ValuesAt(height), state),
+
+            _ => {
+                for_value_at(asm, exp, env, state.frame_size - height - 1, state);
+                asm.emit_reset_frame(u24::new(height + 1));
+            }
+        }
+    }
+
     fn for_value_at(
         asm: &mut Assembler,
         exp: &P<IForm>,
@@ -486,7 +528,7 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &Vec<(P<La
                 if lam.free_lvars.is_empty() {
                     asm.emit_static_program(u24::new(dst), label as _);
                 } else {
-                    asm.emit_make_program(dst as _, lam.free_lvars.len() as _, label as _);
+                    asm.emit_make_program(0, lam.free_lvars.len() as _, label as _);
                     init_free_vars(asm, 0, &lam.free_lvars, env, 1, state);
                     asm.emit_mov(dst as _, 0);
                 }
@@ -505,9 +547,10 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &Vec<(P<La
             }
 
             IForm::Call(call) => {
-                let mut env = push_frame(env.clone());
+                let env = push_frame(env.clone());
+                let mut tmp = for_push(asm, &call.proc, &env, state);
                 for arg in call.args.iter() {
-                    env = for_push(asm, arg, &env, state);
+                    tmp = for_push(asm, arg, &tmp, state);
                 }
                 let proc_slot = stack_height(&env, state);
 
@@ -621,6 +664,12 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &Vec<(P<La
                 None
             }
 
+            IForm::GSet(gset) => {
+                let env = for_value(asm, &gset.value, env, state);
+                asm.emit_global_set(u24::new(env.idx), gset.name.unwrap_id());
+                None
+            }
+
             IForm::If(cond) => {
                 visit_if(cond, asm, env, Context::Effect, state);
                 None
@@ -709,7 +758,7 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &Vec<(P<La
                 }
 
                 fn parallel_moves(asm: &mut Assembler, env: &P<Env>, base: u32, i: i32) {
-                    if 0 <= i {
+                    if i >= 0 {
                         parallel_moves(asm, &env.prev.as_ref().unwrap(), base, i - 1);
                         asm.emit_mov(env.idx + base, env.idx);
                     }
@@ -729,7 +778,7 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &Vec<(P<La
                 for_tail(asm, &label.body, env, state);
             }
             _ => {
-                for_value_at(asm, exp, env, 0, state);
+                for_values_at(asm, exp, env, 0, state);
                 asm.emit_return_values();
             }
         }
@@ -854,6 +903,13 @@ pub fn compile_bytecode(exp: P<IForm>, output: &mut Vec<u8>) {
         }
     }
 
+    for i in 0..asm.patch_programs.len() {
+        let (constant, closure_ix) = asm.patch_programs[i];
+        let label = actual_locations[&(closure_ix as usize)];
+        asm.constants[constant as usize] = Sexpr::Program(label as _);
+    }   
+
+
     let constants = Sexpr::Vector(P(std::mem::take(&mut asm.constants)));
     let data = Sexpr::Vector(P(closure_data
         .into_iter()
@@ -875,8 +931,7 @@ pub fn compile_bytecode(exp: P<IForm>, output: &mut Vec<u8>) {
     let entrypoint = Sexpr::Program(label as _);
 
     let data_section = Sexpr::Vector(P(vec![constants, data, entrypoint]));
-    
-    
+
     output.reserve(asm.code.len() + 8 + 128);
     output.extend_from_slice(&CAPY_BYTECODE_MAGIC.to_le_bytes());
     let code_len_pos = output.len();
@@ -889,11 +944,10 @@ pub fn compile_bytecode(exp: P<IForm>, output: &mut Vec<u8>) {
     let code_end_pos = output.len();
     let actual_length = code_end_pos - code_start_pos;
     output[code_len_pos..code_len_pos + 4].copy_from_slice(&(actual_length as u32).to_le_bytes());
-    let start = output.len();
+
     FASLPrinter::new(output)
         .put(data_section)
         .expect("write to vector must always succeed");
-    println!("constants len: {}", output.len() - start);
 }
 
 pub struct Primitive {
@@ -1021,8 +1075,24 @@ static PRIMITIVES: Lazy<HashMap<&'static str, Primitive>> = Lazy::new(|| {
             asm.emit_box_ref(args[0] as _, args[1] as _);
         })
 
-        ("box-set!", 2, false, true, asm, args => {
+        ("box-set!", 2, false, false, asm, args => {
             asm.emit_box_set(args[0], args[1]);
+        })
+
+        (".car:pair", 1, false, true, asm, args => {
+            asm.emit_car(args[0], args[1])
+        })
+
+        (".cdr:pair", 1, false ,true, asm, args => {
+            asm.emit_cdr(args[0], args[1])
+        })
+
+        ("car", 1, false, true, asm, args => {
+            asm.emit_car(args[0], args[1])
+        })
+
+        ("cdr", 1, false ,true, asm, args => {
+            asm.emit_cdr(args[0], args[1])
         })
     );
 
