@@ -110,6 +110,7 @@ pub struct GcFrameRegistration<'a> {
 }
 
 impl<'a> GcFrameRegistration<'a> {
+    #[inline(always)]
     pub fn new<const N: usize>(chain: *mut StackChain, frame: &'a StackEntry<N>) -> Self {
         let frame = StackEntry::as_unsized(frame) as *mut StackEntry<0>;
         unsafe {
@@ -123,7 +124,7 @@ impl<'a> GcFrameRegistration<'a> {
     }
 }
 impl<'a> Drop for GcFrameRegistration<'a> {
-    #[inline]
+    #[inline(always)]
     fn drop(&mut self) {
         unsafe {
             pop_gcframe(&mut *self.chain, self.frame);

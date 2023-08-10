@@ -1,8 +1,11 @@
-use std::mem::size_of;
+use std::mem::{size_of, transmute};
 
 use mmtk::util::Address;
 
-use crate::{vm::{sync::mutex::RawMutex, thread::Thread}, gc_frame};
+use crate::{
+    gc_frame,
+    vm::{sync::mutex::RawMutex, thread::Thread},
+};
 
 use super::{
     equality::{equal, eqv},
@@ -35,6 +38,7 @@ pub const fn hash_immutable_size(n: u32) -> u32 {
 
 #[repr(C)]
 pub(crate) struct HashTableRec {
+    pub header: ScmCellHeader,
     pub capacity: u32,
     pub used: u32,
     pub live: u32,
@@ -223,7 +227,7 @@ pub fn equal_hash_equiv(a: Value, b: Value) -> bool {
 }
 
 pub fn equal_hash(a: Value, bound: u32) -> u32 {
-    obj_hash(a, 0)  % bound
+    obj_hash(a, 0) % bound
 }
 
 pub fn string_hash_equiv(a: Value, b: Value) -> bool {
@@ -260,7 +264,7 @@ fn put_eq_hashtable(ht: Value, key: Value, value: Value) -> u32 {
     let hash1 = u64_hash1(key.get_raw() as _, nsize as _);
     let hash2 = u64_hash2(key.get_raw() as _, nsize as _);
     let mut index = hash1;
-    println!("hash1: {:x}, hash2: {:x}", hash1, hash2);
+
     let res = loop {
         let tag = ht.elt(index);
 
@@ -289,9 +293,11 @@ fn put_eq_hashtable(ht: Value, key: Value, value: Value) -> u32 {
     };
 
     if res {
-        *ht.elt_mut(index) = key;
-        *ht.elt_mut(index + nsize) = value;
-        println!("put key: {:?}, value: {:?} at {}, {}", key, value, index, index + nsize);
+        unsafe {
+            let datum = ht.datum;
+            ht.elt_mut(index).assign(transmute(datum), key);
+            ht.elt_mut(index + nsize).assign(transmute(datum), value);
+        }
         if ht.datum().used < hash_busy_threshold(nsize) {
             return 0;
         }
@@ -387,6 +393,9 @@ fn simple_hash2(hash: u32, nsize: u32) -> u32 {
 }
 
 pub fn put_hashtable<const CHECK_REHASH: bool>(ht: Value, key: Value, val: Value) -> u32 {
+    // check if rehashing needed
+    // `rehash` is true only after GC cycle, it is required
+    // because GC may move keys in the hashtable around.
     if CHECK_REHASH {
         if ht.cast_as::<ScmHashTable>().rehash {
             inplace_rehash_hashtable(ht);
@@ -429,9 +438,11 @@ pub fn put_hashtable<const CHECK_REHASH: bool>(ht: Value, key: Value, val: Value
         }
     };
     if res {
-        *h.elt_mut(index) = key;
-        *h.elt_mut(index + nsize) = val;
-
+        unsafe {
+            let datum = h.datum;
+            h.elt_mut(index).assign(transmute(datum), key);
+            h.elt_mut(index + nsize).assign(transmute(datum), val);
+        }
         if h.datum().used < hash_busy_threshold(nsize) {
             return 0;
         }
@@ -575,13 +586,18 @@ pub(crate) fn clear_volatile_hashtable(ht: &mut ScmHashTable) {
     }
 }
 
-pub fn rehash_hashtable(thread: &mut Thread, ht: Value, nsize: u32) -> Value {
-    gc_frame!(thread.stackchain() => ht = ht);
-    let nelts = ht.cast_as::<ScmHashTable>().datum().capacity;
+pub fn rehash_hashtable(thread: &mut Thread, mut ht: Value, nsize: u32) -> Value {
     
-    let ht2 = thread.make_hashtable(nsize, ht.cast_as::<ScmHashTable>().typ);
-    // pop gc frame here, GC won't happen in the following loop
-    let ht = *ht;
+    let nelts = ht.cast_as::<ScmHashTable>().datum().capacity;
+
+    let ht2 = {
+        // protect ht from GC
+        gc_frame!(thread.stackchain() => htr = ht);
+        let ht2 = thread.make_hashtable(nsize, ht.cast_as::<ScmHashTable>().typ);
+        ht = *htr;
+        ht2
+    };
+    
     ht2.cast_as::<ScmHashTable>().lock.lock(true);
     let h = ht.cast_as::<ScmHashTable>();
     for i in 0..nelts {
@@ -599,7 +615,6 @@ pub fn rehash_hashtable(thread: &mut Thread, ht: Value, nsize: u32) -> Value {
     ht2.cast_as::<ScmHashTable>().lock.unlock();
     std::mem::swap(&mut h.datum, &mut ht2.cast_as::<ScmHashTable>().datum);
     ht
-    
 }
 
 pub fn dummy_hash(_key: Value, _nsize: u32) -> u32 {

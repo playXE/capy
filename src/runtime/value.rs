@@ -1,11 +1,12 @@
-use std::hash::Hash;
+use std::{hash::Hash, mem::transmute};
 
 use mmtk::{
+    memory_manager::object_reference_write,
     util::Address,
     vm::{edge_shape::SimpleEdge, EdgeVisitor},
 };
 
-use crate::runtime::object::*;
+use crate::{runtime::object::*, vm::thread::Thread};
 
 use super::{
     object::TypeId,
@@ -356,6 +357,23 @@ impl Value {
                 TypeId::Null
             } else {
                 unreachable!()
+            }
+        }
+    }
+
+    pub fn assign(&mut self, src: Value, other: Value) {
+        let thr = Thread::current();
+        unsafe {
+            debug_assert!(src.is_object());
+            if other.is_object() {
+                object_reference_write(
+                    thr.mutator(),
+                    transmute(src),
+                    transmute::<_, SimpleEdge>(self),
+                    transmute(other),
+                );
+            } else {
+                *self = other;
             }
         }
     }

@@ -34,6 +34,9 @@ pub enum TypeId {
     Complex,
     Bignum,
     HashTable,
+    HashTableRec,
+    WeakHashTable,
+    WeakHashTableRec
 }
 
 pub const HASH_STATE_UNHASHED: u8 = 0;
@@ -47,7 +50,7 @@ pub type Pad = [u8; 4];
 pub type Pad = [u8; 0];
 
 #[derive(Clone, Copy)]
-#[repr(C)]
+#[repr(C, packed)]
 pub struct Header {
     pub type_id: TypeId,
     pub pad: Pad,
