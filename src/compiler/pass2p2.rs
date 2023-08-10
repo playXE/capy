@@ -25,7 +25,7 @@ pub fn scan<const RESET_CALL: bool>(
 
             scan::<RESET_CALL>(&def.value, fs, bs, toplevel, labels)
         }
-        IForm::Label(label) =>{
+        IForm::Label(label) => {
             scan::<RESET_CALL>(&label.body, fs, bs, toplevel, labels);
         }
         IForm::LRef(lref) => {
@@ -72,11 +72,10 @@ pub fn scan<const RESET_CALL: bool>(
         IForm::Call(_) => {
             let mut iform = iform.clone();
             let IForm::Call(ref mut call) = &mut *iform else {
-                
                 unreachable!()
             };
             if RESET_CALL {
-                call.flag = CallFlag::None; // reset flag for pass2 
+                call.flag = CallFlag::None; // reset flag for pass2
             }
             scan::<RESET_CALL>(&call.proc, fs, bs, toplevel, labels);
             call.args.iter().for_each(|arg| {

@@ -2,6 +2,7 @@ use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+use crate::bytecode::encode::InstructionStream;
 use crate::bytecode::opcodes::CAPY_BYTECODE_MAGIC;
 use crate::bytecode::opcodes::OP_NOP;
 use crate::bytecode::u24::u24;
@@ -189,13 +190,12 @@ struct Env {
     next_local: u32,
 }
 
-pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &Vec<(P<Lambda>, usize)>) {
+pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &Vec<(P<Lambda>, usize)>, data_start: usize) {
     fn lookup_lexical(sym: P<LVar>, mut env: &P<Env>) -> P<Env> {
         loop {
             if sym.as_ptr() == env.id.as_ptr() {
                 return env.clone();
             }
-           
 
             env = env
                 .prev
@@ -348,6 +348,7 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &Vec<(P<La
     }
 
     struct State<'a> {
+        data_start: usize,
         frame_size: u32,
         labels: HashMap<P<IForm>, usize>,
         closures: &'a Vec<(P<Lambda>, usize)>,
@@ -518,6 +519,10 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &Vec<(P<La
                 asm.emit_global_ref(u24::new(dst as _), gref.name.unwrap_id());
             }
 
+            IForm::PrimRef(name) => {
+                asm.emit_global_ref(u24::new(dst as _), scm_intern(name));
+            }
+
             IForm::GSet(_) | IForm::Define(_) => {
                 for_effect(asm, exp, env, state);
                 asm.emit_make_immediate(dst as _, Value::encode_undefined_value().get_raw() as _);
@@ -565,7 +570,8 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &Vec<(P<La
             IForm::Label(label) => {
                 let pos = asm.code.len();
                 state.labels.insert(exp.clone(), pos);
-                asm.emit_loop_hint();
+                let off = state.data_start as i32 - asm.code.len() as i32;
+                asm.emit_loop_hint(off);
                 for_value_at(asm, &label.body, env, dst, state);
             }
 
@@ -610,6 +616,8 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &Vec<(P<La
                     }
                 }
             },
+
+            
 
             _ => todo!(),
         }
@@ -681,9 +689,10 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &Vec<(P<La
             IForm::Let(var) => visit_let(var, asm, env, Context::Effect, state),
             IForm::Const(_) | IForm::Lambda(_) | IForm::It | IForm::LRef(_) => None,
             IForm::Call(call) => {
-                let mut env = push_frame(env.clone());
+                let env = push_frame(env.clone());
+                let mut tmp = for_push(asm, &call.proc, &env, state);
                 for arg in call.args.iter() {
-                    env = for_push(asm, arg, &env, state);
+                    tmp = for_push(asm, arg, &tmp, state);
                 }
                 let proc_slot = stack_height(&env, state);
 
@@ -695,7 +704,8 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &Vec<(P<La
             IForm::Label(label) => {
                 let pos = asm.code.len();
                 state.labels.insert(exp.clone(), pos);
-                asm.emit_loop_hint();
+                let off = state.data_start as i32 - asm.code.len() as i32;
+                asm.emit_loop_hint(off);
                 for_effect(asm, &label.body, env, state)
             }
 
@@ -751,6 +761,14 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &Vec<(P<La
                 visit_let(var, asm, env, Context::Tail, state);
             }
             IForm::Call(call) => {
+                // FIXME: Improve parallel moves, right now we can have code like this:
+                // (make-immediate 3 <smth>)
+                // (make-immediate 2 <smth>)
+                // (mov 1 3)
+                // (mov 0 2)
+                // 
+                // Instead we should be able to directly create the immediate in the right place
+                // and this also can work for local variable references.
                 let base = stack_height(env, state);
                 let mut env = for_push(asm, &call.proc, env, state);
                 for arg in call.args.iter() {
@@ -774,7 +792,8 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &Vec<(P<La
             IForm::Label(label) => {
                 let pos = asm.code.len();
                 state.labels.insert(exp.clone(), pos);
-                asm.emit_loop_hint();
+                let off = state.data_start as i32 - asm.code.len() as i32;
+                asm.emit_loop_hint(off);
                 for_tail(asm, &label.body, env, state);
             }
             _ => {
@@ -809,11 +828,13 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &Vec<(P<La
         push_temp(env.clone())
     }
 
-    asm.emit_enter();
+    let off = data_start as i32 - (asm.code.len() as i32 + 5);
+    asm.emit_enter(off);
     let size = compute_frame_size(lam.clone());
     asm.emit_prelude(lam.reqargs + 1, lam.optarg, size);
     let env = create_initial_env(&lam.lvars, &lam.free_lvars, size as _);
     let mut state = State {
+        data_start,
         labels: HashMap::new(),
         closures,
         frame_size: size as _,
@@ -823,6 +844,7 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &Vec<(P<La
 
 pub fn compile_bytecode(exp: P<IForm>, output: &mut Vec<u8>) {
     let mut asm = Assembler::new();
+
     let closures = scan_toplevel::<false>(exp.clone())
         .iter()
         .map(|iform| {
@@ -864,14 +886,34 @@ pub fn compile_bytecode(exp: P<IForm>, output: &mut Vec<u8>) {
         optarg: bool,
         name: Value,
     }
-
     let mut closure_data = Vec::new();
 
     for (closure, label) in closures.iter() {
+        let data_pos = asm.code.len();
+
+        /* mcode start */
+        asm.write_u32(0);
+        asm.write_u32(0);
+        /* mcode end */
+        asm.write_u32(0); // counter
+        let start_pos = asm.code.len();
+        asm.write_u32(0); // start
+        let end_pos = asm.code.len();
+        asm.write_u32(0); // end
+
         let pos = asm.code.len();
-        compile_closure(&mut asm, closure.clone(), &closures);
+        compile_closure(&mut asm, closure.clone(), &closures, data_pos);
         let end = asm.code.len();
+        
+        let diff_start = pos as i32 - data_pos as i32;
+        let diff_end = end as i32 - data_pos as i32;
+
+        asm.code[start_pos..start_pos + 4].copy_from_slice(&diff_start.to_le_bytes());
+        asm.code[end_pos..end_pos + 4].copy_from_slice(&diff_end.to_le_bytes());
+        
         actual_locations.insert(*label, pos);
+
+
         closure_data.push(Data {
             start: pos,
             end,
@@ -883,6 +925,7 @@ pub fn compile_bytecode(exp: P<IForm>, output: &mut Vec<u8>) {
                 .map(|x| scm_intern(x))
                 .unwrap_or(Value::encode_null_value()),
         });
+
     }
 
     while let Some(reloc) = asm.relocs.pop() {
@@ -907,30 +950,26 @@ pub fn compile_bytecode(exp: P<IForm>, output: &mut Vec<u8>) {
         let (constant, closure_ix) = asm.patch_programs[i];
         let label = actual_locations[&(closure_ix as usize)];
         asm.constants[constant as usize] = Sexpr::Program(label as _);
-    }   
-
+    }
 
     let constants = Sexpr::Vector(P(std::mem::take(&mut asm.constants)));
-    let data = Sexpr::Vector(P(closure_data
-        .into_iter()
-        .map(|data| {
-            Sexpr::Vector(P(vec![
-                Sexpr::Fixnum(data.start as _),
-                Sexpr::Fixnum(data.end as _),
-                Sexpr::Fixnum(data.nargs as _),
-                Sexpr::Boolean(data.optarg),
-                if data.name.is_null() {
-                    Sexpr::Null
-                } else {
-                    Sexpr::Symbol(data.name)
-                },
-            ]))
-        })
-        .collect::<Vec<Sexpr>>()));
+    let data = closure_data.iter().map(|data| {
+        Sexpr::Vector(P(vec![
+            Sexpr::Fixnum(data.start as _),
+            Sexpr::Fixnum(data.end as _),
+            Sexpr::Fixnum(data.nargs as _),
+            Sexpr::Boolean(data.optarg),
+            if data.name.is_null() {
+                Sexpr::Null 
+            } else {
+                Sexpr::Symbol(data.name)
+            },
+        ]))
+    }).collect::<Vec<_>>();
     let label = actual_locations[&toplevel_ix];
     let entrypoint = Sexpr::Program(label as _);
 
-    let data_section = Sexpr::Vector(P(vec![constants, data, entrypoint]));
+    let data_section = Sexpr::Vector(P(vec![constants, Sexpr::Vector(P(data)), entrypoint]));
 
     output.reserve(asm.code.len() + 8 + 128);
     output.extend_from_slice(&CAPY_BYTECODE_MAGIC.to_le_bytes());
@@ -1080,19 +1119,19 @@ static PRIMITIVES: Lazy<HashMap<&'static str, Primitive>> = Lazy::new(|| {
         })
 
         (".car:pair", 1, false, true, asm, args => {
-            asm.emit_car(args[0], args[1])
+            asm.emit_car(args[0] as _, args[1] as _)
         })
 
         (".cdr:pair", 1, false ,true, asm, args => {
-            asm.emit_cdr(args[0], args[1])
+            asm.emit_cdr(args[0] as _, args[1] as _)
         })
 
         ("car", 1, false, true, asm, args => {
-            asm.emit_car(args[0], args[1])
+            asm.emit_car(args[0] as _, args[1] as _)
         })
 
         ("cdr", 1, false ,true, asm, args => {
-            asm.emit_cdr(args[0], args[1])
+            asm.emit_cdr(args[0] as _, args[1] as _)
         })
     );
 

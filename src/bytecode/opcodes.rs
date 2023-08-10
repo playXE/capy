@@ -1,3 +1,6 @@
+use crate::runtime::object::ScmProgram;
+use crate::runtime::value::Value;
+
 use super::encode::*;
 use super::u24::*;
 
@@ -6,9 +9,9 @@ macro_rules! for_each_opcode {
     ($m: path) => {
         $m! {
             (op_halt, "halt", {})
-            (op_enter, "enter", {})
+            (op_enter, "enter", { offset: i32 })
             // tells interpreter that we're in loop, might enter JITed code from here.
-            (op_loop_hint, "loop-hint", {})
+            (op_loop_hint, "loop-hint", { offset: i32 })
             (op_nop, "nop", {})
             // Call a procedure. `proc` is the local corresponding to a procedure.
             // The three values below `proc` will be overwritten by the saved call
@@ -149,6 +152,7 @@ macro_rules! for_each_opcode {
 
             (op_car, "car", { dst: u16, src: u16 })
             (op_cdr, "cdr", { dst: u16, src: u16 })
+            (op_bind_optionals, "bind-optionals", { nargs: u24 })
         }
     };
 }
@@ -297,7 +301,12 @@ pub fn disassemble<const ADDR_INSN: bool>(vcode: &[u8]) {
                     if !ADDR_INSN {
                         out.push_str(&format!("(jnz {} {}) ; => {}", j.src(), j.offset(), diff));
                     } else {
-                        out.push_str(&format!("(jnz {} {}) ; => {:p}", j.src(), j.offset(), target));
+                        out.push_str(&format!(
+                            "(jnz {} {}) ; => {:p}",
+                            j.src(),
+                            j.offset(),
+                            target
+                        ));
                     }
                 }
 
@@ -309,7 +318,12 @@ pub fn disassemble<const ADDR_INSN: bool>(vcode: &[u8]) {
                     if !ADDR_INSN {
                         out.push_str(&format!("(jz {} {}) ; => {}", j.src(), j.offset(), diff));
                     } else {
-                        out.push_str(&format!("(jz {} {}) ; => {:p}", j.src(), j.offset(), target));
+                        out.push_str(&format!(
+                            "(jz {} {}) ; => {:p}",
+                            j.src(),
+                            j.offset(),
+                            target
+                        ));
                     }
                 }
                 op if op == OP_MAKE_IMMEDIATE => {
@@ -361,3 +375,37 @@ pub fn disassemble<const ADDR_INSN: bool>(vcode: &[u8]) {
 }
 
 pub const CAPY_BYTECODE_MAGIC: u32 = 0x43504330;
+
+#[repr(C, packed)]
+pub struct JITFunctionData {
+    pub mcode: u64,
+    pub counter: u32,
+    pub start: i32,
+    pub end: i32,
+}
+
+pub fn disassemble_program(value: Value) {
+    if !value.is_program() {
+        panic!("not a program");
+    }
+
+    let vcode = value.cast_as::<ScmProgram>().vcode;
+
+    unsafe {
+        let first = vcode.read();
+        if first != OP_ENTER {
+            eprintln!("<no data>");
+        } else {
+            let offset = vcode.add(1).cast::<i32>().read();
+            let data = vcode.add(5).offset(offset as isize).cast::<JITFunctionData>();
+
+            let start = (*data).start;
+            let end = (*data).end;
+            let vcode_start = data.cast::<u8>().offset(start as _);
+            let vcode_end = data.cast::<u8>().offset(end as _);
+            let vcode_len = vcode_end.offset_from(vcode_start) as usize;
+            let vcode: &[u8] = std::slice::from_raw_parts(vcode_start, vcode_len);
+            disassemble::<true>(vcode)
+        }
+    }
+}

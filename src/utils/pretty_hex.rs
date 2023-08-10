@@ -109,15 +109,14 @@ impl HexConfig {
 
 const NON_ASCII: char = '.';
 
-
 type AddressWriter = dyn Fn(&mut dyn fmt::Write, usize) -> fmt::Result;
 
-fn get_address_writer(max_addr: usize) -> &'static AddressWriter{
+fn get_address_writer(max_addr: usize) -> &'static AddressWriter {
     match max_addr {
         0x0000..=0xffff => &|w: &mut dyn fmt::Write, a| write!(w, "{:04x}:   ", a),
-        0x010000..=0xffffff => &|w: &mut dyn fmt::Write, a|  write!(w, "{:06x}:   ", a),
-        0x01000000..=0xffffffff => &|w: &mut dyn fmt::Write, a|  write!(w, "{:08x}:   ", a),
-        _ => &|w: &mut dyn fmt::Write, a|  write!(w, "{:016x}:   ", a)
+        0x010000..=0xffffff => &|w: &mut dyn fmt::Write, a| write!(w, "{:06x}:   ", a),
+        0x01000000..=0xffffffff => &|w: &mut dyn fmt::Write, a| write!(w, "{:08x}:   ", a),
+        _ => &|w: &mut dyn fmt::Write, a| write!(w, "{:016x}:   ", a),
     }
 }
 

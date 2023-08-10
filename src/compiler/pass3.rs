@@ -8,7 +8,6 @@ use super::{tree_il::IForm, P};
 /// until no further optimization can be possible.  However, compilation
 /// speed is also important for Capy, so we just run this pass once.)
 
-
 pub fn pass3_rec(iform: P<IForm>, changed: &mut bool) -> P<IForm> {
     let _ = changed;
     iform

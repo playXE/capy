@@ -151,6 +151,10 @@ impl ObjectModel<CapyVM> for ScmObjectModel {
                     len as usize * size_of::<Value>() + size_of::<ScmProgram>()
                 }
 
+                TypeId::GLOC => {
+                    size_of::<ScmGloc>()
+                }
+
                 _ => unreachable!(),
             },
             8,
@@ -238,7 +242,7 @@ impl ActivePlan<CapyVM> for ScmActivePlan {
 pub struct ScmCollection;
 
 impl Collection<CapyVM> for ScmCollection {
-    fn stop_all_mutators<F>(_: mmtk::util::VMWorkerThread, _mutator_visitor: F)
+    fn stop_all_mutators<F>(_: mmtk::util::VMWorkerThread, mut mutator_visitor: F)
     where
         F: FnMut(&'static mut mmtk::Mutator<CapyVM>),
     {
@@ -246,12 +250,13 @@ impl Collection<CapyVM> for ScmCollection {
             // Sets safepoint page to `PROT_NONE` and waits for all threads to enter safepoint.
             // Some threads might enter without signal handler e.g when invoking `lock()` on Mutexes.
             let mutators = SafepointSynchronize::begin();
-            /*for &mutator in mutators
+            for &mutator in mutators
                 .iter()
                 .filter(|&&x| (*x).kind == ThreadKind::Mutator)
             {
+                (*mutator).flush_cleaner_queue_in_gc();
                 mutator_visitor((*mutator).mutator.assume_init_mut());
-            }*/
+            }
             scm_virtual_machine().gc_counter += 1;
             scm_virtual_machine().safepoint_lock_data = Some(transmute(mutators));
         }
@@ -315,16 +320,7 @@ impl Collection<CapyVM> for ScmCollection {
         }
     }
 
-    fn prepare_mutator<T: mmtk::MutatorContext<CapyVM>>(
-        _tls_worker: mmtk::util::VMWorkerThread,
-        tls_mutator: mmtk::util::VMMutatorThread,
-        _m: &T,
-    ) {
-        unsafe {
-            let thread: &mut Thread = transmute(tls_mutator);
-            thread.flush_cleaner_queue_in_gc();
-        }
-    }
+
 }
 
 pub struct ScmReferenceGlue;
@@ -423,46 +419,13 @@ impl Scanning<CapyVM> for ScmScanning {
                 }
             }
 
-            /*TypeId::HashTable => {
-                let htable = Value::encode_object_value(reference);
-                let mut htable = htable.get_object();
-                let htable = htable.cast_as::<ScmHashTable>();
 
-                // set "rehash" flag for hashtable, it will be rehashed at mutator time
-                // on next hashtable access.
-                htable.rehash = true;
-                htable.datum.visit_edge(edge_visitor);
-                htable.handlers.visit_edge(edge_visitor);
-            }*/
             _ => (),
         }
     }
 
     fn notify_initial_thread_scan_complete(_partial_scan: bool, _tls: mmtk::util::VMWorkerThread) {}
-
-    fn scan_roots_in_all_mutator_threads(
-        _: mmtk::util::VMWorkerThread,
-        mut factory: impl RootsWorkFactory<<CapyVM as VMBinding>::VMEdge>,
-    ) {
-        unsafe {
-            for &mutator in threads().iter_unlocked() {
-                let mutator = &mut *mutator;
-                if mutator.kind == ThreadKind::Mutator {
-                    let mut edges = vec![];
-                    visit_roots(mutator.stackchain, &mut edges);
-                    for handle in mutator.handles.assume_init_ref().iterate_for_gc() {
-                        let edge = SimpleEdge::from_address(handle.location());
-                        edges.push(edge);
-                    }
-
-                    let interp = mutator.interpreter();
-                    interp.mark_stack_for_roots(&mut factory);
-
-                    factory.create_process_edge_roots_work(edges);
-                }
-            }
-        }
-    }
+    
 
     fn scan_vm_specific_roots(
         _tls: mmtk::util::VMWorkerThread,
@@ -494,15 +457,15 @@ impl Scanning<CapyVM> for ScmScanning {
     fn scan_roots_in_mutator_thread(
         _tls: mmtk::util::VMWorkerThread,
         mutator: &'static mut mmtk::Mutator<CapyVM>,
-        _factory: impl RootsWorkFactory<<CapyVM as VMBinding>::VMEdge>,
+        mut factory: impl RootsWorkFactory<<CapyVM as VMBinding>::VMEdge>,
     ) {
-        /*unsafe {
+        unsafe {
             let tls = mutator.get_tls();
             if tls.0 .0.is_null() {
                 return;
             }
             let tls: &'static mut Thread = transmute(tls);
-
+            println!("scan {:p}", tls);
             let mut edges = vec![];
             visit_roots(tls.stackchain, &mut edges);
 
@@ -510,10 +473,9 @@ impl Scanning<CapyVM> for ScmScanning {
                 let edge = SimpleEdge::from_address(handle.location());
                 edges.push(edge);
             }
-            edges.dedup_by(|a, b| a.as_address() == b.as_address());
-            println!("{:?}", edges);
+            tls.interpreter().mark_stack_for_roots(&mut factory);
             factory.create_process_edge_roots_work(edges);
-        }*/
+        }
     }
 
     fn supports_return_barrier() -> bool {

@@ -18,11 +18,11 @@ use self::{
 
 pub mod factory;
 pub mod intrinsics;
+pub mod options;
 pub mod safepoint;
 pub mod signals;
 pub mod sync;
 pub mod thread;
-pub mod options;
 
 pub static BOOT_CONTINUATION_CODE: &'static [u8] = &[OP_HALT];
 

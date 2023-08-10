@@ -36,7 +36,6 @@ pub enum TypeId {
     HashTable,
 }
 
-
 pub const HASH_STATE_UNHASHED: u8 = 0;
 pub const HASH_STATE_HASHED: u8 = 1;
 pub const HASH_STATE_HASHED_AND_MOVED: u8 = 2;
@@ -67,9 +66,7 @@ impl ScmCellHeader {
     }
 
     pub fn hash_state(self) -> u8 {
-        unsafe {
-            HashStateSpec::decode(self.as_word) as u8 
-        }
+        unsafe { HashStateSpec::decode(self.as_word) as u8 }
     }
 
     pub fn set_hash_state(&mut self, state: u8) {
@@ -77,8 +74,6 @@ impl ScmCellHeader {
             self.as_word = HashStateSpec::update(state as _, self.as_word);
         }
     }
-
-
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd)]
@@ -253,7 +248,12 @@ pub fn scm_set_cdr(cell: Value, thread: &mut Thread, value: Value) {
 pub fn scm_vector_ref(vector: Value, index: u32) -> Value {
     debug_assert!(vector.is_vector());
     unsafe {
-        debug_assert!(index < vector.get_object().cast_as::<ScmVector>().length as u32, "index out of bounds: {} >= {}", index, vector.get_object().cast_as::<ScmVector>().length as u32);
+        debug_assert!(
+            index < vector.get_object().cast_as::<ScmVector>().length as u32,
+            "index out of bounds: {} >= {}",
+            index,
+            vector.get_object().cast_as::<ScmVector>().length as u32
+        );
         vector
             .get_object()
             .cast_as::<ScmVector>()
@@ -364,7 +364,12 @@ pub fn scm_program_num_free_vars(program: Value) -> u32 {
 pub fn scm_program_free_variable(program: Value, index: u32) -> Value {
     debug_assert!(program.is_program());
     unsafe {
-        debug_assert!(index < program.get_object().cast_as::<ScmProgram>().nfree as u32, "index out of bounds: {} >= {}", index, program.get_object().cast_as::<ScmProgram>().nfree as u32);
+        debug_assert!(
+            index < program.get_object().cast_as::<ScmProgram>().nfree as u32,
+            "index out of bounds: {} >= {}",
+            index,
+            program.get_object().cast_as::<ScmProgram>().nfree as u32
+        );
         program
             .get_object()
             .cast_as::<ScmProgram>()

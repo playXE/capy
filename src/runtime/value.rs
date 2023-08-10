@@ -7,7 +7,10 @@ use mmtk::{
 
 use crate::runtime::object::*;
 
-use super::{pure_nan::{pure_nan, purify_nan}, object::TypeId};
+use super::{
+    object::TypeId,
+    pure_nan::{pure_nan, purify_nan},
+};
 
 #[derive(Clone, Copy)]
 #[repr(transparent)]
@@ -319,7 +322,7 @@ impl Into<Value> for f64 {
 }
 
 impl Value {
-    pub fn visit_edge<ES: EdgeVisitor<SimpleEdge>>(&mut self, visitor: &mut ES) {
+    pub fn visit_edge<EV: EdgeVisitor<SimpleEdge>>(&mut self, visitor: &mut EV) {
         if self.is_object() {
             // Pointers in Value are transparent, we can directly pass them as edge
             visitor.visit_edge(SimpleEdge::from_address(Address::from_mut_ptr(self)));

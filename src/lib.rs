@@ -1,9 +1,9 @@
 #![feature(thread_local, offset_of, core_intrinsics)]
 pub mod bytecode;
+pub mod bytecodeassembler;
 pub mod compiler;
 pub mod gc;
+pub mod interpreter;
 pub mod runtime;
 pub mod utils;
 pub mod vm;
-pub mod interpreter;
-pub mod bytecodeassembler;

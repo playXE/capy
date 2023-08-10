@@ -177,7 +177,6 @@ impl<'a, W: std::io::Write> FASLPrinter<'a, W> {
             Sexpr::Pair(_) => {
                 self.put_list(obj)?;
             }
-            
 
             _ => (),
         }

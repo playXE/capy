@@ -20,6 +20,7 @@ use self::stackframe::{
     set_frame_machine_return_address, set_frame_virtual_return_address, StackElement,
 };
 
+pub mod llint;
 pub mod engine;
 pub mod stackframe;
 
@@ -30,10 +31,11 @@ pub struct InterpreterState {
     pub ip: *const u8,
     pub sp: *mut StackElement,
     pub fp: *mut StackElement,
+    pub entry_fp: *mut StackElement,
+    pub prev_fp: *mut StackElement,
+    pub prev_entry_fp: *mut StackElement,
     pub stack_limit: *mut StackElement,
-
-    /// Flags register
-    pub compare_result: Option<std::cmp::Ordering>,
+    
     /// Disable JIT
     pub disable_mcode: u8,
     pub stack_size: usize,
@@ -60,8 +62,11 @@ impl InterpreterState {
             ip: null(),
             sp: null_mut(),
             fp: null_mut(),
+            prev_entry_fp: null_mut(),
+            prev_fp: null_mut(),
+            entry_fp: null_mut(),
             stack_limit: null_mut(),
-            compare_result: None,
+            
             disable_mcode: 0,
             stack_size: 0,
             stack_bottom: null_mut(),
@@ -86,7 +91,6 @@ impl InterpreterState {
             while sp < fp {
                 let value = sp.cast::<Value>();
                 if (*value).is_object() {
-                  
                     let edge = SimpleEdge::from_address(Address::from_ptr(value));
                     edges.push(edge);
                 }
@@ -154,7 +158,6 @@ impl InterpreterState {
         self.ip = null();
         self.fp = self.stack_top;
         self.sp = self.stack_top;
-        self.compare_result = None;
     }
 
     pub unsafe fn push_sp(&mut self, new_sp: *mut StackElement) {
@@ -198,6 +201,11 @@ pub fn scm_call_n(thread: &mut Thread, proc: Value, args: &[Value]) -> Result<Va
     call.  */
     let stack_reserve_words = call_nlocals + frame_size + return_nlocals + frame_size;
     unsafe {
+        let save_prev_fp = thread.interpreter().prev_fp;
+        let save_prev_entry_fp = thread.interpreter().prev_entry_fp;
+
+        thread.interpreter().prev_fp = thread.interpreter().fp;
+        thread.interpreter().prev_entry_fp = thread.interpreter().entry_fp;
         let new_sp = thread.interpreter().sp.sub(stack_reserve_words);
         thread.interpreter().push_sp(new_sp);
         let call_fp = thread.interpreter().sp.add(call_nlocals);
@@ -215,11 +223,11 @@ pub fn scm_call_n(thread: &mut Thread, proc: Value, args: &[Value]) -> Result<Va
         *frame_local(call_fp, 0) = proc;
 
         for i in 0..args.len() {
-            *frame_local(call_fp, i as isize + 1) = args[i];
+            *frame_local(call_fp, i + 1) = args[i];
         }
-       
-        thread.interpreter().fp = call_fp;
 
+        thread.interpreter().fp = call_fp;
+        thread.interpreter().entry_fp = return_fp;
         {
             let call = AssertUnwindSafe(|| {
                 thread.interpreter().ip = get_callee_vcode(thread);
@@ -228,7 +236,10 @@ pub fn scm_call_n(thread: &mut Thread, proc: Value, args: &[Value]) -> Result<Va
             });
 
             let result = std::panic::catch_unwind(|| call());
-
+            thread.interpreter().fp = thread.interpreter().prev_fp;
+            thread.interpreter().entry_fp = thread.interpreter().prev_entry_fp;
+            thread.interpreter().prev_fp = save_prev_fp;
+            thread.interpreter().prev_entry_fp = save_prev_entry_fp;
             match result {
                 Ok(val) => return Ok(val),
                 Err(err) => {

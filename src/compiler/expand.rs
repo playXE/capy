@@ -4,6 +4,8 @@
 
 use std::collections::HashMap;
 
+use once_cell::sync::Lazy;
+
 use crate::{
     compiler::{
         identifier_to_symbol,
@@ -11,7 +13,7 @@ use crate::{
         synrules::{compile_syntax_rules, synrule_expand},
         unwrap_identifier, Denotation,
     },
-    runtime::{object::scm_symbol_str, symbol::scm_intern, value::Value},
+    runtime::{object::scm_symbol_str, symbol::scm_intern, value::Value}, vm::sync::mutex::Mutex,
 };
 
 use super::{make_identifier, sexpr::Sexpr, tree_il::*, unmangled, Cenv, SyntaxEnv, P};
@@ -382,17 +384,9 @@ pub fn define_syntax() -> P<SyntaxEnv> {
             let value = pass1(&val, cenv)?;
 
             if let Sexpr::LVar(lvar) = var {
-                Ok(P(IForm::LSet(
-                    LSet {
-                        lvar,
-                        value,
-                    },
-                )))   
+                Ok(P(IForm::LSet(LSet { lvar, value })))
             } else {
-                Ok(P(IForm::GSet(GSet {
-                    name: var,
-                    value,
-                })))
+                Ok(P(IForm::GSet(GSet { name: var, value })))
             }
         } else {
             Err(format!("illegal set!: {}", form))
@@ -659,10 +653,7 @@ pub fn define_syntax() -> P<SyntaxEnv> {
         };
 
         let id = if let Sexpr::Identifier(mut id) = name {
-            let sym = Sexpr::Gensym(P(scm_symbol_str(
-                unwrap_identifier(id.clone()),
-            )
-            .to_string()));
+            let sym = Sexpr::Gensym(P(scm_symbol_str(unwrap_identifier(id.clone())).to_string()));
             id.name = sym;
             id
         } else {
@@ -793,10 +784,7 @@ fn pass1_define(form: Sexpr, oform: Sexpr, cenv: &Cenv) -> Result<P<IForm>, Stri
         }
 
         let id = if let Sexpr::Identifier(mut id) = name {
-            let sym = Sexpr::Gensym(P(scm_symbol_str(
-                unwrap_identifier(id.clone()),
-            )
-            .to_string()));
+            let sym = Sexpr::Gensym(P(scm_symbol_str(unwrap_identifier(id.clone())).to_string()));
             id.name = sym;
             id
         } else {
@@ -806,9 +794,7 @@ fn pass1_define(form: Sexpr, oform: Sexpr, cenv: &Cenv) -> Result<P<IForm>, Stri
         let mut value = pass1(&value, cenv)?;
 
         if let IForm::Lambda(ref mut lam) = &mut *value {
-            lam.name = Some(
-                unmangled(scm_symbol_str(unwrap_identifier(id.clone()))).to_string(),
-            );
+            lam.name = Some(unmangled(scm_symbol_str(unwrap_identifier(id.clone()))).to_string());
         }
 
         Ok(P(IForm::Define(Define {
@@ -1171,4 +1157,29 @@ fn pass1_body_rest(exprs: Sexpr, cenv: &Cenv) -> Result<P<IForm>, String> {
 
         Ok(P(IForm::Seq(Seq { forms: seq })))
     }
+}
+
+struct Expander {
+    env: P<SyntaxEnv>
+}
+
+unsafe impl Send for Expander {}
+
+static EXPANDER: Lazy<Mutex<Expander>> = Lazy::new(|| {
+    Mutex::new(Expander {
+        env: define_syntax()
+    })
+});
+
+pub fn expand_default(expr: &Sexpr) -> Result<P<IForm>, String> {
+    let expander = EXPANDER.lock(true);
+
+    let res = pass1(expr, &Cenv {
+        syntax_env: expander.env.clone(),
+        frames: Sexpr::Null,
+    });
+
+    drop(expander);
+
+    res
 }

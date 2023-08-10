@@ -99,7 +99,8 @@ impl Environment {
         scm_set_cdr(kv, thread, *value);
 
         gc_frame!(thread.stackchain() => kv = kv);
-        let bucket = thread.make_cons::<false>(Value::encode_null_value(), Value::encode_null_value());
+        let bucket =
+            thread.make_cons::<false>(Value::encode_null_value(), Value::encode_null_value());
         scm_set_car(bucket, thread, *kv);
         scm_set_cdr(
             bucket,
@@ -114,9 +115,19 @@ impl Environment {
         if let Some(val) = self.get(key) {
             val
         } else {
-            let gloc = thread.make_gloc(key, Value::encode_undefined_value());
+            gc_frame!(thread.stackchain() => key = key);
+            let gloc = thread.make_gloc(Value::encode_null_value(), Value::encode_undefined_value());
+            let key = *key;
+            gloc.cast_as::<ScmGloc>().name = key;
             self.set(thread, key, gloc);
             gloc
         }
     }
+}
+
+pub fn scm_define(name: Value, value: Value) {
+    gc_frame!(Thread::current().stackchain() => value = value);
+    let cell = scm_virtual_machine().toplevel_environment.lock(true).get_cell(Thread::current(), name);
+    scm_gloc_set(cell, Thread::current(), *value);
+
 }

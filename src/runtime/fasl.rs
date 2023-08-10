@@ -56,7 +56,7 @@ impl<'a, const IMMORTAL: bool, R: std::io::Read + AsRef<[u8]>> FASLReader<'a, IM
         let count = self.read_u32()?;
         self.lites = HashMap::with_capacity(count as _);
         let mut buf = vec![0u8; 256];
-       
+
         for _ in 0..count {
             let tag = self.read_u8()?;
             let uid = self.read_u32()?;
@@ -72,12 +72,10 @@ impl<'a, const IMMORTAL: bool, R: std::io::Read + AsRef<[u8]>> FASLReader<'a, IM
             })?;
             match tag {
                 x if x == TypeId::Symbol as u8 => {
-                  
                     self.lites.insert(uid, scm_intern(str));
                 }
 
                 x if x == TypeId::String as u8 => {
-                  
                     // allocate string in immortal space, it cannot be garbage collected.
                     let str = Thread::current().make_string::<true>(str);
                     self.lites.insert(uid, str);
@@ -97,7 +95,7 @@ impl<'a, const IMMORTAL: bool, R: std::io::Read + AsRef<[u8]>> FASLReader<'a, IM
 
     pub fn get_datum(&mut self) -> std::io::Result<Value> {
         let tag = self.read_u8()?;
-        
+
         match tag {
             TAG_LOOKUP => {
                 let uid = self.read_u32()?;
@@ -168,18 +166,17 @@ impl<'a, const IMMORTAL: bool, R: std::io::Read + AsRef<[u8]>> FASLReader<'a, IM
             }
 
             x if x == TypeId::Vector as u8 => {
-                
                 let len = self.read_u32()?;
-                
+
                 let t = Thread::current();
                 let v = t.make_vector::<IMMORTAL>(len as _, Value::encode_null_value());
-               
+
                 gc_frame!(t.stackchain() => v = v);
                 for i in 0..len {
                     let datum = self.get_datum()?;
                     scm_vector_set(*v, t, i, datum);
                 }
-                
+
                 return Ok(*v);
             }
 

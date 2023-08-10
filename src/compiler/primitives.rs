@@ -94,6 +94,8 @@ pub const INTERESTING_PRIMTIIVE_NAMES: &[&str] = &[
     "vector",
     "car",
     "cdr",
+    ".car:pair",
+    ".cdr:pair",
     "set-car!",
     "set-cdr!",
     "make-box",

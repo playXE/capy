@@ -3,7 +3,7 @@ use crate::{
     gc::virtual_memory::{PlatformVirtualMemory, VirtualMemory},
     runtime::{
         fasl::FASLReader,
-        object::{scm_vector_length, scm_vector_ref, ScmProgram, scm_symbol_str},
+        object::{scm_symbol_str, scm_vector_length, scm_vector_ref, ScmProgram},
         symbol::scm_intern,
         value::Value,
     },
@@ -16,7 +16,7 @@ use mmtk::{
 };
 use std::{io::Cursor, mem::transmute, sync::Arc};
 
-use super::opcodes::{CAPY_BYTECODE_MAGIC, disassemble};
+use super::opcodes::{disassemble, CAPY_BYTECODE_MAGIC};
 
 pub struct DebugEntry {
     pub funcname: u32,
@@ -46,11 +46,11 @@ impl Image {
     }
 
     pub fn disassemble(&self) {
-       println!("Image at {:p}", self);
-       println!("Code section:");
+        println!("Image at {:p}", self);
+        println!("Code section:");
         for i in 0..scm_vector_length(self.data) {
             let data = scm_vector_ref(self.data, i);
-            
+
             let start = scm_vector_ref(data, 0).get_int32();
             let end = scm_vector_ref(data, 1).get_int32();
             let nargs = scm_vector_ref(data, 2);
@@ -73,16 +73,11 @@ impl Image {
                 );
                 disassemble::<true>(code);
             }
-
-            
         }
         //println!("Constants section:");
-        {   
-            for _ in 0..scm_vector_length(self.constants) {
-                
-            }
+        {
+            for _ in 0..scm_vector_length(self.constants) {}
         }
-
     }
 }
 
@@ -100,18 +95,18 @@ pub fn load_image_from_memory(
         let code_len = u32::from_le_bytes([memory[4], memory[5], memory[6], memory[7]]) as usize;
 
         let code = memory[8..8 + code_len].to_vec();
-        
+
         let constants = &memory[8 + code_len..];
-        
+
         let mut cursor = Cursor::new(constants);
         let mut reader = FASLReader::<true, _>::new(&mut cursor, Some(&code));
         reader.get_lites().unwrap();
         let section = reader.get_datum().unwrap();
-       
+
         let constants = scm_vector_ref(section, 0);
         let data = scm_vector_ref(section, 1);
         let entry_program = scm_vector_ref(section, 2);
-        
+
         for program in reader.programs.iter_mut() {
             let edge = SimpleEdge::from_address(Address::from_mut_ptr(
                 &mut program.cast_as::<ScmProgram>().constants,
@@ -123,8 +118,11 @@ pub fn load_image_from_memory(
                 edge,
                 transmute(constants),
             );
-          
-            assert!(program.cast_as::<ScmProgram>().constants == constants && program.cast_as::<ScmProgram>().constants.is_vector());
+
+            assert!(
+                program.cast_as::<ScmProgram>().constants == constants
+                    && program.cast_as::<ScmProgram>().constants.is_vector()
+            );
         }
 
         let image = Arc::new(Image {

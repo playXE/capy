@@ -196,7 +196,7 @@ impl Thread {
         let queue = unsafe { self.local_finalization_queue.assume_init_mut() };
         // Flush queue to global queue
         let vm = scm_virtual_machine();
-    
+
         let mut global = vm.finalization_registry.lock(false);
         global.extend(queue.drain(..));
     }

@@ -9,9 +9,9 @@ pub mod loops;
 pub mod pass2;
 pub mod pass2p2;
 pub mod pass3;
+pub mod primitives;
 pub mod synrules;
 pub mod tree_il;
-pub mod primitives;
 
 use std::collections::HashMap;
 

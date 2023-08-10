@@ -1,10 +1,10 @@
-use std::{mem::ManuallyDrop, ptr::NonNull, hash::Hash};
+use std::{hash::Hash, mem::ManuallyDrop, ptr::NonNull};
 
 #[repr(C)]
 struct Inner<T> {
     weak: u32,
     rc: u32,
-    
+
     value: ManuallyDrop<T>,
 }
 
@@ -60,11 +60,9 @@ impl<T> Clone for P<T> {
 impl<T> Drop for P<T> {
     fn drop(&mut self) {
         unsafe {
-          
             self.inner.as_mut().rc -= 1;
-            
+
             if self.inner.as_ref().rc == 0 {
-              
                 // destroy the contained object
                 ManuallyDrop::drop(&mut self.inner.as_mut().value);
 
@@ -115,7 +113,6 @@ impl<T: PartialEq> PartialEq for P<T> {
 
 impl<T: Eq> Eq for P<T> {}
 
-
 impl<T> AsRef<T> for P<T> {
     fn as_ref(&self) -> &T {
         self.get()
@@ -160,7 +157,6 @@ impl<T> Weak<T> {
 impl<T> Clone for Weak<T> {
     fn clone(&self) -> Self {
         unsafe {
-            
             self.inner.as_ptr().as_mut().unwrap().weak += 1;
         }
         Self { inner: self.inner }
@@ -170,7 +166,6 @@ impl<T> Clone for Weak<T> {
 impl<T> Drop for Weak<T> {
     fn drop(&mut self) {
         unsafe {
-           
             self.inner.as_mut().weak -= 1;
             if self.inner.as_ref().weak == 0 {
                 println!("ded");

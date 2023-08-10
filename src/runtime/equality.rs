@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 
-use super::{object::scm_symbol_str, value::Value};
+use super::{object::*, value::Value};
 
 pub fn eqv(a: Value, b: Value) -> bool {
     if a.is_double() && b.is_double() {
@@ -16,23 +16,92 @@ pub fn eq(a: Value, b: Value) -> bool {
     a == b
 }
 
-pub fn scm_compare(a: Value, b: Value) -> Result<Option<Ordering>, ()> {
-   loop {
+pub fn scm_compare(a: Value, b: Value) -> Option<Ordering> {
+    loop {
         if a.type_of() != b.type_of() {
-            return Err(());
+            return None;
         }
 
         if a.is_inline_number() && b.is_inline_number() {
             if a.is_int32() && b.is_int32() {
-                return Ok(Some(a.get_int32().cmp(&b.get_int32())));
+                return Some(a.get_int32().cmp(&b.get_int32()));
             } else {
                 let a = a.get_number();
                 let b = b.get_number();
-                return Ok(a.partial_cmp(&b));
+                return a.partial_cmp(&b);
             }
+        } else if a.is_string() && b.is_string() {
+            return Some(scm_symbol_str(a).cmp(&scm_symbol_str(b)));
+        
         } else {
-            return Ok(None)
+            return if a == b {
+                Some(Ordering::Equal)
+            } else {
+                None
+            }
+        }
+    }
+}
+
+pub fn equal(mut a: Value, mut b: Value) -> bool {
+    'top: loop {
+        if a == b {
+            return true;
         }
 
+        if a.is_pair() {
+            if b.is_pair() {
+                if equal(scm_car(a), scm_car(b)) {
+                    a = scm_cdr(a);
+                    b = scm_cdr(b);
+                    continue 'top;
+                }
+            }
+
+            return false;
+        }
+
+        if a.is_vector() {
+            if b.is_vector() {
+                if scm_vector_length(a) != scm_vector_length(b) {
+                    return false;
+                }
+
+                for i in 0..scm_vector_length(a) {
+                    if !equal(scm_vector_ref(a, i), scm_vector_ref(b, i)) {
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+        }
+
+        if a.is_bytevector() {
+            if b.is_bytevector() {
+                if scm_bytevector_length(a) != scm_bytevector_length(b) {
+                    return false;
+                }
+
+                for i in 0..scm_bytevector_length(a) {
+                    if scm_bytevector_ref(a, i) != scm_bytevector_ref(b, i) {
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+
+            return false; 
+        }
+
+        if a.is_string() {
+            if b.is_string() {
+                return scm_string_str(a) == scm_string_str(b);
+            }
+
+            return false;
+        }
+        break eqv(a, b);
     }
 }

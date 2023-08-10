@@ -7,6 +7,7 @@ use mmtk::memory_manager::object_reference_write;
 
 use crate::bytecode::encode::Decode;
 use crate::runtime::equality::scm_compare;
+use crate::runtime::gsubr::scm_apply_subr;
 use crate::runtime::object::*;
 use crate::runtime::value::Value;
 use crate::vm::intrinsics::{cons_rest, get_callee_vcode};
@@ -48,16 +49,16 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
 
     macro_rules! fp_ref {
         ($i: expr) => {
-            frame_local(thread.interpreter().fp, $i as isize)
+            frame_local(thread.interpreter().fp, $i as usize)
         };
     }
 
     macro_rules! fp_set {
         ($i: expr, $val: expr) => {
-            *frame_local(thread.interpreter().fp, $i as isize) = $val
+            *frame_local(thread.interpreter().fp, $i as usize) = $val
         };
     }
-
+    #[allow(unused_macros)]
     macro_rules! sp_slot {
         ($i: expr) => {
             sp.offset($i as _)
@@ -145,6 +146,8 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
             }
 
             OP_ENTER => {
+                let _enter = OpEnter::read(ip);
+                ip = ip.add(size_of::<OpEnter>());
                 thread.interpreter().sp = sp;
                 thread.interpreter().ip = ip;
                 thread.safepoint();
@@ -153,6 +156,8 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
             }
 
             OP_LOOP_HINT => {
+                let _loop_hint = OpLoopHint::read(ip);
+                ip = ip.add(size_of::<OpLoopHint>());
                 thread.interpreter().sp = sp;
                 thread.interpreter().ip = ip;
                 thread.safepoint();
@@ -165,22 +170,22 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 ip = ip.add(size_of::<OpCall>());
 
                 let old_fp = thread.interpreter().fp;
-                let new_fp = frame_slot(old_fp, call.proc().value() as isize - 1);
+                let new_fp = frame_slot(old_fp, call.proc().value() as usize - 1);
                 set_frame_dynamic_link(new_fp, old_fp);
                 set_frame_virtual_return_address(new_fp, ip);
                 set_frame_machine_return_address(new_fp, null());
                 thread.interpreter().fp = new_fp;
 
                 reset_frame!(call.nlocals().value() as isize);
-             
+
                 ip = get_callee_vcode(thread);
                 cache_sp!();
             }
 
             OP_TAIL_CALL => {
                 ip = get_callee_vcode(thread);
+
                 cache_sp!();
-                
             }
 
             OP_RETURN_VALUES => {
@@ -256,6 +261,11 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 }
             }
 
+            /* bind-rest dst:24
+             *
+             * Collect any arguments at or above DST into a list, and store that
+             * list at DST.
+             */
             OP_BIND_REST => {
                 let bind_rest = OpBindRest::read(ip);
                 ip = ip.add(size_of::<OpBindRest>());
@@ -271,6 +281,7 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                     sync_sp!();
                     let rest = cons_rest(thread, dst);
                     reset_frame!(dst + 1);
+
                     sp_set!(0, rest);
                 }
             }
@@ -287,7 +298,6 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 ip = ip.add(size_of::<OpResetFrame>());
 
                 reset_frame!(reset_frame.nlocals().value());
-             
             }
 
             OP_MOV => {
@@ -391,6 +401,7 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 let value = Value(crate::runtime::value::EncodedValueDescriptor {
                     as_int64: make_immediate.value() as i64,
                 });
+
                 sp_set!(make_immediate.dst(), value);
             }
 
@@ -403,7 +414,7 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                     program.cast_as::<ScmProgram>().constants,
                     make_non_immediate.offset(),
                 );
-                
+
                 sp_set!(make_non_immediate.dst().value(), constants);
             }
 
@@ -626,7 +637,6 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 let a = sp_ref!(mul.a());
                 let b = sp_ref!(mul.b());
                 if a.is_int32() && b.is_int32() {
-                    
                     if let Some(result) = a.get_int32().checked_mul(b.get_int32()) {
                         sp_set!(mul.dst(), Value::encode_int32(result));
                         continue;
@@ -697,18 +707,14 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 let cmp = scm_compare(a, b);
 
                 match cmp {
-                    Ok(Some(Ordering::Less)) => {
+                    Some(Ordering::Less) => {
                         sp_set!(less.dst(), Value::encode_bool_value(true));
                         continue;
                     }
 
-                    Ok(_) => {
+                    _ => {
                         sp_set!(less.dst(), Value::encode_bool_value(false));
                         continue;
-                    }
-
-                    Err(_) => {
-                        todo!("error")
                     }
                 }
             }
@@ -723,18 +729,14 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 let cmp = scm_compare(a, b);
 
                 match cmp {
-                    Ok(Some(Ordering::Greater)) => {
+                    Some(Ordering::Greater) => {
                         sp_set!(greater.dst(), Value::encode_bool_value(true));
                         continue;
                     }
 
-                    Ok(_) => {
+                    _ => {
                         sp_set!(greater.dst(), Value::encode_bool_value(false));
                         continue;
-                    }
-
-                    Err(_) => {
-                        todo!("error")
                     }
                 }
             }
@@ -749,18 +751,14 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 let cmp = scm_compare(a, b);
 
                 match cmp {
-                    Ok(Some(Ordering::Less)) | Ok(Some(Ordering::Equal)) => {
+                    Some(Ordering::Less) | Some(Ordering::Equal) => {
                         sp_set!(less_equal.dst(), Value::encode_bool_value(true));
                         continue;
                     }
 
-                    Ok(_) => {
+                    _ => {
                         sp_set!(less_equal.dst(), Value::encode_bool_value(false));
                         continue;
-                    }
-
-                    Err(_) => {
-                        todo!("error")
                     }
                 }
             }
@@ -775,18 +773,14 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 let cmp = scm_compare(a, b);
 
                 match cmp {
-                    Ok(Some(Ordering::Greater)) | Ok(Some(Ordering::Equal)) => {
+                    Some(Ordering::Greater) | Some(Ordering::Equal) => {
                         sp_set!(greater_equal.dst(), Value::encode_bool_value(true));
                         continue;
                     }
 
-                    Ok(_) => {
+                    _ => {
                         sp_set!(greater_equal.dst(), Value::encode_bool_value(false));
                         continue;
-                    }
-
-                    Err(_) => {
-                        todo!("error")
                     }
                 }
             }
@@ -796,23 +790,20 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
 
                 let a = sp_ref!(numerically_equal.a());
                 let b = sp_ref!(numerically_equal.b());
-                
+
                 let cmp = scm_compare(a, b);
 
                 match cmp {
-                    Ok(Some(Ordering::Equal)) => {
+                    Some(Ordering::Equal) => {
                         sp_set!(numerically_equal.dst(), Value::encode_bool_value(true));
                         continue;
                     }
 
-                    Ok(_) => {
+                    _ => {
                         sp_set!(numerically_equal.dst(), Value::encode_bool_value(false));
                         continue;
                     }
 
-                    Err(_) => {
-                        todo!("error")
-                    }
                 }
             }
 
@@ -931,6 +922,32 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 }
 
                 sp_set!(cdr.dst(), scm_cdr(src));
+            }
+
+            OP_BIND_OPTIONALS => {
+                let bind_optionals = OpBindOptionals::read(ip);
+                ip = ip.add(size_of::<OpBindOptionals>());
+                let nlocals = bind_optionals.nargs().value() as isize;
+                let mut nargs = frame_locals_count!();
+                if nargs < nlocals {
+                    alloc_frame!(nlocals);
+                    while nargs < nlocals {
+                        fp_set!(nargs, Value::encode_undefined_value());
+                        nargs += 1;
+                    }
+                }
+            }
+
+            OP_SUBR_CALL => {
+                let subr_call = OpSubrCall::read(ip);
+                ip = ip.add(size_of::<OpSubrCall>());
+
+                let idx = subr_call.idx().value();
+
+                let ret = scm_apply_subr(thread, sp, idx);
+
+                reset_frame!(1);
+                sp_set!(0, ret);
             }
 
             _ => (),

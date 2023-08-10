@@ -66,7 +66,6 @@ name = "capy"
 version = "0.1.0"
 dependencies = [
  "cfg-if",
- "elf",
  "env_logger",
  "errno",
  "libc",
@@ -99,9 +98,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.0.81"
+version = "1.0.82"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c6b2562119bf28c3439f7f02db99faf0aa1a8cdfe5772a2ee155d32227239f0"
+checksum = "305fe645edc1442a0fa8b6726ba61d422798d37a52e12eaecf4b022ebbb88f01"
 dependencies = [
  "jobserver",
  "libc",
@@ -208,12 +207,6 @@ name = "either"
 version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a26ae43d7bcc3b814de94796a5e736d4029efb0ee900c12e2d54c993ad1a1e07"
-
-[[package]]
-name = "elf"
-version = "0.7.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e2b183d6ce6ca4cf30e3db37abf5b52568b5f9015c97d9fbdd7026aa5dcdd758"
 
 [[package]]
 name = "enum-map"
@@ -434,9 +427,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "mimalloc-sys"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4aa3cefb626f6ae3d0b2f71c5378c89d2b1d4d7bc246b0ca9a7ee61a4daad291"
+dependencies = [
+ "cc",
+ "libc",
+]
+
+[[package]]
 name = "mmtk"
 version = "0.18.0"
-source = "git+https://github.com/mmtk/mmtk-core#c208c2207e3671e5a30e6fb09a7ff2b1c6045c43"
+source = "git+https://github.com/mmtk/mmtk-core#04a47feb4598b2120598453c2cceec83986c2122"
 dependencies = [
  "atomic",
  "atomic-traits",
@@ -453,6 +456,7 @@ dependencies = [
  "lazy_static",
  "libc",
  "log",
+ "mimalloc-sys",
  "mmtk-macros",
  "num-traits",
  "num_cpus",
@@ -468,7 +472,7 @@ dependencies = [
 [[package]]
 name = "mmtk-macros"
 version = "0.18.0"
-source = "git+https://github.com/mmtk/mmtk-core#c208c2207e3671e5a30e6fb09a7ff2b1c6045c43"
+source = "git+https://github.com/mmtk/mmtk-core#04a47feb4598b2120598453c2cceec83986c2122"
 dependencies = [
  "proc-macro-error",
  "proc-macro2",
@@ -832,18 +836,18 @@ dependencies = [
 
 [[package]]
 name = "serde"
-version = "1.0.182"
+version = "1.0.183"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bdb30a74471f5b7a1fa299f40b4bf1be93af61116df95465b2b5fc419331e430"
+checksum = "32ac8da02677876d532745a130fc9d8e6edfa81a269b107c5b00829b91d8eb3c"
 dependencies = [
  "serde_derive",
 ]
 
 [[package]]
 name = "serde_derive"
-version = "1.0.182"
+version = "1.0.183"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f4c2c6ea4bc09b5c419012eafcdb0fcef1d9119d626c8f3a0708a5b92d38a70"
+checksum = "aafe972d60b0b9bee71a91b92fee2d4fb3c9d7e8f6b179aa99f27203d99a4816"
 dependencies = [
  "proc-macro2",
  "quote",

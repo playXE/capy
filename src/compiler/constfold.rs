@@ -296,10 +296,11 @@ impl Sexpr {
     }
 }
 
-pub static USUAL_CONSTANT_FOLDING_TABLE: Lazy<HashMap<&'static str, FoldingEntry>> = Lazy::new(|| {
-    let mut table = HashMap::new();
-    for entry in usual_constant_folding_table() {
-        table.insert(entry.name, entry);
-    }
-    table
-});
+pub static USUAL_CONSTANT_FOLDING_TABLE: Lazy<HashMap<&'static str, FoldingEntry>> =
+    Lazy::new(|| {
+        let mut table = HashMap::new();
+        for entry in usual_constant_folding_table() {
+            table.insert(entry.name, entry);
+        }
+        table
+    });

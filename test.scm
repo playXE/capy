@@ -103,8 +103,10 @@
     )
 )
 
-(define-syntax make-function 
-    (syntax-rules ()
-        ((_) (lambda (x y) (+ x y)))))
+(define (+ . args)
+    (let loop ((args args) (acc 0))
+        (if (null? args)
+            acc
+            (loop (cdr args) (+ acc (car args))))))
 
-((make-function) 1 2)
+(print 1 2 3 4 5 6 7 8 9 10 11 12)

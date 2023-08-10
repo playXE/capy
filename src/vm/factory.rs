@@ -1,17 +1,24 @@
 use std::mem::{size_of, transmute};
 
-use mmtk::{util::ObjectReference, AllocationSemantics, MutatorContext};
+use mmtk::{util::{ObjectReference, Address}, AllocationSemantics, MutatorContext};
 
 use crate::{
     runtime::object::{Header, ScmCellHeader, ScmCellRef, TypeId},
     runtime::{
-        object::{ScmBytevector, ScmGloc, ScmPair, ScmProgram, ScmString, ScmSymbol, ScmVector, ScmBox},
+        hashtable::{
+            dummy_equiv, dummy_hash, equal_hash, equal_hash_equiv, eqv_hash, eqv_hash_equiv,
+            string_hash, string_hash_equiv, CompareProc, HashProc, HashTableRec, HashTableType,
+            ScmHashTable,
+        },
+        object::{
+            ScmBox, ScmBytevector, ScmGloc, ScmPair, ScmProgram, ScmString, ScmSymbol, ScmVector,
+        },
         value::Value,
     },
     utils::round_up,
 };
 
-use super::thread::Thread;
+use super::{sync::mutex::RawMutex, thread::Thread};
 
 impl Thread {
     pub fn make_cons<const IMMORTAL: bool>(&mut self, car: Value, cdr: Value) -> Value {
@@ -22,12 +29,7 @@ impl Thread {
                 AllocationSemantics::Default
             };
             let mutator = self.mutator.assume_init_mut();
-            let mem = mutator.alloc(
-                size_of::<ScmPair>(),
-                size_of::<usize>(),
-                0,
-                semantics,
-            );
+            let mem = mutator.alloc(size_of::<ScmPair>(), size_of::<usize>(), 0, semantics);
 
             mem.store::<ScmPair>(ScmPair {
                 header: ScmCellHeader {
@@ -41,11 +43,7 @@ impl Thread {
                 cdr,
             });
             let reference = transmute::<_, ObjectReference>(mem);
-            mutator.post_alloc(
-                reference,
-                size_of::<ScmPair>(),
-                semantics,
-            );
+            mutator.post_alloc(reference, size_of::<ScmPair>(), semantics);
 
             ScmCellRef(transmute(reference)).into()
         }
@@ -322,13 +320,84 @@ impl Thread {
                         flags: 0,
                     },
                 },
-                value: Value::encode_null_value()
+                value: Value::encode_null_value(),
             });
 
             let reference = transmute::<_, ObjectReference>(mem);
             mutator.post_alloc(reference, size, AllocationSemantics::Default);
 
             Value::encode_object_value(ScmCellRef(transmute(reference)))
+        }
+    }
+
+    pub fn make_hashtable(&mut self, n: u32, typ: HashTableType) -> Value {
+        let size = round_up(size_of::<ScmHashTable>(), 8, 0);
+
+        unsafe {
+            let mutator = self.mutator.assume_init_mut();
+            let mem = mutator.alloc(size, size_of::<usize>(), 0, AllocationSemantics::Default);
+
+            let (hash, equiv): (HashProc, CompareProc) = match typ {
+                HashTableType::Eq => (dummy_hash, dummy_equiv),
+
+                HashTableType::Eqv => (eqv_hash, eqv_hash_equiv),
+
+                HashTableType::Equal => (equal_hash, equal_hash_equiv),
+
+                HashTableType::String => (string_hash, string_hash_equiv),
+
+                _ => (dummy_hash, dummy_equiv),
+            };
+
+            mem.store(ScmHashTable {
+                hdr: ScmCellHeader {
+                    as_header: Header {
+                        type_id: TypeId::HashTable,
+                        pad: [0; 4],
+                        flags: 0,
+                    },
+                },
+                handlers: Value::encode_bool_value(false),
+                lock: RawMutex::INIT,
+                hash,
+                equiv,
+                datum: {
+                    let datum_size =
+                        size_of::<HashTableRec>() + size_of::<Value>() * ((n + n) as usize - 1);
+                    let datum =
+                        mmtk::memory_manager::malloc(datum_size).to_mut_ptr::<HashTableRec>();
+                    datum.write(HashTableRec {
+                        capacity: n,
+                        used: 0,
+                        live: 0,
+                        elts: [Value::encode_empty_value()],
+                    });
+                    for i in 0..(n + n) {
+                        (*datum)
+                            .elts
+                            .as_mut_ptr()
+                            .add(i as usize)
+                            .write(Value::encode_empty_value());
+                    }
+
+                    datum
+                },
+                typ,
+                rehash: false,
+            });
+
+            let reference = transmute::<_, ObjectReference>(mem);
+            mutator.post_alloc(reference, size, AllocationSemantics::Default);
+            let obj = Value::encode_object_value(ScmCellRef(transmute(reference)));
+            let obj2 = obj;
+            
+            let cleaner = Box::new(move || {
+                let ht = obj.cast_as::<ScmHashTable>();
+                mmtk::memory_manager::free(Address::from_mut_ptr(ht.datum));
+            });
+
+            self.register_cleaner(reference, cleaner);
+            obj2
         }
     }
 }

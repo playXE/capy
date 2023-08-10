@@ -57,10 +57,9 @@ fn is_misused(x: &IForm, tail: bool, lvar: P<LVar>, formals: &[P<LVar>]) -> bool
                         .any(|x| is_misused(x, false, lvar.clone(), formals))
             }
         }
-        IForm::PrimCall(_, args) => {
-            args.iter()
-                .any(|x| is_misused(x, false, lvar.clone(), formals))
-        }
+        IForm::PrimCall(_, args) => args
+            .iter()
+            .any(|x| is_misused(x, false, lvar.clone(), formals)),
         IForm::Define(def) => is_misused(&def.value, tail, lvar, formals),
         _ => false,
     }
@@ -279,14 +278,19 @@ pub fn recover_loops_rec(
                 let body = match &*body {
                     IForm::Seq(seq) if seq.forms.len() == 1 => seq.forms[0].clone(),
                     IForm::Call(_) => body,
-                    _ => unreachable!()
+                    _ => unreachable!(),
                 };
 
                 let args = match &*body {
                     IForm::Call(call) => call.args.clone(),
                     _ => unreachable!(),
                 };
-                return optimize_loop(oform, var.lvars.first().cloned().unwrap(), lambda.clone(), args);
+                return optimize_loop(
+                    oform,
+                    var.lvars.first().cloned().unwrap(),
+                    lambda.clone(),
+                    args,
+                );
             }
 
             var.body = obody;
@@ -297,13 +301,16 @@ pub fn recover_loops_rec(
     }
 }
 
-fn optimize_loop(_binding: P<IForm>, lvar: P<LVar>, lambda: P<Lambda>, init: Vec<P<IForm>>) -> P<IForm> {
-
+fn optimize_loop(
+    _binding: P<IForm>,
+    lvar: P<LVar>,
+    lambda: P<Lambda>,
+    init: Vec<P<IForm>>,
+) -> P<IForm> {
     let mut label = P(IForm::Label(Label {
         label: None,
         body: lambda.body.clone(),
     }));
-
 
     fn rewrite(mut x: P<IForm>, lvar: &P<LVar>, formals: &[P<LVar>], label: P<IForm>) -> P<IForm> {
         match &mut *x {
@@ -400,12 +407,12 @@ fn optimize_loop(_binding: P<IForm>, lvar: P<LVar>, lambda: P<Lambda>, init: Vec
     };
 
     lbl_.body = body;
-   
+
     let binding = P(IForm::Let(Let {
         typ: LetType::Let,
         lvars: lambda.lvars.clone(),
         inits: init,
-        body: label  
+        body: label,
     }));
 
     binding

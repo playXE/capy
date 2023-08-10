@@ -1,9 +1,9 @@
-use super::encode::{Encode, Decode, InstructionStream};
+use super::encode::{Decode, Encode, InstructionStream};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(transparent)]
 #[allow(non_camel_case_types)]
-pub struct u24([u8; 3]);
+pub struct u24(pub [u8; 3]);
 
 impl u24 {
     pub const fn new(value: u32) -> Self {

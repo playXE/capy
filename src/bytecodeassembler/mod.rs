@@ -37,7 +37,7 @@ impl Assembler {
             code: Vec::new(),
             constants: Vec::with_capacity(16),
             constant_map: HashMap::with_capacity(16),
-            patch_programs: Vec::new(), 
+            patch_programs: Vec::new(),
         }
     }
 
@@ -111,7 +111,6 @@ impl Assembler {
     }
 
     pub fn intern_constant(&mut self, constant: Sexpr) -> u32 {
-        
         if let Some(&ix) = self.constant_map.get(&constant) {
             return ix;
         }
@@ -177,12 +176,12 @@ impl Assembler {
         OpReturnValues::new().write(self);
     }
 
-    pub fn emit_enter(&mut self) {
-        OpEnter::new().write(self);
+    pub fn emit_enter(&mut self, offset: i32) {
+        OpEnter::new(offset).write(self);
     }
 
-    pub fn emit_loop_hint(&mut self) {
-        OpLoopHint::new().write(self);
+    pub fn emit_loop_hint(&mut self, offset: i32) {
+        OpLoopHint::new(offset).write(self);
     }
 
     pub fn emit_alloc_frame(&mut self, size: usize) {
@@ -191,9 +190,11 @@ impl Assembler {
 
     pub fn emit_prelude(&mut self, nreq: u32, nopt: bool, nlocals: usize) {
         if nopt {
-            OpAssertNargsGe::new(u24::new(nreq as _)).write(self);
+            OpAssertNargsGe::new(u24::new(nreq)).write(self);
+
+            OpBindRest::new(u24::new(nreq)).write(self);
         } else {
-            OpAssertNargsEe::new(u24::new(nreq as _)).write(self);
+            OpAssertNargsEe::new(u24::new(nreq)).write(self);
         }
 
         self.emit_alloc_frame(nlocals);
@@ -330,7 +331,6 @@ impl Assembler {
     pub fn emit_vector_length(&mut self, dst: u16, src: u16) {
         OpVectorLength::new(dst, src).write(self);
     }
-
 }
 
 pub enum Reloc {

@@ -2,7 +2,7 @@
 extern crate capy;
 
 use capy::{
-    bytecode::{opcodes::disassemble, image::load_image_from_memory},
+    bytecode::{image::load_image_from_memory, opcodes::disassemble},
     bytecodeassembler::fasl::FASLPrinter,
     compiler::{
         compile,
@@ -14,12 +14,14 @@ use capy::{
         Cenv, P,
     },
     gc_frame,
+    interpreter::scm_call_n,
     runtime::{
-        object::{scm_car, scm_cdr, scm_set_car, scm_set_cdr, *, TypeId},
-        value::Value
+        gsubr::{scm_define_subr, Subr},
+        object::{scm_car, scm_cdr, scm_set_car, scm_set_cdr, TypeId, *},
+        value::Value,
     },
     utils::pretty_hex::{self, pretty_hex, PrettyHex},
-    vm::{scm_init, scm_virtual_machine, thread::Thread}, interpreter::scm_call_n,
+    vm::{scm_init, scm_virtual_machine, thread::Thread},
 };
 use r7rs_parser::expr::NoIntern;
 
@@ -36,6 +38,20 @@ fn main() {
     //builder.set_option("stress_factor", &(128 * 1024).to_string());
     let _ = scm_init(builder.build());
 
+    scm_define_subr(
+        "print",
+        0,
+        0,
+        1,
+        Subr::F1({
+            extern "C-unwind" fn print(_: &mut Thread, rest: &mut Value) -> Value {
+                println!("{}", rest);
+                Value::encode_null_value()
+            }
+
+            print
+        }),
+    );
 
     let mut interner = NoIntern;
     let src = std::fs::read_to_string("test.scm").unwrap();
@@ -96,9 +112,9 @@ fn main() {
 
     let image = load_image_from_memory(&bcode, None).unwrap_or_else(|_| unreachable!());
     image.disassemble();
-
+    mmtk::memory_manager::handle_user_collection_request(&scm_virtual_machine().mmtk, Thread::current().to_mmtk());
     let res = scm_call_n(Thread::current(), image.entry_program, &[]);
-
+    
     match res {
         Ok(v) => println!("Result: {}", v),
         Err(e) => println!("{}", e),

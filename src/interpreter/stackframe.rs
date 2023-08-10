@@ -104,12 +104,12 @@ pub unsafe fn set_frame_dynamic_link(fp: *mut StackElement, dl: *mut StackElemen
 }
 
 #[inline]
-pub unsafe fn frame_slot(fp: *mut StackElement, index: isize) -> *mut StackElement {
-    ((fp as isize) - (index * 8) - 8) as _
+pub unsafe fn frame_slot(fp: *mut StackElement, index: usize) -> *mut StackElement {
+    fp.sub(index as usize).sub(1)
 }
 
 #[inline]
-pub unsafe fn frame_local<'a>(fp: *mut StackElement, index: isize) -> &'a mut Value {
+pub unsafe fn frame_local<'a>(fp: *mut StackElement, index: usize) -> &'a mut Value {
     &mut (*frame_slot(fp, index)).as_value
 }
 

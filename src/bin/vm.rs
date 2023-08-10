@@ -1,4 +1,8 @@
-use capy::{vm::{options::VMOptions, scm_init, thread::Thread}, bytecode::image::load_image_from_memory, interpreter::scm_call_n};
+use capy::{
+    bytecode::image::load_image_from_memory,
+    interpreter::scm_call_n,
+    vm::{options::VMOptions, scm_init, thread::Thread},
+};
 
 fn main() {
     let opts = match VMOptions::parse() {
@@ -8,11 +12,16 @@ fn main() {
             std::process::exit(1);
         }
     };
-    
 
     let mut mmtk = mmtk::MMTKBuilder::new();
     mmtk.set_option("plan", opts.gc_plan.as_ref());
-    mmtk.set_option("gc_trigger", &format!("DynamicHeapSize:{},{}", opts.gc_min_heap_size, opts.gc_max_heap_size));
+    mmtk.set_option(
+        "gc_trigger",
+        &format!(
+            "DynamicHeapSize:{},{}",
+            opts.gc_min_heap_size, opts.gc_max_heap_size
+        ),
+    );
     mmtk.set_option("threads", "4");
 
     let vm = scm_init(mmtk.build());

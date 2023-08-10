@@ -726,7 +726,6 @@ fn match_synrule(
         }
 
         Sexpr::Identifier(id) => {
-          
             let res = er_compare(
                 form.clone(),
                 Sexpr::Identifier(id.clone()),
@@ -983,7 +982,7 @@ pub fn synrule_expand(
             &mut mvec,
         ) {
             let r = realize_template(sr, rule, &mvec);
-           
+
             return Ok(r);
         }
     }

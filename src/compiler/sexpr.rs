@@ -4,7 +4,7 @@ use crate::runtime::{object::scm_symbol_str, symbol::scm_intern, value::Value};
 
 use super::{
     tree_il::{IForm, LVar},
-    Cenv, SyntaxEnv, P, unwrap_identifier,
+    unwrap_identifier, Cenv, SyntaxEnv, P,
 };
 
 #[derive(Clone)]
@@ -558,7 +558,7 @@ impl Sexpr {
         if let Sexpr::Identifier(id) = self {
             unwrap_identifier(id.clone())
         } else if let Sexpr::Symbol(sym) = self {
-            *sym 
+            *sym
         } else {
             panic!("unwrap_id: not an identifier");
         }
@@ -576,7 +576,9 @@ impl Sexpr {
         D::Doc: Clone,
     {
         match self {
-            Self::Global(global) => allocator.text(format!("#<global {}>", scm_symbol_str(*global))),
+            Self::Global(global) => {
+                allocator.text(format!("#<global {}>", scm_symbol_str(*global)))
+            }
             Self::Program(prog) => allocator.text(format!("#<program {}>", prog)),
             Self::Gensym(x) => allocator.text(format!("#<gensym {}>", x)),
             Self::LVar(lvar) => allocator

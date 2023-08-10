@@ -19,7 +19,6 @@ fn main() {
 
     let _ = scm_init(builder.build());
 
-
     let args = std::env::args().skip(1).collect::<Vec<_>>();
 
     if args.len() == 0 {

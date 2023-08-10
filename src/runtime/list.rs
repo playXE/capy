@@ -89,10 +89,7 @@ macro_rules! scm_cons {
 }
 
 pub fn copy_alist(list: &Value) -> Value {
-    scm_map(
-        |&kv| scm_cons!(scm_car(kv), scm_cdr(kv)),
-        *list,
-    )
+    scm_map(|&kv| scm_cons!(scm_car(kv), scm_cdr(kv)), *list)
 }
 
 pub fn scm_append(ls2: &Rooted, ls1: &Rooted) -> Value {

@@ -103,17 +103,13 @@ pub fn parse() -> Result<VMOptions, String> {
         Err(e) => return Err(e.to_string()),
     };
 
-    let gc_min_heap_size = match args
-        .opt_value_from_str::<_, String>("--gc-min-heap-size")
-    {
+    let gc_min_heap_size = match args.opt_value_from_str::<_, String>("--gc-min-heap-size") {
         Ok(Some(size)) => read_uint_from_str(&size).unwrap_or(64 * 1024 * 1024),
         Ok(None) => 64 * 1024 * 1024,
         Err(e) => return Err(e.to_string()),
     };
 
-    let gc_max_heap_size = match args
-        .opt_value_from_str::<_, String>("--gc-max-heap-size")
-    {
+    let gc_max_heap_size = match args.opt_value_from_str::<_, String>("--gc-max-heap-size") {
         Ok(Some(size)) => read_uint_from_str(&size).unwrap_or(256 * 1024 * 1024),
         Ok(None) => 256 * 1024 * 1024,
         Err(e) => return Err(e.to_string()),
@@ -134,4 +130,4 @@ pub fn parse() -> Result<VMOptions, String> {
     options.filename = filename.ok();
 
     Ok(options)
-}   
+}
