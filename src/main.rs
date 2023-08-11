@@ -21,7 +21,7 @@ use capy::{
         value::Value,
     },
     utils::pretty_hex::{self, pretty_hex, PrettyHex},
-    vm::{scm_init, scm_virtual_machine, thread::Thread},
+    vm::{scm_init, scm_virtual_machine, thread::Thread}, gc::objstorage::ObjStorage,
 };
 use r7rs_parser::expr::NoIntern;
 
@@ -120,3 +120,4 @@ fn main() {
         Err(e) => println!("{}", e),
     }
 }
+

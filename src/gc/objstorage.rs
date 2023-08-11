@@ -1,11 +1,10 @@
+#![allow(dead_code)]
 use std::{
-    cell::UnsafeCell,
+    fmt::Debug,
+    hash::Hash,
     mem::{size_of, transmute},
     ptr::{null_mut, NonNull},
-    sync::{
-        atomic::{fence, AtomicBool, AtomicIsize, AtomicPtr, AtomicUsize, Ordering},
-        Arc,
-    },
+    sync::atomic::{fence, AtomicBool, AtomicIsize, AtomicPtr, AtomicUsize, Ordering},
 };
 
 use mmtk::util::{conversions::raw_align_down, Address};
@@ -63,25 +62,28 @@ pub struct ObjStorage {
     inner: NonNull<ObjStorageInner>,
 }
 
+unsafe impl Send for ObjStorage {}
+unsafe impl Sync for ObjStorage {}
+
 impl ObjStorage {
     pub fn new(name: &'static str) -> Self {
         Self {
             inner: unsafe {
                 NonNull::new_unchecked(Box::into_raw(Box::new(ObjStorageInner::new(name))))
-            }
+            },
         }
     }
 
     pub fn allocate(&self) -> *mut Value {
-        unsafe {
-            (*self.inner.as_ptr()).allocate()
-        }
+        unsafe { (*self.inner.as_ptr()).allocate() }
     }
 
     pub fn release(&self, handle: *mut Value) {
-        unsafe {
-            (*self.inner.as_ptr()).release(handle)
-        }
+        unsafe { (*self.inner.as_ptr()).release(handle) }
+    }
+
+    pub fn name(&self) -> &'static str {
+        unsafe { (*self.inner.as_ptr()).name }
     }
 }
 
@@ -97,7 +99,7 @@ impl Clone for ObjStorage {
 
 impl Drop for ObjStorage {
     fn drop(&mut self) {
-        unsafe { 
+        unsafe {
             let inner = self.inner.as_mut();
             if inner.refcount.fetch_sub(1, Ordering::AcqRel) == 1 {
                 let _ = Box::from_raw(inner);
@@ -542,7 +544,7 @@ impl ObjStorageInner {
     unsafe fn block_for_allocation(&mut self) -> *mut Block {
         loop {
             let block = self.allocation_list.head;
-           
+
             if !block.is_null() {
                 return block;
             } else if self.reduce_deferred_updates() {
@@ -779,7 +781,7 @@ impl ObjStorageInner {
     }
 
     fn block_count(&self) -> usize {
-        unsafe { with_active_array(self, |array|  (*array).block_count() ) }
+        unsafe { with_active_array(self, |array| (*array).block_count()) }
     }
 
     fn new(name: &'static str) -> Self {
@@ -788,7 +790,10 @@ impl ObjStorageInner {
             refcount: AtomicUsize::new(1),
             active_array: ActiveArray::create(8),
             active_mutex: RawMutex::INIT,
-            allocation_list: AllocationList { head: null_mut(), tail: null_mut() },
+            allocation_list: AllocationList {
+                head: null_mut(),
+                tail: null_mut(),
+            },
             deferred_updates: AtomicPtr::new(null_mut()),
             allocation_mutex: RawMutex::INIT,
             allocation_count: AtomicUsize::new(0),
@@ -796,7 +801,7 @@ impl ObjStorageInner {
             needs_cleanup: AtomicBool::new(false),
             concurrent_iteration_count: AtomicUsize::new(0),
         }
-    } 
+    }
 }
 
 unsafe fn with_active_array<T>(
@@ -807,4 +812,101 @@ unsafe fn with_active_array<T>(
     let result = f(active_array);
     storage.relinquish_block_array(active_array);
     result
+}
+
+struct ObjHandleInner {
+    refcount: AtomicUsize,
+    storage: ObjStorage,
+    value: *mut Value,
+}
+
+/// A handle to Scheme object in the heap. It is allocated inside [`ObjStorage`].
+///
+/// The handle is automatically freed when reference count to it reaches zero.
+pub struct ObjHandle {
+    inner: NonNull<ObjHandleInner>,
+}
+
+impl ObjHandle {
+    pub fn new(storage: &ObjStorage, value: Value) -> ObjHandle {
+        let slot = storage.allocate();
+        unsafe {
+            *slot = value;
+
+            let inner = Box::new(ObjHandleInner {
+                refcount: AtomicUsize::new(1),
+                storage: storage.clone(),
+                value: slot,
+            });
+
+            ObjHandle {
+                inner: NonNull::new_unchecked(Box::into_raw(inner)),
+            }
+        }
+    }
+
+    pub fn get(&self) -> Value {
+        unsafe { *self.inner.as_ref().value }
+    }
+
+    pub fn set(&self, value: Value) {
+        unsafe {
+            *self.inner.as_ref().value = value;
+        }
+    }
+
+    pub fn storage<'a>(&self) -> &'a ObjStorage {
+        unsafe { &self.inner.as_ref().storage }
+    }
+}
+
+unsafe impl Send for ObjHandle {}
+unsafe impl Sync for ObjHandle {}
+
+impl Clone for ObjHandle {
+    fn clone(&self) -> Self {
+        unsafe {
+            self.inner.as_ref().refcount.fetch_add(1, Ordering::AcqRel);
+        }
+        ObjHandle { inner: self.inner }
+    }
+}
+
+impl Drop for ObjHandle {
+    fn drop(&mut self) {
+        unsafe {
+            let inner = self.inner.as_ref();
+            if inner.refcount.fetch_sub(1, Ordering::AcqRel) == 1 {
+                inner.storage.release(inner.value);
+                let _ = Box::from_raw(self.inner.as_ptr());
+            }
+        }
+    }
+}
+
+impl PartialEq for ObjHandle {
+    fn eq(&self, other: &Self) -> bool {
+        self.inner == other.inner
+    }
+}
+
+impl Eq for ObjHandle {}
+
+impl Hash for ObjHandle {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.inner.hash(state);
+    }
+}
+
+impl Debug for ObjHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        unsafe {
+            write!(
+                f,
+                "#<obj-handle {:p} in '{}'>",
+                self.inner.as_ref().value,
+                self.inner.as_ref().storage.name()
+            )
+        }
+    }
 }
