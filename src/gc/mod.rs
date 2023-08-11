@@ -19,7 +19,11 @@ use mmtk::{
 };
 
 use crate::{
-    runtime::{object::*, value::Value},
+    runtime::{
+        hashtable::{HashTableRec, ScmHashTable},
+        object::*,
+        value::Value,
+    },
     utils::round_up,
     vm::{
         safepoint::SafepointSynchronize,
@@ -35,6 +39,7 @@ pub mod memory_region;
 pub mod refstorage;
 pub mod shadow_stack;
 pub mod virtual_memory;
+pub mod objstorage;
 
 #[derive(Default)]
 pub struct CapyVM;
@@ -151,9 +156,16 @@ impl ObjectModel<CapyVM> for ScmObjectModel {
                     len as usize * size_of::<Value>() + size_of::<ScmProgram>()
                 }
 
-                TypeId::GLOC => {
-                    size_of::<ScmGloc>()
-                }
+                TypeId::GLOC => size_of::<ScmGloc>(),
+
+                TypeId::HashTableRec => unsafe {
+                    let datum = reference.to_address().to_mut_ptr::<HashTableRec>();
+                    let n = (*datum).capacity;
+
+                    size_of::<HashTableRec>() + size_of::<Value>() * ((n + n) as usize - 1)
+                },
+
+                TypeId::HashTable => size_of::<ScmHashTable>(),
 
                 _ => unreachable!(),
             },
@@ -319,8 +331,6 @@ impl Collection<CapyVM> for ScmCollection {
             }
         }
     }
-
-
 }
 
 pub struct ScmReferenceGlue;
@@ -419,13 +429,33 @@ impl Scanning<CapyVM> for ScmScanning {
                 }
             }
 
+            TypeId::HashTableRec => unsafe {
+                let datum = reference.to_address().to_mut_ptr::<HashTableRec>();
+                let n = (*datum).capacity;
+                for i in 0..(n + n) {
+                    let elt_ptr = (*datum).elts.as_mut_ptr().add(i as _);
+                    if (*elt_ptr).is_object() {
+                        let edge = SimpleEdge::from_address(Address::from_mut_ptr(elt_ptr));
+                        edge_visitor.visit_edge(edge);
+                    }
+                }
+            },
 
+            TypeId::HashTable => {
+                let hash_table = reference.cast_as::<ScmHashTable>();
+                if !hash_table.datum.is_null() {
+                    let datum_edge =
+                        SimpleEdge::from_address(Address::from_mut_ptr(&mut hash_table.datum));
+                    edge_visitor.visit_edge(datum_edge);
+                }
+
+                hash_table.rehash = true;
+            }
             _ => (),
         }
     }
 
     fn notify_initial_thread_scan_complete(_partial_scan: bool, _tls: mmtk::util::VMWorkerThread) {}
-    
 
     fn scan_vm_specific_roots(
         _tls: mmtk::util::VMWorkerThread,
@@ -465,7 +495,7 @@ impl Scanning<CapyVM> for ScmScanning {
                 return;
             }
             let tls: &'static mut Thread = transmute(tls);
-            println!("scan {:p}", tls);
+
             let mut edges = vec![];
             visit_roots(tls.stackchain, &mut edges);
 
@@ -474,6 +504,7 @@ impl Scanning<CapyVM> for ScmScanning {
                 edges.push(edge);
             }
             tls.interpreter().mark_stack_for_roots(&mut factory);
+            tls.shadow_stack.walk_roots(&mut factory);
             factory.create_process_edge_roots_work(edges);
         }
     }

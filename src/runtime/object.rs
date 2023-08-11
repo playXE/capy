@@ -36,7 +36,8 @@ pub enum TypeId {
     HashTable,
     HashTableRec,
     WeakHashTable,
-    WeakHashTableRec
+    WeakHashTableRec,
+    Module,
 }
 
 pub const HASH_STATE_UNHASHED: u8 = 0;

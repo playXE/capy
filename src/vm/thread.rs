@@ -29,7 +29,7 @@ pub enum ThreadKind {
 pub struct Thread {
     interpreter: MaybeUninit<InterpreterState>,
     pub mutator: MaybeUninit<Mutator<CapyVM>>,
-
+    pub shadow_stack: ShadowStack,
     pub id: u64,
     pub safepoint: *mut u8,
     pub gc_state: i8,
@@ -168,6 +168,7 @@ impl Thread {
         let th = threads();
         th.add_thread(self as *mut Thread);
         self.interpreter = MaybeUninit::new(InterpreterState::new());
+        self.shadow_stack.init();
         self.local_finalization_queue = MaybeUninit::new(Vec::with_capacity(128));
     }
 
@@ -214,7 +215,7 @@ impl Thread {
 }
 
 use crate::gc::refstorage::HandleMemory;
-use crate::gc::shadow_stack::StackChain;
+use crate::gc::shadow_stack::{StackChain, ShadowStack};
 use crate::interpreter::InterpreterState;
 use crate::vm::sync::mutex::*;
 
@@ -337,6 +338,7 @@ static mut THREAD: Thread = Thread {
     mutator: MaybeUninit::uninit(),
     safepoint: std::ptr::null_mut(),
     gc_state: 2,
+    shadow_stack: ShadowStack::new(),
     kind: ThreadKind::None,
     handles: MaybeUninit::uninit(),
     stackchain: null_mut(),

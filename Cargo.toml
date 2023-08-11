@@ -43,8 +43,7 @@ llint = []
 lto = "fat"
 codegen-units = 1
 opt-level = "s"
-[profile.release.package.mmtk]
-opt-level = 2
+
 
 [[bin]]
 name = "capy-boot"

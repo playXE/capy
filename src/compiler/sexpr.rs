@@ -1,6 +1,6 @@
 use std::hash::Hash;
 
-use crate::runtime::{object::scm_symbol_str, symbol::scm_intern, value::Value};
+use crate::{runtime::{object::{scm_symbol_str, scm_set_car, scm_vector_set, scm_set_cdr}, symbol::scm_intern, value::Value}, vm::thread::Thread, gc_protect};
 
 use super::{
     tree_il::{IForm, LVar},
@@ -771,4 +771,44 @@ pub fn sexp_reverse2x(list: Sexpr, tail: Sexpr) -> Sexpr {
 
 pub fn sexp_reversex(list: Sexpr) -> Sexpr {
     sexp_reverse2x(list, Sexpr::Null)
+}
+
+pub fn sexpr_to_value(thread: &mut Thread, sexpr: &Sexpr) -> Value {
+    match sexpr {
+        Sexpr::Pair(pair) => {
+            let mut car = sexpr_to_value(thread, &pair.0);
+            let mut cdr = gc_protect!(thread => car => sexpr_to_value(thread, &pair.1));
+
+            let pair = gc_protect!(thread => car, cdr => thread.make_cons::<false>(Value::encode_null_value(), Value::encode_null_value()));
+            scm_set_car(pair, thread, car);
+            scm_set_cdr(pair, thread, cdr);
+            pair 
+        }
+
+        Sexpr::Vector(vector) => {
+            let mut vec = thread.make_vector::<false>(vector.len(), Value::encode_null_value());
+
+            for i in 0..vector.len() {
+                let value = gc_protect!(thread => vec => sexpr_to_value(thread, &vector[i]));
+                scm_vector_set(vec, thread, i as _, value);
+            }
+
+            vec
+        }
+
+        Sexpr::Boolean(x) => Value::encode_bool_value(*x),
+        Sexpr::Fixnum(x) => Value::encode_int32(*x),
+        Sexpr::Flonum(x) => Value::encode_f64_value(*x),
+        Sexpr::Char(x) => Value::encode_char(*x),
+        Sexpr::Null => Value::encode_null_value(),
+        Sexpr::Undefined => Value::encode_undefined_value(),
+        Sexpr::Bytevector(bv) => {
+            thread.make_bytevector_from_slice::<false>(bv)
+        }
+
+        Sexpr::Symbol(x) => *x,
+        Sexpr::String(x) => thread.make_string::<false>(x),
+        _ => todo!()
+        
+    }
 }

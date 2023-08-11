@@ -174,7 +174,8 @@ pub fn pass2_shrink_let_frame(
     let IForm::Let(var) = &mut *iform else {
         return iform;
     };
-    let (new_lvars, new_inits, mut removed_init) = pass2_remove_unused_lvars(lvars, var.typ, ctx);
+    return iform;
+    /*let (new_lvars, new_inits, mut removed_init) = pass2_remove_unused_lvars(lvars, var.typ, ctx);
 
     if new_lvars.is_empty() {
         ctx.changed = true;
@@ -202,7 +203,7 @@ pub fn pass2_shrink_let_frame(
         }
 
         iform
-    }
+    }*/
 }
 
 pub fn pass2_intermediate_lrefs_removal(lvars: &[P<LVar>], body: P<IForm>) {
@@ -770,8 +771,9 @@ pub fn pass2(mut iform: P<IForm>, recover_loops: bool) -> Result<P<IForm>, Strin
         lambda_lift: false,
     };
     loop {
-        scan_toplevel::<true>(iform.clone()); // compute bound and free variables in each lambda
         iform.count_refs();
+        scan_toplevel::<true>(iform.clone()); // compute bound and free variables in each lambda
+
         iform = resolve_primitives(iform.clone());
         if recover_loops {
             ctx.changed = false;

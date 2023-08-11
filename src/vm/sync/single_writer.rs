@@ -1,5 +1,5 @@
 use super::semaphore::Sem;
-use atomic::Ordering;
+use std::sync::atomic::Ordering;
 use std::sync::atomic::AtomicUsize;
 
 ///  Synchronization primitive inspired by RCU.
@@ -45,7 +45,7 @@ impl SingleWriterSynchronizer {
         // enter polarity, else we could clobber the wrong exit value on
         // the first iteration.  So fence to ensure everything here follows
         // whatever muxing was used.
-        atomic::fence(Ordering::SeqCst);
+        std::sync::atomic::fence(Ordering::SeqCst);
 
         let mut value = self.enter.load(Ordering::Relaxed);
         // (1) Determine the old and new exit counters, based on the
@@ -85,7 +85,7 @@ impl SingleWriterSynchronizer {
         // conditional semaphore wait.  If they were re-ordered then a
         // critical section exit could miss the wakeup request, failing to
         // signal us while we're waiting.
-        atomic::fence(Ordering::SeqCst);
+        std::sync::atomic::fence(Ordering::SeqCst);
 
         while old != old_ptr.load(Ordering::Acquire) {
             self.wakeup.wait();

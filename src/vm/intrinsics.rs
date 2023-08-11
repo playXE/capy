@@ -8,7 +8,7 @@ use crate::{
 };
 
 use super::thread::Thread;
-
+#[inline(never)]
 pub unsafe extern "C" fn get_callee_vcode(thread: &mut Thread) -> *const u8 {
     let proc = *frame_local(thread.interpreter().fp, 0);
 

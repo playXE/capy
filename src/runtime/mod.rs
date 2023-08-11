@@ -8,3 +8,4 @@ pub mod pure_nan;
 pub mod symbol;
 pub mod value;
 pub mod gsubr;
+pub mod module;

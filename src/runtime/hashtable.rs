@@ -3,8 +3,7 @@ use std::mem::{size_of, transmute};
 use mmtk::util::Address;
 
 use crate::{
-    gc_frame,
-    vm::{sync::mutex::RawMutex, thread::Thread},
+    vm::{sync::mutex::RawMutex, thread::Thread}, gc_protect,
 };
 
 use super::{
@@ -37,7 +36,7 @@ pub const fn hash_immutable_size(n: u32) -> u32 {
 }
 
 #[repr(C)]
-pub(crate) struct HashTableRec {
+pub struct HashTableRec {
     pub header: ScmCellHeader,
     pub capacity: u32,
     pub used: u32,
@@ -51,7 +50,7 @@ pub struct ScmHashTable {
     pub lock: RawMutex,
     pub hash: HashProc,
     pub equiv: CompareProc,
-    pub(crate) datum: *mut HashTableRec,
+    pub datum: *mut HashTableRec,
     pub handlers: Value,
     pub typ: HashTableType,
     pub rehash: bool,
@@ -592,9 +591,7 @@ pub fn rehash_hashtable(thread: &mut Thread, mut ht: Value, nsize: u32) -> Value
 
     let ht2 = {
         // protect ht from GC
-        gc_frame!(thread.stackchain() => htr = ht);
-        let ht2 = thread.make_hashtable(nsize, ht.cast_as::<ScmHashTable>().typ);
-        ht = *htr;
+        let ht2 = gc_protect!(thread => ht => thread.make_hashtable(nsize, ht.cast_as::<ScmHashTable>().typ));
         ht2
     };
     

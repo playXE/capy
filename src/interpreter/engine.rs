@@ -73,7 +73,7 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
 
     macro_rules! sp_set {
         ($i: expr, $val: expr) => {
-            sp.offset($i as _).write(StackElement { as_value: $val })
+            std::hint::black_box(sp.offset($i as _).write(StackElement { as_value: $val }));
         };
     }
 
@@ -243,7 +243,7 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 ip = ip.add(size_of::<OpAssertNargsEe>());
 
                 if unlikely(frame_locals_count!() != assert_nargs_ee.n().value() as isize) {
-                    println!("{} {}", frame_locals_count!(), assert_nargs_ee.n().value());
+                
                     sync_sp!();
                     sync_ip!();
                     todo!("no values error"); // FIXME: Throw error
@@ -464,6 +464,7 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 let boxed = thread.make_box();
                 let src = sp_ref!(box_.src());
                 boxed.cast_as::<ScmBox>().value = src;
+                sp_set!(box_.dst(), boxed);
             }
 
             OP_BOX_SET => {
@@ -472,6 +473,7 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
 
                 let boxed = sp_ref!(box_set.dst());
                 let src = sp_ref!(box_set.src());
+                
                 if src.is_object() {
                     object_reference_write(
                         thread.mutator(),
