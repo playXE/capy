@@ -72,6 +72,42 @@ pub fn pass2_rec(
                 }
             }
 
+            if &**name == "call-with-values" {
+                if args.len() != 2 {
+                    return Err(format!(
+                        "call-with-values: expected 2 arguments, got {}",
+                        args.len()
+                    ));
+                }
+
+                let first = args[0].clone();
+                let second = args[1].clone();
+                
+                if let IForm::Lambda(lam) = &*first {
+                    if lam.lvars.len() != 0 {
+                        return Err(format!(
+                            "call-with-values: expected 0 lambda arguments, got {}",
+                            lam.lvars.len()
+                        ));
+                    }
+
+                    if let IForm::Lambda(second) = &*second {
+                        ctx.changed = true;
+                        let let_values = LetValues {
+                            body: second.body.clone(),
+                            lvars: second.lvars.clone(),
+                            init: lam.body.clone(),
+                            optarg: second.optarg
+                        };
+                        
+                        let vals = IForm::LetValues(let_values);
+                        *iform = vals;
+
+                        return Ok(iform);
+                    }
+                }
+            }
+
             Ok(iform)
         }
 
@@ -138,6 +174,13 @@ pub fn pass2_rec(
             Ok(pass2_shrink_let_frame(iform.clone(), &lvars, obody, ctx))
         }
 
+        IForm::LetValues(let_values) => {
+            let_values.init = pass2_rec(let_values.init.clone(), penv, false, ctx)?;
+            let_values.body = pass2_rec(let_values.body.clone(), penv, tail, ctx)?;
+
+            Ok(iform)
+        }
+
         IForm::Call(_) => pass2_call(iform.clone(), penv, tail, ctx),
         IForm::Seq(seq) => {
             if seq.forms.is_empty() {
@@ -163,7 +206,7 @@ pub fn pass2_rec(
         _ => Ok(iform.clone()),
     }
 }
-
+#[allow(unused_variables)]
 pub fn pass2_shrink_let_frame(
     mut iform: P<IForm>,
     lvars: &[P<LVar>],
@@ -174,6 +217,9 @@ pub fn pass2_shrink_let_frame(
     let IForm::Let(var) = &mut *iform else {
         return iform;
     };
+    if var.lvars.is_empty() {
+        return obody;
+    }
     return iform;
     /*let (new_lvars, new_inits, mut removed_init) = pass2_remove_unused_lvars(lvars, var.typ, ctx);
 
@@ -407,16 +453,16 @@ pub fn pass2_remove_unused_lvars(
 ///
 ///   We can inline LAMBDA if the following conditions are met:
 ///
-///     1. The reference count of LVAR is equal to the number of call
+///     - 1. The reference count of LVAR is equal to the number of call
 ///        sites.  This means all use of this LAMBDA is first-order,
 ///        so we know the closure won't "leak out".
 ///
-///     2. It doesn't have any REC call sites, i.e. non-tail self recursive
+///     - 2. It doesn't have any REC call sites, i.e. non-tail self recursive
 ///        calls.  (We may be able to convert non-tail self recursive calls
 ///        to jump with environment adjustment, but it would complicates
 ///        stack handling a lot.)
 ///
-///     3. It doesn't have any TAIL-REC calls across closure boundary.
+///     - 3. It doesn't have any TAIL-REC calls across closure boundary.
 ///        ```text
 ///         (letrec ((foo (lambda (...)
 ///                           ..... (foo ...)) /// ok
@@ -426,7 +472,7 @@ pub fn pass2_remove_unused_lvars(
 ///                         (lambda () ... (foo ...)) /// not ok
 ///           ...
 ///         ```
-///     4. Either:
+///     - 4. Either:
 ///         - It has only one LOCAL call, or
 ///         - It doesn't have TAIL-REC calls and the body of $LAMBDA is
 ///           small enough to duplicate.
@@ -437,7 +483,7 @@ pub fn pass2_remove_unused_lvars(
 ///   Otherwise, if the first condition is met, we can lift LAMBDA to
 ///   the toplevel by...
 ///
-///     a. Scan the lambda body to find free lvars.  If there's any,
+///    - a. Scan the lambda body to find free lvars.  If there's any,
 ///        transform free lvars to bound lvars by adding new arguments
 ///        to the LAMBDA node, and modifies all the call sites
 ///        accordingly.
@@ -796,7 +842,7 @@ pub fn pass2(mut iform: P<IForm>, recover_loops: bool) -> Result<P<IForm>, Strin
             ctx.lambda_lift = true;
             iform = pass2_rec(iform.clone(), &mut Vec::with_capacity(4), true, &mut ctx)?;
         }
-
+        println!("IL: \n{}", iform);
         if !ctx.changed {
             return Ok(iform);
         }

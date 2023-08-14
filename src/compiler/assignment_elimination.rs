@@ -71,11 +71,6 @@ fn assignment_elimination_rec(mut tree: P<IForm>) -> P<IForm> {
         }
 
         IForm::LSet(lset) => {
-            println!(
-                "is mutable {}: {}",
-                lset.lvar.name,
-                !lset.lvar.is_immutable()
-            );
             if !lset.lvar.is_immutable() {
                 *tree = make_cell_set(
                     lset.lvar.clone(),
@@ -130,8 +125,8 @@ fn assignment_elimination_rec(mut tree: P<IForm>) -> P<IForm> {
                         arg: false,
                         initval: None,
                         boxed: true,
-                        ref_count: lvar.ref_count,
-                        set_count: lvar.set_count,
+                        ref_count: 0,
+                        set_count: 0,
                     });
                     lvar.ref_count = 1;
                     lvar.set_count = 0;
@@ -191,6 +186,44 @@ fn assignment_elimination_rec(mut tree: P<IForm>) -> P<IForm> {
             for arg in args {
                 *arg = assignment_elimination_rec(arg.clone());
             }
+
+            tree
+        }
+
+        IForm::LetValues(vals) => {
+            let mutated = vals
+                .lvars
+                .iter()
+                .filter(|lvar| !lvar.is_immutable());
+
+            let (mut lvars, mut inits) = (vec![], vec![]);
+            let mut substitutes = HashMap::new();
+            for mut lvar in mutated.cloned() {
+                lvar.set_count = 0;
+                lvar.ref_count = 1;
+                let new_lvar = P::new(LVar {
+                    name: lvar.name.clone(),
+                    arg: false,
+                    initval: None,
+                    boxed: true,
+                    ref_count: 0,
+                    set_count: 0,
+                });
+                substitutes.insert(lvar.clone(), new_lvar.clone());
+                lvars.push(new_lvar.clone());
+                let lref = P::new(IForm::LRef(LRef { lvar: lvar.clone() }));
+                let make_cell = make_make_cell(lref);
+                inits.push(P(make_cell));
+            }
+            let body = assignment_elimination_substitute(vals.body.clone(), &substitutes);
+            let let_iform = P(IForm::Let(Let {
+                typ: LetType::Let,
+                lvars,
+                inits,
+                body
+            }));
+            vals.init = assignment_elimination_rec(vals.init.clone());
+            vals.body = let_iform;
 
             tree
         }
@@ -259,6 +292,13 @@ fn assignment_elimination_substitute(
             });
 
             var.body = assignment_elimination_substitute(var.body.clone(), substitute);
+
+            tree
+        }
+
+        IForm::LetValues(lvals) => {
+            lvals.init = assignment_elimination_substitute(lvals.init.clone(), substitute);
+            lvals.body = assignment_elimination_substitute(lvals.body.clone(), substitute);
 
             tree
         }

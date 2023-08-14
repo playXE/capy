@@ -2,10 +2,10 @@ use crate::{
     gc::shadow_stack::Rooted,
     gc_frame,
     runtime::object::{scm_cdr, scm_set_cdr},
-    vm::thread::Thread,
+    vm::thread::Thread, gc_protect,
 };
 
-use super::{object::scm_car, value::Value};
+use super::{object::{scm_car, scm_set_car}, value::Value};
 
 pub fn scm_assq(key: Value, list: Value) -> Value {
     let mut cell = list;
@@ -113,4 +113,18 @@ pub fn scm_append(ls2: &Rooted, ls1: &Rooted) -> Value {
     scm_set_cdr(*tail, thread, **ls2);
 
     *result
+}
+
+pub fn scm_acons(mut caar: Value, mut cdar: Value, mut cdr: Value) -> Value {
+    let thread = Thread::current();
+    let mut kv = gc_protect!(thread => caar, cdar, cdr => thread.make_cons::<false>(Value::encode_bool_value(false), Value::encode_bool_value(false)));
+
+    scm_set_car(kv, thread, caar);
+    scm_set_cdr(kv, thread, cdar);
+
+    let pair = gc_protect!(thread => kv, cdr => thread.make_cons::<false>(Value::encode_bool_value(false), Value::encode_bool_value(false)));
+    scm_set_car(pair, thread, kv);
+    scm_set_cdr(pair, thread, cdr);
+
+    pair
 }

@@ -12,7 +12,7 @@ use std::ops::{Deref, DerefMut};
 use std::{marker::PhantomData, ptr::NonNull};
 
 /// The map for a single function's stack frame. It is compiled as a constant
-/// for each invocation of [gc_frame!].
+/// for each invocation of [`gc_frame!`](crate::gc_frame).
 #[repr(C)]
 pub struct FrameMap<const N: usize> {
     pub num_roots: u32,
@@ -244,6 +244,16 @@ impl std::fmt::Pointer for Rooted {
     }
 }
 
+/// Implementation of shadow-stack that uses separate stack for roots.
+/// Roots are appended to the stack before operation that may trigger GC and
+/// restored after the operation. This stack in reality is way more cheaper than 
+/// [`gc_frame!`] that uses native stack to create shadow-stack frames. This is due
+/// to the fact that 1) we do not consume native stack memory and do not mess with 
+/// references to stack variables and 2) compiler is better to generate better code
+/// becaose of 1). 
+/// 
+/// This stack is automatically resized if it is not big enough to hold all roots. 
+/// Default size is 1024 values.
 pub struct ShadowStack {
     root_stack_base: *mut Value,
     root_stack_top: *mut Value,
@@ -265,7 +275,7 @@ impl ShadowStack {
     
     pub(crate) fn init(&mut self) {
         self.root_stack_size = 1024;
-        self.root_stack_memory = unsafe {
+        self.root_stack_memory = {
             mmtk::memory_manager::malloc(
                 self.root_stack_size * std::mem::size_of::<Value>(),
             ).to_mut_ptr::<Value>()
@@ -324,12 +334,16 @@ impl ShadowStack {
         }
     }
 
+    /// Walk all roots in this shadow-stack.
+    /// 
+    /// # Safety
+    /// 
+    /// Should be invoked only by GC code.
     pub unsafe fn walk_roots(&mut self, factory: &mut impl RootsWorkFactory<SimpleEdge>) {
 
         let mut edges = Vec::with_capacity(64);
         let mut ptr = self.root_stack_base;
-        while ptr < self.root_stack_top {
-            println!("root {:?} {:p}", ptr.read(), ptr);
+        while ptr < self.root_stack_top {   
             edges.push(SimpleEdge::from_address(Address::from_mut_ptr(ptr)));
             if edges.len() > 64 {
                 factory.create_process_edge_roots_work(std::mem::take(&mut edges));
@@ -369,7 +383,10 @@ macro_rules! gc_protect {
 
     (@pop $thread: expr; () -> ($($reversed: ident),*)) => {
         $(
-            $reversed = $thread.shadow_stack.pop_to_restore();
+            #[allow(unused_assignments)]
+            {
+                $reversed = $thread.shadow_stack.pop_to_restore();
+            }
         )*
     };
 

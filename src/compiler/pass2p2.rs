@@ -121,6 +121,11 @@ pub fn scan<const RESET_CALL: bool>(
             });
         }
 
+        IForm::LetValues(vals) => {
+            scan::<RESET_CALL>(&vals.init, fs, bs, toplevel, labels);
+            scan::<RESET_CALL>(&vals.body, fs, bs, toplevel, labels);
+        }
+
         _ => (),
     }
 }
@@ -197,6 +202,11 @@ pub fn pass2_substitute(mut iform: P<IForm>, map: &HashMap<P<LVar>, P<LVar>>) {
             args.iter_mut().for_each(|arg| {
                 pass2_substitute(arg.clone(), map);
             });
+        }
+
+        IForm::LetValues(vals) => {
+            pass2_substitute(vals.init.clone(), map);
+            pass2_substitute(vals.body.clone(), map);
         }
         _ => (),
     }

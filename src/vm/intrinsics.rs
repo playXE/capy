@@ -3,8 +3,8 @@ use crate::{
     interpreter::stackframe::{frame_local, frame_num_locals, frame_virtual_return_address},
     runtime::{
         object::{ScmPair, ScmProgram},
-        value::Value,
-    },
+        value::Value, environment::scm_define, symbol::scm_intern,
+    }, bytecode::opcodes::{OP_SHUFFLE_DOWN, OP_RETURN_VALUES},
 };
 
 use super::thread::Thread;
@@ -44,4 +44,14 @@ pub unsafe extern "C" fn cons_rest(thread: &mut Thread, base: u32) -> Value {
     }
 
     *rest
+}
+
+static VALUES_CODE: &'static [u8] = &[
+    OP_SHUFFLE_DOWN, 1, 0, 0, 0,
+    OP_RETURN_VALUES,
+];
+
+pub(crate) fn init() {
+    let program = Thread::current().make_program::<true>(VALUES_CODE.as_ptr(), 0);
+    scm_define(scm_intern("values"), program);
 }

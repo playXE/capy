@@ -13,7 +13,8 @@ use crate::{
         synrules::{compile_syntax_rules, synrule_expand},
         unwrap_identifier, Denotation,
     },
-    runtime::{object::scm_symbol_str, symbol::scm_intern, value::Value}, vm::sync::mutex::Mutex,
+    runtime::{object::scm_symbol_str, symbol::scm_intern, value::Value},
+    vm::sync::mutex::Mutex,
 };
 
 use super::{make_identifier, sexpr::Sexpr, tree_il::*, unmangled, Cenv, SyntaxEnv, P};
@@ -353,7 +354,7 @@ pub fn define_syntax() -> P<SyntaxEnv> {
             pass1_vanilla_lambda(
                 form,
                 if !matches!(rest, Sexpr::Boolean(false)) {
-                    Sexpr::append(reqs.clone(), Sexpr::list(&[rest.clone()]))
+                    Sexpr::append(Sexpr::list(&[rest.clone()]), reqs.clone())
                 } else {
                     reqs.clone()
                 },
@@ -668,6 +669,68 @@ pub fn define_syntax() -> P<SyntaxEnv> {
         );
 
         Ok(P(IForm::Const(Sexpr::Undefined)))
+    });
+
+    define_syntax!("let-syntax", form, cenv, {
+        let mut bindings = form.cadr();
+        let body = form.cddr();
+        let mut transformers = vec![];
+        while bindings.is_pair() {
+            let spec = bindings.car();
+            let name = spec.car();
+            let synrules = spec.cadr();
+            let transformer = {
+                let synrule_id = synrules.car();
+
+                if !sexp_eq(&synrule_id, &Sexpr::Symbol(scm_intern("syntax-rules"))) {
+                    return Err(format!("illegal define-syntax: {}: {}", form, synrule_id));
+                }
+
+                let mut literals = synrules.cadr();
+                let ellipsis = if matches!(literals, Sexpr::Symbol(_) | Sexpr::Identifier(_)) {
+                    literals = synrules.caddr();
+                    Some(synrules.cadr())
+                } else {
+                    None
+                };
+
+                let rules = if ellipsis.is_some() {
+                    synrules.cdddr()
+                } else {
+                    synrules.cddr()
+                };
+
+                let Sexpr::SyntaxRules(sr) = compile_syntax_rules(
+                    name.clone(),
+                    ellipsis.unwrap_or(Sexpr::Boolean(true)),
+                    literals,
+                    rules,
+                    cenv.syntax_env.clone(),
+                    cenv.frames.clone(),
+                )?
+                else {
+                    unreachable!()
+                };
+
+                sr
+            };
+
+            let id = name;
+
+            let denotation = transformer;
+            transformers.push((id, denotation));
+            bindings = bindings.cdr();
+        }
+
+        let mut ncenv = cenv.extend(
+            Sexpr::list_from_iter(
+                transformers
+                    .drain(..)
+                    .map(|(id, denot)| sexp_cons(id, Sexpr::SyntaxRules(denot))),
+            ),
+            Sexpr::Symbol(scm_intern("SYNTAX")),
+        );
+        pass1_body(&body, &mut ncenv)
     });
 
     let denotation_of_define = env.env.get(&scm_intern("define")).unwrap().clone();
@@ -1160,24 +1223,27 @@ fn pass1_body_rest(exprs: Sexpr, cenv: &Cenv) -> Result<P<IForm>, String> {
 }
 
 struct Expander {
-    env: P<SyntaxEnv>
+    env: P<SyntaxEnv>,
 }
 
 unsafe impl Send for Expander {}
 
 static EXPANDER: Lazy<Mutex<Expander>> = Lazy::new(|| {
     Mutex::new(Expander {
-        env: define_syntax()
+        env: define_syntax(),
     })
 });
 
 pub fn expand_default(expr: &Sexpr) -> Result<P<IForm>, String> {
     let expander = EXPANDER.lock(true);
 
-    let res = pass1(expr, &Cenv {
-        syntax_env: expander.env.clone(),
-        frames: Sexpr::Null,
-    });
+    let res = pass1(
+        expr,
+        &Cenv {
+            syntax_env: expander.env.clone(),
+            frames: Sexpr::Null,
+        },
+    );
 
     drop(expander);
 

@@ -36,7 +36,7 @@ pub struct Thread {
     pub kind: ThreadKind,
     pub handles: MaybeUninit<HandleMemory>,
     pub stackchain: StackChain,
-    pub local_finalization_queue: MaybeUninit<Vec<(ObjectReference, Box<dyn FnOnce()>)>>,
+    pub local_finalization_queue: MaybeUninit<Vec<(ObjectReference, CleanerType)>>,
 }
 
 impl Thread {
@@ -172,7 +172,7 @@ impl Thread {
         self.local_finalization_queue = MaybeUninit::new(Vec::with_capacity(128));
     }
 
-    pub fn register_cleaner(&mut self, object: ObjectReference, cleaner: Box<dyn FnOnce()>) {
+    pub fn register_cleaner(&mut self, object: ObjectReference, cleaner: CleanerType) {
         unsafe {
             let queue = self.local_finalization_queue.assume_init_mut();
             let cap = queue.capacity();
@@ -217,6 +217,7 @@ impl Thread {
 use crate::gc::refstorage::HandleMemory;
 use crate::gc::shadow_stack::{StackChain, ShadowStack};
 use crate::interpreter::InterpreterState;
+use crate::runtime::object::CleanerType;
 use crate::vm::sync::mutex::*;
 
 use super::scm_virtual_machine;

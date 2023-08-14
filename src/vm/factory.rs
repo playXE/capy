@@ -4,7 +4,7 @@ use mmtk::{util::ObjectReference, AllocationSemantics, MutatorContext};
 
 use crate::{
     gc_frame,
-    runtime::object::{Header, ScmCellHeader, ScmCellRef, TypeId},
+    runtime::object::{Header, ScmCellHeader, ScmCellRef, TypeId, ScmSyntaxExpander, ScmIdentifier, ScmLVar, CleanerType},
     runtime::{
         hashtable::{
             dummy_equiv, dummy_hash, equal_hash, equal_hash_equiv, eqv_hash, eqv_hash_equiv,
@@ -16,7 +16,7 @@ use crate::{
         },
         value::Value,
     },
-    utils::round_up,
+    utils::round_up, compiler::{P, tree_il::LVar},
 };
 
 use super::{sync::mutex::RawMutex, thread::Thread};
@@ -407,6 +407,100 @@ impl Thread {
             let reference = transmute::<_, ObjectReference>(mem);
             mutator.post_alloc(reference, size, AllocationSemantics::Default);
 
+            Value::encode_object_value(ScmCellRef(transmute(reference)))
+        }
+    }
+
+    pub fn make_syntax_expander(&mut self, expander: fn(Value, Value) -> Result<Value, Value>) -> Value {
+        let size = size_of::<ScmSyntaxExpander>();
+
+        let mutator = self.mutator();
+
+        let mem = mutator.alloc(size, size_of::<usize>(), 0, AllocationSemantics::Default);
+
+        unsafe {
+            mem.store(ScmSyntaxExpander {
+                header: ScmCellHeader {
+                    as_header: Header {
+                        type_id: TypeId::SyntaxExpander,
+                        pad: [0; 4],
+                        flags: 0,
+                    },
+                },
+                callback: expander,
+            });
+
+            let reference = transmute::<_, ObjectReference>(mem);
+            mutator.post_alloc(reference, size, AllocationSemantics::Default);
+
+            Value::encode_object_value(ScmCellRef(transmute(reference)))
+        }
+    }
+
+    pub fn make_identifier<const IMMORTAL: bool>(&mut self) -> Value {
+        
+        let size = size_of::<ScmIdentifier>();
+
+        let mutator = self.mutator();
+        let semantics = if IMMORTAL {
+            AllocationSemantics::Immortal
+        } else {
+            AllocationSemantics::Default
+        };
+        let mem = mutator.alloc(size, size_of::<usize>(), 0, semantics);
+
+        unsafe {
+            mem.store(ScmIdentifier {
+                header: ScmCellHeader {
+                    as_header: Header {
+                        type_id: TypeId::SyntaxExpander,
+                        pad: [0; 4],
+                        flags: 0,
+                    },
+                },
+                name: Value::encode_undefined_value(),
+                frames: Value::encode_null_value(),
+                env: Value::encode_null_value(),
+            });
+
+            let reference = transmute::<_, ObjectReference>(mem);
+            mutator.post_alloc(reference, size, semantics);
+
+            Value::encode_object_value(ScmCellRef(transmute(reference)))
+        }
+    }
+
+    pub fn make_lvar(&mut self, lvar: P<LVar>) -> Value {
+        let size = size_of::<ScmIdentifier>();
+
+        let mutator = self.mutator();
+        let semantics = AllocationSemantics::Default;
+        let mem = mutator.alloc(size, size_of::<usize>(), 0, semantics);
+
+        unsafe {
+            mem.store(ScmLVar {
+                header: ScmCellHeader {
+                    as_header: Header {
+                        type_id: TypeId::LVar,
+                        pad: [0; 4],
+                        flags: 0,
+                    },
+                },
+                lvar
+            });
+
+            let reference = transmute::<_, ObjectReference>(mem);
+            mutator.post_alloc(reference, size, semantics);
+            self.register_cleaner(reference, CleanerType::Drop({
+                fn drop_lvar(reference: *mut ()) {
+                    let lvar = unsafe { transmute::<_, *mut ScmLVar>(reference) };
+                    unsafe {
+                        core::ptr::drop_in_place(lvar);
+                    }
+                }
+
+                drop_lvar
+            }));
             Value::encode_object_value(ScmCellRef(transmute(reference)))
         }
     }

@@ -621,3 +621,11 @@ pub fn dummy_hash(_key: Value, _nsize: u32) -> u32 {
 pub fn dummy_equiv(_key1: Value, _key2: Value) -> bool {
     todo!()
 }
+
+pub fn hashtable_lock(ht: Value) {
+    ht.cast_as::<ScmHashTable>().lock.lock(true);
+}
+
+pub fn hashtable_unlock(ht: Value) {
+    ht.cast_as::<ScmHashTable>().lock.unlock();
+}

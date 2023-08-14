@@ -21,6 +21,7 @@ use mmtk::{
 use crate::{
     runtime::{
         hashtable::{HashTableRec, ScmHashTable},
+        module::ScmModule,
         object::*,
         value::Value,
     },
@@ -36,10 +37,10 @@ use self::shadow_stack::visit_roots;
 use crate::runtime::object::{ScmCellHeader, ScmCellRef, TypeId};
 
 pub mod memory_region;
+pub mod objstorage;
 pub mod refstorage;
 pub mod shadow_stack;
 pub mod virtual_memory;
-pub mod objstorage;
 
 #[derive(Default)]
 pub struct CapyVM;
@@ -167,6 +168,9 @@ impl ObjectModel<CapyVM> for ScmObjectModel {
 
                 TypeId::HashTable => size_of::<ScmHashTable>(),
 
+                TypeId::Module => size_of::<ScmModule>(),
+                TypeId::Identifier => size_of::<ScmIdentifier>(),
+                TypeId::SyntaxExpander => size_of::<ScmSyntaxExpander>(),
                 _ => unreachable!(),
             },
             8,
@@ -451,6 +455,19 @@ impl Scanning<CapyVM> for ScmScanning {
 
                 hash_table.rehash = true;
             }
+
+            TypeId::Module => {
+                reference.cast_as::<ScmModule>().visit_edges(edge_visitor);
+            }
+
+            TypeId::Identifier => {
+                let id = reference.cast_as::<ScmIdentifier>();
+                id.env.visit_edge(edge_visitor);
+                id.name.visit_edge(edge_visitor);
+                id.frames.visit_edge(edge_visitor);
+            }
+
+
             _ => (),
         }
     }
@@ -462,26 +479,8 @@ impl Scanning<CapyVM> for ScmScanning {
         mut factory: impl RootsWorkFactory<<CapyVM as VMBinding>::VMEdge>,
     ) {
         let vm = scm_virtual_machine();
-        let mut edges = vec![];
-        for (_, value) in vm.symtable.iter() {
-            let value: &ScmCellRef = unsafe { std::mem::transmute(value) };
-            let edge = SimpleEdge::from_address(Address::from_ptr(value));
-            edges.push(edge);
-        }
-        unsafe {
-            vm.images.visit_roots(&mut factory);
 
-            let env = vm.toplevel_environment.get_mut();
-
-            for bucket in env.buckets.iter_mut() {
-                if bucket.is_object() {
-                    let edge: SimpleEdge = SimpleEdge::from_address(transmute(bucket));
-                    edges.push(edge);
-                }
-            }
-        }
-
-        factory.create_process_edge_roots_work(edges);
+        vm.scan_roots(&mut factory);
     }
 
     fn scan_roots_in_mutator_thread(
@@ -527,7 +526,15 @@ impl Scanning<CapyVM> for ScmScanning {
             if object.is_reachable() {
                 new_queue.push((object.get_forwarded_object().unwrap_or(object), cleaner));
             } else {
-                cleaner();
+                match cleaner {
+                    CleanerType::Drop(drop) => {
+                        drop(object.to_raw_address().to_mut_ptr());
+                    }
+
+                    CleanerType::Callback(callback) => {
+                        callback();
+                    }
+                }
             }
         }
         false

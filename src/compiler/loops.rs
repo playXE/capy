@@ -100,6 +100,10 @@ fn is_captured(x: &IForm, in_lambda: bool, lvar: P<LVar>) -> bool {
 
         IForm::Lambda(lam) => is_captured(&lam.body, true, lvar),
         IForm::PrimCall(_, args) => args.iter().any(|x| is_captured(x, in_lambda, lvar.clone())),
+        IForm::LetValues(lvals) => {
+            is_captured(&lvals.init, in_lambda, lvar.clone())
+                || is_captured(&lvals.body, in_lambda, lvar.clone())
+        }
         _ => false,
     }
 }
@@ -298,6 +302,13 @@ pub fn recover_loops_rec(
 
             iform
         }
+
+        IForm::LetValues(lvals) => {
+            lvals.init = recover_loops_rec(lvals.init.clone(), penv, false, changed);
+            lvals.body = recover_loops_rec(lvals.body.clone(), penv, tail, changed);
+
+            iform
+        }
     }
 }
 
@@ -393,6 +404,12 @@ fn optimize_loop(
                     *x = rewrite(x.clone(), lvar, formals, label.clone());
                 });
 
+                x
+            }
+
+            IForm::LetValues(lvals) => {
+                lvals.init = rewrite(lvals.init.clone(), lvar, formals, label.clone());
+                lvals.body = rewrite(lvals.body.clone(), lvar, formals, label.clone());
                 x
             }
 

@@ -20,7 +20,7 @@ use crate::{
     },
 };
 
-/// OopStorage supports management of off-heap references to objects allocated
+/// ObjStorage supports management of off-heap references to objects allocated
 /// in the Scheme heap.  An ObjStorage object provides a set of Scheme object
 /// references (obj values), which clients refer to via *mut Value handles to the
 /// associated ObjStorage entries.  Clients allocate entries to create a
@@ -166,6 +166,20 @@ impl Block {
         self.check_index(index);
         1 << index
     }
+
+    pub fn iterate<F>(&mut self, f: &mut F) -> bool 
+    where F: FnMut(*mut Value) -> bool {
+        let mut bitmask = self.allocated_bitmask();
+        while bitmask != 0 {
+            let index = bitmask.trailing_zeros() as usize;
+            bitmask ^= self.bitmask_for_index(index);
+            if !f(self.get_pointer(index)) {
+                return false;
+            }
+        }
+
+        true
+    }
 }
 
 struct AllocationList {
@@ -226,7 +240,7 @@ impl AllocationList {
     }
 }
 
-struct ActiveArray {
+pub struct ActiveArray {
     size: usize,
     block_count: AtomicUsize,
     refcount: AtomicIsize,
@@ -802,6 +816,7 @@ impl ObjStorageInner {
             concurrent_iteration_count: AtomicUsize::new(0),
         }
     }
+
 }
 
 unsafe fn with_active_array<T>(
@@ -908,5 +923,166 @@ impl Debug for ObjHandle {
                 self.inner.as_ref().storage.name()
             )
         }
+    }
+}
+
+pub struct BasicParState {
+    pub storage: ObjStorage,
+    pub active_array: *mut ActiveArray,
+    pub block_count: usize,
+    pub next_block: AtomicUsize,
+    pub estimated_thread_count: usize,
+    pub concurrent: bool,
+    pub num_dead: AtomicUsize,
+}
+
+pub struct IterationData {
+    pub segment_start: usize,
+    pub segment_end: usize,
+    pub processed: usize,
+}
+
+impl BasicParState {
+    pub fn new(storage: ObjStorage, estimated_thread_count: usize, concurrent: bool) -> Self {
+        let mut this = Self {
+            storage: storage.clone(),
+            active_array: unsafe { storage.inner.as_ref().obtain_active_array() },
+            block_count: 0,
+            next_block: AtomicUsize::new(0),
+            estimated_thread_count,
+            concurrent,
+            num_dead: AtomicUsize::new(0),
+        };
+        this.block_count = unsafe {
+            (*this.active_array).block_count_acquire()
+        };
+        this.update_concurrent_iteration_count(true);
+        this
+    }
+
+    fn update_concurrent_iteration_count(&self, inc: bool) {
+        unsafe {
+            if self.concurrent {
+                self.storage.inner.as_ref().active_mutex.lock(false);
+                if inc {
+                    self.storage
+                        .inner
+                        .as_ref()
+                        .concurrent_iteration_count
+                        .fetch_add(1, Ordering::Relaxed);
+                } else {
+                    self.storage
+                        .inner
+                        .as_ref()
+                        .concurrent_iteration_count
+                        .fetch_sub(1, Ordering::Relaxed);
+                }
+            }
+        }
+    }
+
+    pub fn claim_next_segment(&self, data: &mut IterationData) -> bool {
+        data.processed += data.segment_end - data.segment_start;
+
+        let mut start = self.next_block.load(Ordering::Acquire);
+        if start >= self.block_count {
+            return self.finish_iteration(data);
+        }
+
+        // Try to claim several at a time, but not *too* many.  We want to
+        // avoid deciding there are many available and selecting a large
+        // quantity, get delayed, and then end up claiming most or all of
+        // the remaining largish amount of work, leaving nothing for other
+        // threads to do.  But too small a step can lead to contention
+        // over _next_block, esp. when the work per block is small.
+        let max_step = 10;
+        let remaining = self.block_count - start;
+        let step = max_step.min(1 + (remaining / self.estimated_thread_count));
+
+        let mut end = self.next_block.fetch_add(step, Ordering::Relaxed) + step;
+
+        start = end - step;
+        end = end.min(self.block_count);
+        if start < self.block_count {
+            data.segment_start = start;
+            data.segment_end = end;
+            return true;
+        } else {
+            return self.finish_iteration(data);
+        }
+    }
+
+    pub fn finish_iteration(&self, data: &mut IterationData) -> bool {
+        log::info!(
+            "Parallel iteration on {}: blocks = {}, processed = {} ({:.2}%)",
+            self.storage.name(),
+            self.block_count,
+            data.processed,
+            (data.processed as f64 / self.block_count as f64) * 100.0
+        );
+
+        false
+    }
+
+    pub fn num_dead(&self) -> usize {
+        self.num_dead.load(Ordering::Relaxed)
+    }
+
+    pub fn increment_num_dead(&self) {
+        self.num_dead.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn iterate<F>(&self, mut f: F)
+    where F: FnMut(*mut Value)
+    {
+        let mut f = |val: *mut Value| {
+            f(val);
+            true 
+        };
+
+        let mut data = IterationData {
+            segment_start: 0,
+            segment_end: 0,
+            processed: 0,
+        };
+
+        while self.claim_next_segment(&mut data) {
+            let mut i = data.segment_start;
+            loop {
+                let block = unsafe { *(*self.active_array).block_ptr(i)};
+                unsafe {
+                    (*block).iterate(&mut f);
+                }
+
+                i += 1;
+                if i >= data.segment_end {
+                    break;
+                }
+            }
+        }
+    } 
+}
+
+impl Drop for BasicParState {
+    fn drop(&mut self) {
+        self.update_concurrent_iteration_count(false);
+    }
+}
+
+pub struct ParState<const CONCURRENT: bool> {
+    pub basic_state: BasicParState,
+}
+
+impl<const CONCURRENT: bool> ParState<CONCURRENT> {
+    pub fn new(storage: ObjStorage, estimated_thread_count: usize) -> Self {
+        Self {
+            basic_state: BasicParState::new(storage, estimated_thread_count, CONCURRENT),
+        }
+    }
+
+    pub fn iterate<F>(&self, f: F)
+    where F: FnMut(*mut Value)
+    {
+        self.basic_state.iterate(f);
     }
 }

@@ -6,7 +6,7 @@ use mmtk::{
     vm::{edge_shape::SimpleEdge, EdgeVisitor},
 };
 
-use crate::{runtime::object::*, vm::thread::Thread};
+use crate::{runtime::object::*, vm::thread::Thread, compiler::{tree_il::LVar, P}};
 
 use super::{
     object::TypeId,
@@ -376,6 +376,30 @@ impl Value {
                 *self = other;
             }
         }
+    }
+
+    pub fn is_syntax_expander(self) -> bool {
+        self.type_of() == TypeId::SyntaxExpander
+    }
+
+    pub fn syntax_expander<'a>(self) -> &'a mut ScmSyntaxExpander {
+        self.cast_as()
+    }
+
+    pub fn is_identifier(self) -> bool {
+        self.type_of() == TypeId::Identifier
+    }
+
+    pub fn identifier<'a>(self) -> &'a mut ScmIdentifier {
+        self.cast_as()
+    }
+
+    pub fn is_lvar(self) -> bool {
+        self.type_of() == TypeId::LVar
+    }
+
+    pub fn lvar(self) -> P<LVar> {
+        self.cast_as::<ScmLVar>().lvar.clone()
     }
 }
 

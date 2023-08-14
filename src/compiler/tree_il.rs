@@ -1,6 +1,6 @@
 use std::{collections::HashSet, hash::Hash};
 
-use super::{p::Weak, sexpr::Sexpr, P};
+use super::{p::Weak, primitives::TRANSPARENT_PRIMITIVE_NAMES, sexpr::Sexpr, P};
 
 pub enum IForm {
     Const(Sexpr),
@@ -18,6 +18,7 @@ pub enum IForm {
     PrimCall(&'static str, Vec<P<IForm>>),
     PrimRef(&'static str),
     Let(Let),
+    LetValues(LetValues),
     Goto(Weak<IForm>),
 }
 
@@ -74,6 +75,7 @@ impl IForm {
                 var.inits.iter().all(|x| x.is_transparent()) && var.body.is_transparent()
             }
 
+            Self::LetValues(vals) => vals.init.is_transparent() && vals.body.is_transparent(),
             Self::Seq(seq) => seq.forms.iter().all(|x| x.is_transparent()),
             Self::Call(call) => {
                 if !call.args.iter().all(|arg| arg.is_transparent()) {
@@ -97,6 +99,16 @@ impl IForm {
                     _ => false,
                 }
             }
+
+            Self::PrimCall(name, args) => {
+                if !args.iter().all(|arg| arg.is_transparent()) {
+                    return false;
+                }
+
+                TRANSPARENT_PRIMITIVE_NAMES.contains(name)
+            }
+
+            Self::PrimRef(_) => false,
             _ => false,
         }
     }
@@ -156,7 +168,21 @@ impl IForm {
                 gset.value.count_refs();
             }
             Self::Label(label) => label.body.count_refs(),
-            _ => {}
+            Self::LetValues(lvals) => {
+                lvals.lvars.iter_mut().for_each(|lvar| {
+                    lvar.ref_count = 0;
+                    lvar.set_count = 0;
+                });
+
+                lvals.init.count_refs();
+                lvals.body.count_refs();
+            }
+            Self::PrimCall(_, args) => {
+                for arg in args {
+                    arg.count_refs();
+                }
+            }
+            Self::Const(_) | Self::It | Self::GRef(_) | Self::PrimRef(_) | Self::Goto(_) => {}
         }
     }
 }
@@ -204,6 +230,7 @@ impl std::fmt::Debug for LVar {
 pub struct LRef {
     pub lvar: P<LVar>,
 }
+
 
 pub struct LSet {
     pub lvar: P<LVar>,
@@ -286,6 +313,13 @@ pub enum CallFlag {
     Jump,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum LetType {
+    Let,
+    Rec,
+    RecStar,
+}
+
 pub struct Let {
     pub typ: LetType,
     pub lvars: Vec<P<LVar>>,
@@ -293,11 +327,20 @@ pub struct Let {
     pub body: P<IForm>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum LetType {
-    Let,
-    Rec,
-    RecStar,
+/// Handles `let-values` from Scheme. Note that it does not directly implement `let-values`,
+/// instead it is constructed from `call-with-values` forms:
+/// ```scm
+/// (let-values ((v0 v1 ...) <init>) <body>)
+/// ```
+/// which is equivalent to:
+/// ```scm
+/// (call-with-values (lambda () <init>) (lambda (v0 v1 ...) <body>))
+/// ```
+pub struct LetValues {
+    pub lvars: Vec<P<LVar>>,
+    pub optarg: bool,
+    pub init: P<IForm>,
+    pub body: P<IForm>,
 }
 
 use pretty::{BoxAllocator, DocAllocator, DocBuilder};
@@ -423,6 +466,30 @@ impl IForm {
                     .append(proc_pret)
                     .append(allocator.line())
                     .append(args_pret)
+                    .nest(1)
+                    .group()
+                    .parens()
+            }
+
+            IForm::LetValues(vals) => {
+                let lvars_pret = allocator
+                    .intersperse(
+                        vals.lvars.iter().map(|lvar| allocator.text(format!("{}.{:p}", lvar.name, lvar.as_ptr()))),
+                        allocator.space(),
+                    )
+                    .group()
+                    .parens();
+
+                allocator
+                    .text("let-values")
+                    .append(allocator.softline())
+                    .append(lvars_pret)
+                    .append(allocator.line())
+                    .nest(1)
+                    .append(vals.init.pretty::<REF, _>(allocator))
+                    .append(allocator.line())
+                    .nest(1)
+                    .append(vals.body.pretty::<REF, _>(allocator))
                     .nest(1)
                     .group()
                     .parens()

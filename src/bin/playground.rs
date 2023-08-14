@@ -5,7 +5,7 @@ use capy::{
         symbol::scm_intern,
         value::Value,
     },
-    vm::{options::VMOptions, scm_init, scm_virtual_machine, thread::Thread}, gc::objstorage::ObjStorage,
+    vm::{options::VMOptions, scm_init, scm_virtual_machine, thread::Thread}, gc::objstorage::{ObjStorage, ParState},
 };
 
 fn main() {
@@ -32,5 +32,12 @@ fn main() {
 
     let storage = ObjStorage::new("objects");
 
+    let p = storage.allocate();
+
+    println!("allocated {:p}", p);
+
+    ParState::<false>::new(storage.clone(), 1).iterate(|slot| {
+        println!("slot: {:p}", slot);
+    });
 
 }

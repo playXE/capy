@@ -4,13 +4,30 @@ use crate::runtime::object::scm_symbol_str;
 
 use super::{tree_il::IForm, P};
 
+pub const TRANSPARENT_PRIMITIVE_NAMES: &[&str] = &[
+    "vector",
+    "cons",
+    "pair?",
+    "number?",
+    "vector?",
+    "string?",
+    "symbol?",
+    "char?",
+    "boolean?",
+    "procedure?",
+    "null?",
+    "list?",
+    "eq?",
+    "eqv?",
+    "equal?",
+    "not",
+];
+
 pub const INTERESTING_PRIMTIIVE_NAMES: &[&str] = &[
-    "apply",
     "call-with-values",
     "call-with-current-continuation",
     "call/cc",
     "dynamic-wind",
-    "values",
     "eq?",
     "eqv?",
     "equal?",

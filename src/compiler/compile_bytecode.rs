@@ -50,7 +50,7 @@ pub fn scan<const RESET_CALL: bool>(
             scan::<RESET_CALL>(&cond.alternative, fs, bs, toplevel, labels);
         }
         IForm::Let(var) => {
-            if var.typ == LetType::Rec {
+            if var.typ != LetType::Let {
                 var.lvars.iter().for_each(|lvar| {
                     bs.insert(lvar.clone());
                 });
@@ -119,6 +119,14 @@ pub fn scan<const RESET_CALL: bool>(
             });
         }
 
+        IForm::LetValues(letv) => {
+            scan::<RESET_CALL>(&letv.init, fs, bs, toplevel, labels);
+            for lvar in letv.lvars.iter() {
+                bs.insert(lvar.clone());
+            }
+            scan::<RESET_CALL>(&letv.body, fs, bs, toplevel, labels);
+        }
+
         _ => (),
     }
 }
@@ -173,7 +181,7 @@ fn compute_frame_size(lam: P<Lambda>) -> usize {
             }
 
             IForm::Label(label) => visit(&label.body),
-
+            IForm::LetValues(letv) => visit(&letv.init).max(letv.lvars.len() + visit(&letv.body)),
             _ => 1,
         }
     }
@@ -190,7 +198,12 @@ struct Env {
     next_local: u32,
 }
 
-pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &Vec<(P<Lambda>, usize)>, data_start: usize) {
+pub fn compile_closure(
+    asm: &mut Assembler,
+    lam: P<Lambda>,
+    closures: &Vec<(P<Lambda>, usize)>,
+    data_start: usize,
+) {
     fn lookup_lexical(sym: P<LVar>, mut env: &P<Env>) -> P<Env> {
         loop {
             if sym.as_ptr() == env.id.as_ptr() {
@@ -457,7 +470,9 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &Vec<(P<La
                 visit_let(var, asm, env, Context::ValuesAt(height), state);
             }
             IForm::If(cond) => visit_if(cond, asm, env, Context::ValuesAt(height), state),
-
+            IForm::LetValues(letv) => {
+                visit_let_values(letv, asm, env, state, Context::ValuesAt(height))
+            }
             _ => {
                 for_value_at(asm, exp, env, state.frame_size - height - 1, state);
                 asm.emit_reset_frame(u24::new(height + 1));
@@ -547,6 +562,10 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &Vec<(P<La
                 visit_if(cond, asm, env, Context::ValueAt(dst), state);
             }
 
+            IForm::LetValues(letv) => {
+                visit_let_values(letv, asm, env, state, Context::ValueAt(dst));
+            }
+
             IForm::It => {
                 asm.emit_make_immediate(dst as _, Value::encode_undefined_value().get_raw() as _);
             }
@@ -617,10 +636,45 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &Vec<(P<La
                 }
             },
 
-            
-
             _ => todo!(),
         }
+    }
+
+    fn visit_values_handler(
+        asm: &mut Assembler,
+        lvars: &[P<LVar>],
+        rest: bool,
+        body: &P<IForm>,
+        env: &P<Env>,
+        state: &mut State<'_>,
+        ctx: Context,
+    ) {
+        let proc_slot = stack_height(env, state);
+        let nreq = lvars.len() as u32 - rest as u32;
+        if !rest && nreq != 0 {
+            asm.emit_receive_values(proc_slot, rest, nreq);
+        }
+        if rest {
+            asm.emit_bind_rest(u24::new(proc_slot + nreq));
+        }
+
+        asm.emit_reset_frame(u24::new(state.frame_size));
+
+        /*fn push_bindings(lvars: &[P<LVar>], env: P<Env>) -> P<Env> {
+            if lvars.is_empty() {
+                return env;
+            }
+            let env = push_local(lvars[0].name.clone(), lvars[0].clone(), env);
+            push_bindings(&lvars[1..], env)
+        }*/
+
+        let env = lvars.iter().fold(env.clone(), |env, lvar| {
+            let env = push_local(lvar.name.clone(), lvar.clone(), env);
+            env
+        });
+
+
+        for_context(asm, ctx, body, &env, state);
     }
 
     fn for_args(
@@ -637,7 +691,20 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &Vec<(P<La
         }
         cargs
     }
+    fn visit_let_values(
+        exp: &LetValues,
+        asm: &mut Assembler,
+        env: &P<Env>,
+        state: &mut State,
+        ctx: Context,
+    ) {
+        for_values(asm, &exp.init, env, state);
+        visit_values_handler(asm, &exp.lvars, exp.optarg, &exp.body, env, state, ctx);
+    }
 
+    fn for_values(asm: &mut Assembler, exp: &P<IForm>, env: &P<Env>, state: &mut State) {
+        for_values_at(asm, exp, env, stack_height(env, state), state);
+    }
     fn for_effect(
         asm: &mut Assembler,
         exp: &P<IForm>,
@@ -726,6 +793,11 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &Vec<(P<La
                 (prim.emit)(asm, &args);
                 None
             }
+
+            IForm::LetValues(values) => {
+                visit_let_values(values, asm, env, state, Context::Effect);
+                None
+            }
             _ => Some(for_value(asm, exp, env, state)),
         }
     }
@@ -766,7 +838,7 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &Vec<(P<La
                 // (make-immediate 2 <smth>)
                 // (mov 1 3)
                 // (mov 0 2)
-                // 
+                //
                 // Instead we should be able to directly create the immediate in the right place
                 // and this also can work for local variable references.
                 let base = stack_height(env, state);
@@ -795,6 +867,9 @@ pub fn compile_closure(asm: &mut Assembler, lam: P<Lambda>, closures: &Vec<(P<La
                 let off = state.data_start as i32 - asm.code.len() as i32;
                 asm.emit_loop_hint(off);
                 for_tail(asm, &label.body, env, state);
+            }
+            IForm::LetValues(let_values) => {
+                visit_let_values(let_values, asm, env, state, Context::Tail)
             }
             _ => {
                 for_values_at(asm, exp, env, 0, state);
@@ -904,15 +979,14 @@ pub fn compile_bytecode(exp: P<IForm>, output: &mut Vec<u8>) {
         let pos = asm.code.len();
         compile_closure(&mut asm, closure.clone(), &closures, data_pos);
         let end = asm.code.len();
-        
+
         let diff_start = pos as i32 - data_pos as i32;
         let diff_end = end as i32 - data_pos as i32;
 
         asm.code[start_pos..start_pos + 4].copy_from_slice(&diff_start.to_le_bytes());
         asm.code[end_pos..end_pos + 4].copy_from_slice(&diff_end.to_le_bytes());
-        
-        actual_locations.insert(*label, pos);
 
+        actual_locations.insert(*label, pos);
 
         closure_data.push(Data {
             start: pos,
@@ -925,7 +999,6 @@ pub fn compile_bytecode(exp: P<IForm>, output: &mut Vec<u8>) {
                 .map(|x| scm_intern(x))
                 .unwrap_or(Value::encode_null_value()),
         });
-
     }
 
     while let Some(reloc) = asm.relocs.pop() {
@@ -953,19 +1026,22 @@ pub fn compile_bytecode(exp: P<IForm>, output: &mut Vec<u8>) {
     }
 
     let constants = Sexpr::Vector(P(std::mem::take(&mut asm.constants)));
-    let data = closure_data.iter().map(|data| {
-        Sexpr::Vector(P(vec![
-            Sexpr::Fixnum(data.start as _),
-            Sexpr::Fixnum(data.end as _),
-            Sexpr::Fixnum(data.nargs as _),
-            Sexpr::Boolean(data.optarg),
-            if data.name.is_null() {
-                Sexpr::Null 
-            } else {
-                Sexpr::Symbol(data.name)
-            },
-        ]))
-    }).collect::<Vec<_>>();
+    let data = closure_data
+        .iter()
+        .map(|data| {
+            Sexpr::Vector(P(vec![
+                Sexpr::Fixnum(data.start as _),
+                Sexpr::Fixnum(data.end as _),
+                Sexpr::Fixnum(data.nargs as _),
+                Sexpr::Boolean(data.optarg),
+                if data.name.is_null() {
+                    Sexpr::Null
+                } else {
+                    Sexpr::Symbol(data.name)
+                },
+            ]))
+        })
+        .collect::<Vec<_>>();
     let label = actual_locations[&toplevel_ix];
     let entrypoint = Sexpr::Program(label as _);
 
@@ -990,7 +1066,7 @@ pub fn compile_bytecode(exp: P<IForm>, output: &mut Vec<u8>) {
 }
 
 pub struct Primitive {
-    pub nargs: usize,
+    pub nargs: isize,
     pub predicate: bool,
     pub has_result: bool,
     pub emit: fn(&mut Assembler, &[u32]),

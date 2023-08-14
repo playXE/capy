@@ -2,7 +2,7 @@ use std::mem::{size_of, transmute};
 
 use mmtk::{memory_manager::object_reference_write, util::Address, vm::edge_shape::SimpleEdge};
 
-use crate::{runtime::value::Value, utils::bitfield::BitField, vm::thread::Thread};
+use crate::{runtime::value::Value, utils::bitfield::BitField, vm::thread::Thread, compiler::{P, tree_il::LVar}};
 
 pub type HashStateSpec = BitField<2, 59, false>;
 pub type ImmutSpec = BitField<1, 55, false>;
@@ -33,11 +33,22 @@ pub enum TypeId {
     Rational,
     Complex,
     Bignum,
+    Environment,
     HashTable,
     HashTableRec,
     WeakHashTable,
     WeakHashTableRec,
     Module,
+    IForm,
+    LVar,
+    ILambda,
+    ICLambda,
+    SyntaxRules,
+    SyntaxPattern,
+    SyntaxExpander,
+    PVRef,
+    Identifier,
+    
 }
 
 pub const HASH_STATE_UNHASHED: u8 = 0;
@@ -355,6 +366,15 @@ pub fn scm_vector_length(vector: Value) -> u32 {
     vector.get_object().cast_as::<ScmVector>().length as _
 }
 
+pub fn scm_vector_as_slice<'a>(vector: Value) -> &'a [Value] {
+    unsafe {
+        debug_assert!(vector.is_vector());
+        let mut vec = vector.get_object();
+        let vec = vec.cast_as::<ScmVector>();
+        std::slice::from_raw_parts(vec.values.as_ptr(), vec.length)
+    }
+}
+
 pub fn scm_program_code(program: Value) -> *const u8 {
     debug_assert!(program.is_program());
     program.get_object().cast_as::<ScmProgram>().vcode
@@ -623,4 +643,30 @@ pub struct ScmSubroutine {
     pub maxa: u32,
     pub nenv: u32,
     pub env: [Value; 0],
+}
+
+#[repr(C)]
+pub struct ScmIdentifier {
+    pub header: ScmCellHeader,
+    pub name: Value,
+    pub frames: Value,
+    pub env: Value,
+}
+
+/// Syntax expander expands Scheme into Tree IL.
+#[repr(C)]
+pub struct ScmSyntaxExpander {
+    pub header: ScmCellHeader,
+    pub callback: fn(Value, Value) -> Result<Value, Value>
+}
+
+#[repr(C)]
+pub struct ScmLVar {
+    pub(crate) header: ScmCellHeader,
+    pub(crate) lvar: P<LVar>,
+}
+
+pub enum CleanerType {
+    Drop(fn(*mut ())),
+    Callback(Box<dyn FnOnce()>),
 }

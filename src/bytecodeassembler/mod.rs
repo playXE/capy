@@ -312,6 +312,10 @@ impl Assembler {
         OpBindRest::new(dst).write(self);
     }
 
+    pub fn emit_receive_values(&mut self, dst: u32, rest: bool, nreq: u32) {
+        OpReceiveValues::new(u24::new(dst), rest, u24::new(nreq)).write(self);
+    }
+
     pub fn emit_car(&mut self, dst: u16, obj: u16) {
         OpCar::new(dst, obj).write(self);
     }

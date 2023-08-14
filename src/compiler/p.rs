@@ -1,9 +1,14 @@
-use std::{hash::Hash, mem::ManuallyDrop, ptr::NonNull};
+use std::{
+    hash::Hash,
+    mem::ManuallyDrop,
+    ptr::NonNull,
+    sync::atomic::{AtomicU32, Ordering},
+};
 
 #[repr(C)]
 struct Inner<T> {
-    weak: u32,
-    rc: u32,
+    weak: AtomicU32,
+    rc: AtomicU32,
 
     value: ManuallyDrop<T>,
 }
@@ -21,8 +26,8 @@ impl<T> Hash for P<T> {
 impl<T> P<T> {
     pub fn new(value: T) -> Self {
         let inner = Box::into_raw(Box::new(Inner {
-            rc: 1,
-            weak: 1,
+            rc: AtomicU32::new(1),
+            weak: AtomicU32::new(1),
             value: ManuallyDrop::new(value),
         }));
 
@@ -46,12 +51,24 @@ impl<T> P<T> {
     pub fn as_mut_ptr(&mut self) -> *mut T {
         self.inner.as_ptr().cast()
     }
+
+    #[inline(never)]
+    unsafe fn drop_slow(&mut self) {
+        ManuallyDrop::drop(&mut self.inner.as_mut().value);
+
+        drop(Weak { inner: self.inner });
+    }
 }
 
 impl<T> Clone for P<T> {
     fn clone(&self) -> Self {
         unsafe {
-            self.inner.as_ptr().as_mut().unwrap().rc += 1;
+            self.inner
+                .as_ptr()
+                .as_mut()
+                .unwrap()
+                .rc
+                .fetch_add(1, Ordering::Relaxed);
         }
         Self { inner: self.inner }
     }
@@ -60,21 +77,12 @@ impl<T> Clone for P<T> {
 impl<T> Drop for P<T> {
     fn drop(&mut self) {
         unsafe {
-            self.inner.as_mut().rc -= 1;
-
-            if self.inner.as_ref().rc == 0 {
-                // destroy the contained object
-                ManuallyDrop::drop(&mut self.inner.as_mut().value);
-
-                // remove the implicit "strong weak" pointer now that we've
-                // destroyed the contents.
-                self.inner.as_mut().weak -= 1;
-
-                if self.inner.as_ref().weak == 0 {
-                    // destroy the box itself
-                    drop(Box::from_raw(self.inner.as_ptr()));
-                }
+            if self.inner.as_ref().rc.fetch_sub(1, Ordering::Release) != 1 {
+                return;
             }
+
+            std::sync::atomic::fence(Ordering::Acquire);
+            self.drop_slow();
         }
     }
 }
@@ -136,16 +144,61 @@ pub struct Weak<T> {
 
 impl<T> Weak<T> {
     pub fn new(value: &P<T>) -> Self {
-        unsafe {
+        /*unsafe {
             value.inner.as_ptr().as_mut().unwrap().weak += 1;
         }
-        Self { inner: value.inner }
+        Self { inner: value.inner }*/
+
+        unsafe {
+            let mut cur = value.inner.as_ref().weak.load(Ordering::Relaxed);
+
+            loop {
+                if cur == u32::MAX {
+                    std::hint::spin_loop();
+                    cur = value.inner.as_ref().weak.load(Ordering::Relaxed);
+                    continue;
+                }
+
+                match value.inner.as_ref().weak.compare_exchange_weak(
+                    cur,
+                    cur + 1,
+                    Ordering::Acquire,
+                    Ordering::Relaxed,
+                ) {
+                    Ok(_) => return Weak { inner: value.inner },
+
+                    Err(old) => {
+                        cur = old;
+                    }
+                }
+            }
+        }
     }
 
     pub fn upgrade(&self) -> Option<P<T>> {
         unsafe {
-            if self.inner.as_ref().rc > 0 {
+            /*if self.inner.as_ref().rc > 0 {
                 self.inner.as_ptr().as_mut().unwrap().rc += 1;
+                Some(P { inner: self.inner })
+            } else {
+                None
+            }*/
+            #[inline]
+            fn checked_increment(n: u32) -> Option<u32> {
+                if n == 0 {
+                    None
+                } else {
+                    Some(n + 1)
+                }
+            }
+
+            if self
+                .inner
+                .as_ref()
+                .rc
+                .fetch_update(Ordering::Acquire, Ordering::Relaxed, checked_increment)
+                .is_ok()
+            {
                 Some(P { inner: self.inner })
             } else {
                 None
@@ -157,7 +210,12 @@ impl<T> Weak<T> {
 impl<T> Clone for Weak<T> {
     fn clone(&self) -> Self {
         unsafe {
-            self.inner.as_ptr().as_mut().unwrap().weak += 1;
+            self.inner
+                .as_ptr()
+                .as_mut()
+                .unwrap()
+                .weak
+                .fetch_add(1, Ordering::Relaxed);
         }
         Self { inner: self.inner }
     }
@@ -166,9 +224,7 @@ impl<T> Clone for Weak<T> {
 impl<T> Drop for Weak<T> {
     fn drop(&mut self) {
         unsafe {
-            self.inner.as_mut().weak -= 1;
-            if self.inner.as_ref().weak == 0 {
-                println!("ded");
+            if self.inner.as_ref().weak.fetch_sub(1, Ordering::Release) == 1 {
                 // destroy the box itself
                 drop(Box::from_raw(self.inner.as_ptr()));
             }
