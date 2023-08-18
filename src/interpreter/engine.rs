@@ -10,7 +10,7 @@ use crate::runtime::equality::scm_compare;
 use crate::runtime::gsubr::scm_apply_subr;
 use crate::runtime::object::*;
 use crate::runtime::value::Value;
-use crate::vm::intrinsics::{cons_rest, get_callee_vcode};
+use crate::vm::intrinsics::{cons_rest, get_callee_vcode, self};
 use crate::vm::thread::Thread;
 
 use super::stackframe::StackElement;
@@ -260,6 +260,18 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                     todo!("no values error"); // FIXME: Throw error
                 }
             }
+            
+            OP_ASSERT_NARGS_LE => {
+                let assert_nargs_le = OpAssertNargsLe::read(ip);
+                ip = ip.add(size_of::<OpAssertNargsLe>());
+
+                if unlikely(frame_locals_count!() > assert_nargs_le.n().value() as isize) {
+                    sync_sp!();
+                    sync_ip!();
+                    todo!("no values error"); // FIXME: Throw error
+                }
+            }
+
 
             /* bind-rest dst:24
              *
@@ -706,6 +718,11 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 let a = sp_ref!(less.a());
                 let b = sp_ref!(less.b());
 
+                if a.is_int32() && b.is_int32() {
+                    sp_set!(less.dst(), Value::encode_bool_value(a.get_int32() < b.get_int32()));
+                    continue;
+                }
+
                 let cmp = scm_compare(a, b);
 
                 match cmp {
@@ -907,6 +924,7 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 let src = sp_ref!(car.src());
 
                 if unlikely(!src.is_pair()) {
+                    println!("{}", src);
                     todo!("error")
                 }
 
@@ -950,6 +968,18 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
 
                 reset_frame!(1);
                 sp_set!(0, ret);
+            }
+
+            OP_EXPAND_APPLY_ARGUMENT => {
+                let _ = OpExpandApplyArgument::read(ip);
+                ip = ip.add(size_of::<OpExpandApplyArgument>());
+
+                thread.interpreter().ip = ip;
+                thread.interpreter().sp = sp;
+                intrinsics::expand_apply_argument(thread);
+                ip = thread.interpreter().ip;
+                sp = thread.interpreter().sp;   
+
             }
 
             _ => (),

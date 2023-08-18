@@ -128,3 +128,37 @@ pub fn scm_acons(mut caar: Value, mut cdar: Value, mut cdr: Value) -> Value {
 
     pair
 }
+
+pub fn scm_length(sx: Value) -> Option<usize> {
+    let mut i = 0;
+    let mut tortoise = sx;
+    let mut hare = sx;
+
+    loop {
+        if !hare.is_pair() {
+            if hare.is_null() {
+                return Some(i);
+            } else {
+                return None;
+            }
+        }
+
+        hare = scm_cdr(hare);
+        i += 1;
+
+        if !hare.is_pair() {
+            if hare.is_null() {
+                return Some(i);
+            } else {
+                return None;
+            }
+        }
+        hare = scm_cdr(hare);
+        i += 1;
+        tortoise = scm_cdr(tortoise);
+
+        if hare == tortoise {   
+            return None;
+        }
+    }
+}

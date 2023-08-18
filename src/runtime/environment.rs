@@ -10,7 +10,7 @@ use crate::{
 use super::{
     hashtable::{get_hashtable, hashtable_lock, hashtable_unlock, put_hashtable},
     object::*,
-    value::Value,
+    value::Value, gsubr::{scm_make_subr, Subr}, symbol::scm_intern,
 };
 
 pub struct Environment {
@@ -133,23 +133,20 @@ impl Environment {
 }
 
 pub fn scm_define(name: Value, value: Value) {
-    gc_frame!(Thread::current().stackchain() => value = value);
-    let cell = scm_virtual_machine()
-        .toplevel_environment
-        .lock(true)
-        .get_cell(Thread::current(), name);
-    scm_gloc_set(cell, Thread::current(), *value);
+    let cell = environment_get_cell(scm_virtual_machine().interaction_environment, name).unwrap();
+    scm_gloc_set(cell, Thread::current(), value);
 }
 
 #[repr(C)]
 pub struct ScmEnvironment {
     pub(crate) header: ScmCellHeader,
-    syntactic_environment: Mutex<P<SyntaxEnv>>,
-    name: Value,
-    mutable: bool,
-    ht: Value,
+    pub(crate) syntactic_environment: Mutex<P<SyntaxEnv>>,
+    pub(crate) name: Value,
+    pub(crate) mutable: bool,
+    pub(crate) ht: Value,
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum EnvironmentError {
     Undefined,
     DenotesMacro,
@@ -162,7 +159,7 @@ impl Value {
     }
 
     pub fn environment<'a>(self) -> &'a mut ScmEnvironment {
-        debug_assert!(self.is_environment());
+        debug_assert!(self.is_environment(), "not an environment {:?}({:?})", self, self.type_of());
         self.cast_as()
     }
 }
@@ -197,12 +194,12 @@ pub fn environment_get_cell(mut env: Value, mut name: Value) -> Result<Value, En
         if nsize != 0 {
             gc_protect!(thread => cell, env, name => rehash_hashtable(thread, env.environment().ht, nsize));
         }
-
+        hashtable_unlock(e.ht);
         cell.cast_as::<ScmGloc>().name.assign(cell, name);
         cell.cast_as::<ScmGloc>()
             .value
             .assign(cell, Value::encode_undefined_value());
-
+        
         Ok(cell)
     }
 }
@@ -252,4 +249,46 @@ pub fn environment_define_macro(env: Value, name: Value, macro_: P<Denotation>) 
 
 pub fn environment_name(env: Value) -> Value {
     env.environment().name
+}
+
+extern "C-unwind" fn interaction_environment_subr(thread: &mut Thread, val: &mut Value) -> Value {
+    if val.is_undefined() {
+       
+        scm_virtual_machine().interaction_environment
+    } else {
+        if val.is_environment() {
+            scm_virtual_machine().interaction_environment = *val;
+            Value::encode_undefined_value()
+        } else {
+            todo!("error");
+        }
+    }
+}
+
+extern "C-unwind" fn environment_p(_thread: &mut Thread, val: &mut Value) -> Value {
+    Value::encode_bool_value(val.is_environment())
+}
+
+extern "C-unwind" fn environment_name_subr(_thread: &mut Thread, val: &mut Value) -> Value {
+    if !val.is_environment() {
+        todo!("error");
+    }
+    environment_name(*val)
+}
+
+pub(crate) fn init_env() {
+    let vm = scm_virtual_machine();
+    let thread = Thread::current();
+
+    let r5rs = thread.make_environment(scm_intern("r5rs"));
+    vm.interaction_environment = r5rs;
+
+    let subr = scm_make_subr("interaction-environment", 0, 1, 0, Subr::F1(interaction_environment_subr));
+    scm_define(scm_intern("interaction-environment"), subr);
+    let subr = scm_make_subr("environment?", 1, 0, 0, Subr::F1(environment_p));
+    scm_define(scm_intern("environment?"), subr);
+    let subr = scm_make_subr("environment-name", 1, 0, 0, Subr::F1(environment_name_subr));
+    scm_define(scm_intern("environment-name"), subr);
+
+    
 }

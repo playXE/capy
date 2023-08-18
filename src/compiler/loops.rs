@@ -7,7 +7,7 @@
 
 use crate::compiler::{
     p::Weak,
-    tree_il::{LSet, Seq},
+    tree_il::{LSet, Seq, LRef},
 };
 
 use super::{
@@ -327,20 +327,38 @@ fn optimize_loop(
         match &mut *x {
             IForm::Call(call) => {
                 if call.proc.is_lref() && call.proc.lref_lvar().unwrap().as_ptr() == lvar.as_ptr() {
-                    let mut set_vars = call
-                        .args
-                        .iter()
+                    let temp_lvars = formals.iter()
+                        .map(|lvar| {
+                            let temp_lvar = P(LVar {
+                                name: lvar.name.clone(),
+                                initval: None,
+                                arg: false,
+                                boxed: false,
+                                ref_count: 0,
+                                set_count: 0
+                            });
+                            temp_lvar
+                        }).collect::<Vec<_>>();
+
+                    let mut set_vars = temp_lvars.iter()
                         .zip(formals.iter())
-                        .rev()
-                        .map(|(form, lvar)| {
+                        .map(|(temp_lvar, lvar)| {
                             P(IForm::LSet(LSet {
                                 lvar: lvar.clone(),
-                                value: rewrite(form.clone(), lvar, formals, label.clone()),
+                                value: P(IForm::LRef(LRef { lvar: temp_lvar.clone() })),
                             }))
                         })
                         .collect::<Vec<_>>();
                     set_vars.push(P(IForm::Goto(Weak::new(&label))));
-                    P(IForm::Seq(Seq { forms: set_vars }))
+                    let inits = call.args.iter().map(|x| rewrite(x.clone(), lvar, formals, label.clone())).collect::<Vec<_>>();
+                    let temps = P(IForm::Let(Let {
+                        typ: LetType::Let,
+                        lvars: temp_lvars,
+                        inits,
+                        body: P(IForm::Seq(Seq { forms: set_vars })),
+                    }));
+
+                    temps
                 } else {
                     call.proc = rewrite(call.proc.clone(), lvar, formals, label.clone());
                     call.args = call

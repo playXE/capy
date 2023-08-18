@@ -81,6 +81,16 @@ impl InterpreterState {
         this
     }
 
+    pub unsafe fn alloc_frame(&mut self, nlocals: u32) {
+        let sp = self.fp.sub(nlocals as _);
+
+        if sp < self.stack_limit {
+            // todo: expand stack
+        }
+
+        self.sp = sp;
+    }
+
     pub unsafe fn mark_stack_for_roots(&mut self, factory: &mut impl RootsWorkFactory<SimpleEdge>) {
         // walk slots between fp and sp, repeat until stack top
 
@@ -234,8 +244,9 @@ pub fn scm_call_n(thread: &mut Thread, proc: Value, args: &[Value]) -> Result<Va
 
                 (thread.interpreter().engines[0])(thread)
             });
-
+            
             let result = std::panic::catch_unwind(|| call());
+           
             thread.interpreter().fp = thread.interpreter().prev_fp;
             thread.interpreter().entry_fp = thread.interpreter().prev_entry_fp;
             thread.interpreter().prev_fp = save_prev_fp;

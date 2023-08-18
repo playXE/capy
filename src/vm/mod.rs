@@ -5,7 +5,7 @@ use mmtk::{util::{ObjectReference, Address}, vm::{RootsWorkFactory, edge_shape::
 use crate::{
     bytecode::{image::ImageRegistry, opcodes::OP_HALT},
     gc::{CapyVM, objstorage::{ObjStorage, ParState}},
-    runtime::{environment::Environment, value::Value, object::{ScmCellRef, CleanerType}, hashtable::HashTableType},
+    runtime::{environment::Environment, value::Value, object::{ScmCellRef, CleanerType}, hashtable::HashTableType, self},
 };
 
 use self::{
@@ -35,20 +35,16 @@ pub struct VirtualMachine {
     pub(crate) images: ImageRegistry,
     pub(crate) finalization_registry: Mutex<Vec<(ObjectReference, CleanerType)>>,
     pub(crate) gc_counter: u64,
-    pub(crate) toplevel_environment: Mutex<Environment>,
+    
     pub(crate) boot_continuation: Value,
     pub(crate) module_obarray: Value,
     pub disassemble: bool,
+    pub interaction_environment: Value,
     pub(crate) globals: ObjStorage,
     
 }
 
 impl VirtualMachine {
-    pub fn get_cell(&self, key: Value) -> Value {
-        self.toplevel_environment
-            .lock(true)
-            .get_cell(Thread::current(), key)
-    }
 
     pub(crate) fn scan_roots(&mut self, factory: &mut impl RootsWorkFactory<SimpleEdge>) {
         let mut edges = vec![];
@@ -60,14 +56,6 @@ impl VirtualMachine {
         unsafe {
             self.images.visit_roots(factory);
 
-            let env = self.toplevel_environment.get_mut();
-
-            for bucket in env.buckets.iter_mut() {
-                if bucket.is_object() {
-                    let edge: SimpleEdge = SimpleEdge::from_address(transmute(bucket));
-                    edges.push(edge);
-                }
-            }
 
             let state = ParState::<false>::new(self.globals.clone(), 1);
 
@@ -80,10 +68,15 @@ impl VirtualMachine {
                     edges.push(edge);
                 }
             });
-
+            if self.interaction_environment.is_object() {
+                let edge = SimpleEdge::from_address(self.interaction_environment.get_object().to_address());
+                edges.push(edge);
+            }
             let edge = SimpleEdge::from_address(Address::from_mut_ptr(&mut self.module_obarray));
             edges.push(edge);
         }
+
+        factory.create_process_edge_roots_work(edges);
 
     }
 }
@@ -99,11 +92,11 @@ pub fn scm_init(mmtk: mmtk::MMTK<CapyVM>) -> &'static mut VirtualMachine {
         images: ImageRegistry::new(),
         finalization_registry: Mutex::new(Vec::with_capacity(128)),
         gc_counter: 0,
-        toplevel_environment: Mutex::new(Environment::new()),
         boot_continuation: Value::encode_undefined_value(),
         disassemble: false,
         globals: ObjStorage::new("global-roots"),
         module_obarray: Value::encode_undefined_value(),
+        interaction_environment: Value::encode_null_value(),
     }));
 
     unsafe {
@@ -120,7 +113,9 @@ pub fn scm_init(mmtk: mmtk::MMTK<CapyVM>) -> &'static mut VirtualMachine {
 
         let modules = Thread::current().make_hashtable(128, HashTableType::Eq);
         scm_virtual_machine().module_obarray = modules;
+        runtime::environment::init_env();
         intrinsics::init();
+        
         this
     }
 }

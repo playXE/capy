@@ -2,7 +2,6 @@
 use super::{object::TypeId, symbol::scm_intern, value::Value};
 use crate::gc_frame;
 use crate::runtime::object::{scm_set_car, scm_set_cdr, scm_vector_set};
-use crate::vm::scm_virtual_machine;
 use crate::vm::thread::Thread;
 use std::io::Read;
 use std::{collections::HashMap, io::Cursor};
@@ -16,15 +15,17 @@ pub struct FASLReader<'a, const IMMORTAL: bool, R: std::io::Read + AsRef<[u8]>> 
     lites: HashMap<u32, Value>,
     pub programs: Vec<Value>,
     code: Option<&'a [u8]>,
+    global_name_resolver: &'a dyn Fn(Value) -> Value,
 }
 
 impl<'a, const IMMORTAL: bool, R: std::io::Read + AsRef<[u8]>> FASLReader<'a, IMMORTAL, R> {
-    pub fn new(buffer: &'a mut Cursor<R>, code: Option<&'a [u8]>) -> Self {
+    pub fn new(buffer: &'a mut Cursor<R>, code: Option<&'a [u8]>, global_name_resolver: &'a dyn Fn(Value) -> Value) -> Self {
         Self {
             buffer,
             lites: HashMap::new(),
             programs: Vec::new(),
             code,
+            global_name_resolver
         }
     }
 
@@ -154,7 +155,8 @@ impl<'a, const IMMORTAL: bool, R: std::io::Read + AsRef<[u8]>> FASLReader<'a, IM
                 let uid = self.read_u32()?;
 
                 let sym = self.lites.get(&uid).unwrap().clone();
-                return Ok(scm_virtual_machine().get_cell(sym));
+                let cell = (self.global_name_resolver)(sym);
+                return Ok(cell);
             }
 
             x if x == TypeId::Bytevector as u8 => {

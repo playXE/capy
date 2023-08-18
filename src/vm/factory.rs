@@ -4,7 +4,7 @@ use mmtk::{util::ObjectReference, AllocationSemantics, MutatorContext};
 
 use crate::{
     gc_frame,
-    runtime::object::{Header, ScmCellHeader, ScmCellRef, TypeId, ScmSyntaxExpander, ScmIdentifier, ScmLVar, CleanerType},
+    runtime::{object::{Header, ScmCellHeader, ScmCellRef, TypeId, ScmSyntaxExpander, ScmIdentifier, ScmLVar, CleanerType}, environment::ScmEnvironment},
     runtime::{
         hashtable::{
             dummy_equiv, dummy_hash, equal_hash, equal_hash_equiv, eqv_hash, eqv_hash_equiv,
@@ -16,10 +16,10 @@ use crate::{
         },
         value::Value,
     },
-    utils::round_up, compiler::{P, tree_il::LVar},
+    utils::round_up, compiler::{P, tree_il::LVar, expand::define_syntax}, gc_protect,
 };
 
-use super::{sync::mutex::RawMutex, thread::Thread};
+use super::{sync::mutex::{RawMutex, Mutex}, thread::Thread};
 
 impl Thread {
     pub fn make_cons<const IMMORTAL: bool>(&mut self, car: Value, cdr: Value) -> Value {
@@ -502,6 +502,38 @@ impl Thread {
                 drop_lvar
             }));
             Value::encode_object_value(ScmCellRef(transmute(reference)))
+        }
+    }
+
+    pub fn make_environment(&mut self, name: Value) -> Value {
+        let size = size_of::<ScmEnvironment>();
+
+        let mutator = self.mutator();
+        let semantics = AllocationSemantics::Default;
+
+        let mem = mutator.alloc(size, size_of::<usize>(), 0, semantics);
+
+        unsafe {
+            mem.store(ScmEnvironment {
+                header: ScmCellHeader {
+                    as_header: Header {
+                        type_id: TypeId::Environment,
+                        pad: [0; 4],
+                        flags: 0,
+                    },
+                },
+                syntactic_environment: Mutex::new(define_syntax()),
+                name,
+                mutable: true,
+                ht: Value::encode_null_value()
+            });
+
+            let reference = transmute::<_, ObjectReference>(mem);
+            mutator.post_alloc(reference, size, semantics);
+            let mut env = Value::encode_object_value(ScmCellRef(transmute(reference)));
+            let ht = gc_protect!(self => env => self.make_hashtable(128, HashTableType::Eq));
+            env.cast_as::<ScmEnvironment>().ht.assign(env, ht);
+            env
         }
     }
 }

@@ -733,6 +733,11 @@ pub fn define_syntax() -> P<SyntaxEnv> {
         pass1_body(&body, &mut ncenv)
     });
 
+    define_syntax!("quote", form, _cenv, {
+        let datum = form.cadr();
+        Ok(P(IForm::Const(datum)))
+    });
+
     let denotation_of_define = env.env.get(&scm_intern("define")).unwrap().clone();
     let denotation_of_begin = env.env.get(&scm_intern("begin")).unwrap().clone();
 

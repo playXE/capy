@@ -2,6 +2,7 @@
 use crate::{
     gc::virtual_memory::{PlatformVirtualMemory, VirtualMemory},
     runtime::{
+        environment::environment_get_cell,
         fasl::FASLReader,
         object::{scm_symbol_str, scm_vector_length, scm_vector_ref, ScmProgram},
         symbol::scm_intern,
@@ -83,7 +84,7 @@ impl Image {
 
 pub fn load_image_from_memory(
     memory: &[u8],
-    _resolver: Option<&dyn Fn(&str) -> Result<Value, Value>>,
+    resolver: Option<&dyn Fn(Value) -> Value>,
 ) -> Result<Arc<Image>, Value> {
     unsafe {
         mmtk::memory_manager::disable_collection(&scm_virtual_machine().mmtk);
@@ -99,7 +100,16 @@ pub fn load_image_from_memory(
         let constants = &memory[8 + code_len..];
 
         let mut cursor = Cursor::new(constants);
-        let mut reader = FASLReader::<true, _>::new(&mut cursor, Some(&code));
+        let mut reader = FASLReader::<true, _>::new(
+            &mut cursor,
+            Some(&code),
+            resolver.unwrap_or_else(|| {
+                &|name| {
+                    environment_get_cell(scm_virtual_machine().interaction_environment, name)
+                        .unwrap()
+                }
+            }),
+        );
         reader.get_lites().unwrap();
         let section = reader.get_datum().unwrap();
 

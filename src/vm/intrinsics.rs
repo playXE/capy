@@ -1,10 +1,10 @@
 use crate::{
     gc_frame,
-    interpreter::stackframe::{frame_local, frame_num_locals, frame_virtual_return_address},
+    interpreter::stackframe::{frame_local, frame_num_locals, frame_virtual_return_address, StackElement},
     runtime::{
-        object::{ScmPair, ScmProgram},
-        value::Value, environment::scm_define, symbol::scm_intern,
-    }, bytecode::opcodes::{OP_SHUFFLE_DOWN, OP_RETURN_VALUES},
+        object::{ScmPair, ScmProgram, scm_car, scm_cdr},
+        value::Value, environment::scm_define, symbol::scm_intern, list::scm_length,
+    }, bytecode::opcodes::{OP_SHUFFLE_DOWN, OP_RETURN_VALUES, OP_ASSERT_NARGS_GE, OP_EXPAND_APPLY_ARGUMENT, OP_TAIL_CALL},
 };
 
 use super::thread::Thread;
@@ -13,7 +13,6 @@ pub unsafe extern "C" fn get_callee_vcode(thread: &mut Thread) -> *const u8 {
     let proc = *frame_local(thread.interpreter().fp, 0);
 
     if proc.is_program() {
-        //disassemble_program(proc);
         return proc.get_object().cast_as::<ScmProgram>().vcode;
     }
 
@@ -22,7 +21,7 @@ pub unsafe extern "C" fn get_callee_vcode(thread: &mut Thread) -> *const u8 {
     todo!("throw error: {}", proc);
 }
 
-pub unsafe extern "C" fn cons_rest(thread: &mut Thread, base: u32) -> Value {
+pub unsafe extern "C-unwind" fn cons_rest(thread: &mut Thread, base: u32) -> Value {
     let rest = Value::encode_null_value();
     // root `rest` for GC to move it around if necessary
     gc_frame!(thread.stackchain() => rest = rest);
@@ -46,12 +45,43 @@ pub unsafe extern "C" fn cons_rest(thread: &mut Thread, base: u32) -> Value {
     *rest
 }
 
+#[inline(never)]
+pub unsafe extern "C-unwind" fn expand_apply_argument(thread: &mut Thread) {
+    let mut x = thread.interpreter().sp.read().as_value;
+    let len = scm_length(x);
+    println!("{}", x);
+    if let Some(mut len) = len {
+        let n = frame_num_locals(thread.interpreter().fp, thread.interpreter().sp);
+        thread.interpreter().alloc_frame(n as u32 - 1 + len as u32);
+        while len != 0 {
+            len -= 1;
+            thread.interpreter().sp.add(len).write(StackElement {
+                as_value: scm_car(x)
+            });
+            x = scm_cdr(x);
+        }
+
+    } else {
+        todo!("throw error");
+    }
+}
+
 static VALUES_CODE: &'static [u8] = &[
     OP_SHUFFLE_DOWN, 1, 0, 0, 0,
     OP_RETURN_VALUES,
 ];
 
+static APPLY_CODE: &'static [u8] = &[
+    OP_ASSERT_NARGS_GE, 3, 0, 0, /* (assert-nargs-ge 3) */
+    OP_SHUFFLE_DOWN, 1, 0, 0, 0, /* (shuffle-down 1 0) */
+    OP_EXPAND_APPLY_ARGUMENT, /* (expand-apply-argument) */
+    OP_TAIL_CALL, /* (tail-call) */
+];
+
 pub(crate) fn init() {
     let program = Thread::current().make_program::<true>(VALUES_CODE.as_ptr(), 0);
     scm_define(scm_intern("values"), program);
+
+    let program = Thread::current().make_program::<true>(APPLY_CODE.as_ptr(), 0);
+    scm_define(scm_intern("apply"), program);
 }
