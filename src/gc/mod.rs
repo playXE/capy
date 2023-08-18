@@ -20,6 +20,7 @@ use mmtk::{
 
 use crate::{
     runtime::{
+        environment::ScmEnvironment,
         hashtable::{HashTableRec, ScmHashTable},
         module::ScmModule,
         object::*,
@@ -171,6 +172,7 @@ impl ObjectModel<CapyVM> for ScmObjectModel {
                 TypeId::Module => size_of::<ScmModule>(),
                 TypeId::Identifier => size_of::<ScmIdentifier>(),
                 TypeId::SyntaxExpander => size_of::<ScmSyntaxExpander>(),
+                TypeId::Environment => size_of::<ScmEnvironment>(),
                 _ => unreachable!(),
             },
             8,
@@ -251,6 +253,10 @@ impl ActivePlan<CapyVM> for ScmActivePlan {
         _object: ObjectReference,
         _worker: &mut mmtk::scheduler::GCWorker<CapyVM>,
     ) -> ObjectReference {
+        println!(
+            "cannot trace object {:p}",
+            _object.to_raw_address().to_ptr::<u8>()
+        );
         _object
     }
 }
@@ -450,6 +456,7 @@ impl Scanning<CapyVM> for ScmScanning {
                 if !hash_table.datum.is_null() {
                     let datum_edge =
                         SimpleEdge::from_address(Address::from_mut_ptr(&mut hash_table.datum));
+
                     edge_visitor.visit_edge(datum_edge);
                 }
 
@@ -467,6 +474,11 @@ impl Scanning<CapyVM> for ScmScanning {
                 id.frames.visit_edge(edge_visitor);
             }
 
+            TypeId::Environment => {
+                let env = reference.cast_as::<ScmEnvironment>();
+                env.ht.visit_edge(edge_visitor);
+                env.name.visit_edge(edge_visitor);
+            }
 
             _ => (),
         }
@@ -496,7 +508,7 @@ impl Scanning<CapyVM> for ScmScanning {
             let tls: &'static mut Thread = transmute(tls);
 
             let mut edges = vec![];
-            visit_roots(tls.stackchain, &mut edges);
+            //visit_roots(tls.stackchain, &mut edges);
 
             for handle in tls.handles.assume_init_ref().iterate_for_gc() {
                 let edge = SimpleEdge::from_address(handle.location());
@@ -537,6 +549,9 @@ impl Scanning<CapyVM> for ScmScanning {
                 }
             }
         }
+        let ienv = vm.interaction_environment.get_object();
+        let iref = ObjectReference::from_raw_address(ienv.to_address());
+        assert!(iref.is_reachable());
         false
     }
 }

@@ -251,7 +251,7 @@ pub fn environment_name(env: Value) -> Value {
     env.environment().name
 }
 
-extern "C-unwind" fn interaction_environment_subr(thread: &mut Thread, val: &mut Value) -> Value {
+extern "C-unwind" fn interaction_environment_subr(_thread: &mut Thread, val: &mut Value) -> Value {
     if val.is_undefined() {
        
         scm_virtual_machine().interaction_environment

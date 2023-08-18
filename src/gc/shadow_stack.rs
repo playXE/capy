@@ -348,6 +348,7 @@ impl ShadowStack {
             if edges.len() > 64 {
                 factory.create_process_edge_roots_work(std::mem::take(&mut edges));
             }
+            
             ptr = ptr.add(1);
         }
 

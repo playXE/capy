@@ -103,6 +103,7 @@ impl InterpreterState {
                 if (*value).is_object() {
                     let edge = SimpleEdge::from_address(Address::from_ptr(value));
                     edges.push(edge);
+                    
                 }
                 sp = sp.add(1);
             }

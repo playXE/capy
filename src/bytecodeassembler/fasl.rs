@@ -49,6 +49,9 @@ impl<'a, W: std::io::Write> FASLPrinter<'a, W> {
             match obj {
                 Sexpr::Null => return,
                 Sexpr::Symbol(_) | Sexpr::String(_) => {
+                    if let Some(_) = self.lites.get(&obj) {
+                        return;
+                    }
                     let n = self.lites.len();
                     self.lites.insert(obj.clone(), n);
                     return;
@@ -73,6 +76,9 @@ impl<'a, W: std::io::Write> FASLPrinter<'a, W> {
                 }
 
                 Sexpr::Global(global) => {
+                    if let Some(_) = self.lites.get(&Sexpr::Symbol(global)) {
+                        return;
+                    }
                     let n = self.lites.len();
                     self.lites.insert(Sexpr::Symbol(global), n);
                     return;
@@ -132,6 +138,7 @@ impl<'a, W: std::io::Write> FASLPrinter<'a, W> {
                 let id = *self.lites.get(&obj).unwrap();
                 self.emit_u8(TAG_LOOKUP)?;
                 self.emit_u32(id as u32)?;
+                
             }
 
             Sexpr::Fixnum(fix) => {

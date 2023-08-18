@@ -506,7 +506,7 @@ impl Thread {
     }
 
     pub fn make_environment(&mut self, name: Value) -> Value {
-        let size = size_of::<ScmEnvironment>();
+        let size = round_up(size_of::<ScmEnvironment>(), 8, 0);
 
         let mutator = self.mutator();
         let semantics = AllocationSemantics::Default;

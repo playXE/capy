@@ -3,11 +3,11 @@ use crate::{
     interpreter::stackframe::{frame_local, frame_num_locals, frame_virtual_return_address, StackElement},
     runtime::{
         object::{ScmPair, ScmProgram, scm_car, scm_cdr},
-        value::Value, environment::scm_define, symbol::scm_intern, list::scm_length,
+        value::Value, environment::scm_define, symbol::scm_intern, list::scm_length, gsubr::{scm_define_subr, Subr},
     }, bytecode::opcodes::{OP_SHUFFLE_DOWN, OP_RETURN_VALUES, OP_ASSERT_NARGS_GE, OP_EXPAND_APPLY_ARGUMENT, OP_TAIL_CALL},
 };
 
-use super::thread::Thread;
+use super::{thread::Thread, scm_virtual_machine};
 #[inline(never)]
 pub unsafe extern "C" fn get_callee_vcode(thread: &mut Thread) -> *const u8 {
     let proc = *frame_local(thread.interpreter().fp, 0);
@@ -66,6 +66,11 @@ pub unsafe extern "C-unwind" fn expand_apply_argument(thread: &mut Thread) {
     }
 }
 
+extern "C-unwind" fn do_gc(thread: &mut Thread) -> Value {
+    mmtk::memory_manager::handle_user_collection_request(&scm_virtual_machine().mmtk, thread.to_mmtk());
+    Value::encode_undefined_value()
+}
+
 static VALUES_CODE: &'static [u8] = &[
     OP_SHUFFLE_DOWN, 1, 0, 0, 0,
     OP_RETURN_VALUES,
@@ -84,4 +89,6 @@ pub(crate) fn init() {
 
     let program = Thread::current().make_program::<true>(APPLY_CODE.as_ptr(), 0);
     scm_define(scm_intern("apply"), program);
+
+    scm_define_subr("garbage-collect", 0, 0, 0, Subr::F0(do_gc));
 }

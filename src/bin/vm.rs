@@ -5,6 +5,7 @@ use capy::{
 };
 
 fn main() {
+    env_logger::init();
     let opts = match VMOptions::parse() {
         Ok(opts) => opts,
         Err(err) => {

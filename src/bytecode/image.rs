@@ -206,9 +206,9 @@ impl ImageRegistry {
         }
     }
 
-    pub(crate) unsafe fn visit_roots(&self, factory: &mut impl RootsWorkFactory<SimpleEdge>) {
+    pub(crate) unsafe fn visit_roots(&self, mut factory: impl RootsWorkFactory<SimpleEdge>) {
         for image in self.images.iter() {
-            image.visit_roots(factory);
+            image.visit_roots(&mut factory);
         }
     }
 
