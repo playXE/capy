@@ -1,5 +1,4 @@
 use std::mem::transmute;
-use std::ptr::null_mut;
 use std::slice::Iter;
 use std::sync::atomic::{AtomicI8, Ordering};
 use std::{mem::MaybeUninit, panic::AssertUnwindSafe};
@@ -35,7 +34,7 @@ pub struct Thread {
     pub gc_state: i8,
     pub kind: ThreadKind,
     pub handles: MaybeUninit<HandleMemory>,
-    pub stackchain: StackChain,
+  
     pub local_finalization_queue: MaybeUninit<Vec<(ObjectReference, CleanerType)>>,
 }
 
@@ -44,9 +43,6 @@ impl Thread {
         unsafe { transmute(self) }
     }
 
-    pub fn stackchain(&mut self) -> &mut StackChain {
-        &mut self.stackchain
-    }
 
     pub fn mutator(&mut self) -> &mut Mutator<CapyVM> {
         unsafe { &mut *self.mutator.as_mut_ptr() }
@@ -215,7 +211,7 @@ impl Thread {
 }
 
 use crate::gc::refstorage::HandleMemory;
-use crate::gc::shadow_stack::{StackChain, ShadowStack};
+use crate::gc::shadow_stack::ShadowStack;
 use crate::interpreter::InterpreterState;
 use crate::runtime::object::CleanerType;
 use crate::vm::sync::mutex::*;
@@ -342,6 +338,5 @@ static mut THREAD: Thread = Thread {
     shadow_stack: ShadowStack::new(),
     kind: ThreadKind::None,
     handles: MaybeUninit::uninit(),
-    stackchain: null_mut(),
     local_finalization_queue: MaybeUninit::uninit(),
 };

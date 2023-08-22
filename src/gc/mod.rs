@@ -19,7 +19,9 @@ use mmtk::{
 };
 
 use crate::{
+    interpreter::stackframe::StackElement,
     runtime::{
+        control::{ScmContinuation, VMCont, Winder},
         environment::ScmEnvironment,
         hashtable::{HashTableRec, ScmHashTable},
         module::ScmModule,
@@ -34,13 +36,13 @@ use crate::{
     },
 };
 
-use self::shadow_stack::visit_roots;
 use crate::runtime::object::{ScmCellHeader, ScmCellRef, TypeId};
 
 pub mod memory_region;
 pub mod objstorage;
 pub mod refstorage;
 pub mod shadow_stack;
+pub mod stack;
 pub mod virtual_memory;
 
 #[derive(Default)]
@@ -123,7 +125,7 @@ impl ObjectModel<CapyVM> for ScmObjectModel {
     }
 
     fn get_current_size(object: ObjectReference) -> usize {
-        let reference = ScmCellRef(unsafe { transmute(object) });
+        let mut reference = ScmCellRef(unsafe { transmute(object) });
 
         round_up(
             match reference.header().type_id() {
@@ -173,6 +175,13 @@ impl ObjectModel<CapyVM> for ScmObjectModel {
                 TypeId::Identifier => size_of::<ScmIdentifier>(),
                 TypeId::SyntaxExpander => size_of::<ScmSyntaxExpander>(),
                 TypeId::Environment => size_of::<ScmEnvironment>(),
+                TypeId::Winder => size_of::<Winder>(),
+                TypeId::VMCont => {
+                    let base = size_of::<VMCont>();
+
+                    base + reference.cast_as::<VMCont>().stack_size * size_of::<StackElement>()
+                }
+                TypeId::Continuation => size_of::<ScmContinuation>(),
                 _ => unreachable!(),
             },
             8,
@@ -212,6 +221,7 @@ impl ObjectModel<CapyVM> for ScmObjectModel {
 pub struct ScmActivePlan;
 
 impl ActivePlan<CapyVM> for ScmActivePlan {
+
     fn global() -> &'static dyn mmtk::Plan<VM = CapyVM> {
         scm_virtual_machine().mmtk.get_plan()
     }
@@ -253,10 +263,12 @@ impl ActivePlan<CapyVM> for ScmActivePlan {
         _object: ObjectReference,
         _worker: &mut mmtk::scheduler::GCWorker<CapyVM>,
     ) -> ObjectReference {
-        println!(
-            "cannot trace object {:p}",
-            _object.to_raw_address().to_ptr::<u8>()
-        );
+        unsafe {
+            println!(
+                "cannot trace object {:p}",
+                _object.to_raw_address().to_ptr::<u8>(),
+            );
+        }
         _object
     }
 }
@@ -264,6 +276,10 @@ impl ActivePlan<CapyVM> for ScmActivePlan {
 pub struct ScmCollection;
 
 impl Collection<CapyVM> for ScmCollection {
+    fn out_of_memory(_tls: mmtk::util::VMThread, err_kind: mmtk::util::alloc::AllocationError) {
+        eprintln!("Out of memory: {:?}", err_kind);
+        std::process::abort();
+    }
     fn stop_all_mutators<F>(_: mmtk::util::VMWorkerThread, mut mutator_visitor: F)
     where
         F: FnMut(&'static mut mmtk::Mutator<CapyVM>),
@@ -480,6 +496,23 @@ impl Scanning<CapyVM> for ScmScanning {
                 env.name.visit_edge(edge_visitor);
             }
 
+            TypeId::Winder => {
+                let winder = reference.cast_as::<Winder>();
+                winder.visit_edges(edge_visitor);
+            }
+
+            TypeId::VMCont => {
+                let cont = reference.cast_as::<VMCont>();
+                unsafe {
+                    cont.visit_edges(edge_visitor);
+                }
+            }
+
+            TypeId::Continuation => {
+                let cont = reference.cast_as::<ScmContinuation>();
+                cont.visit_edges(edge_visitor);
+            }
+
             _ => (),
         }
     }
@@ -508,8 +541,6 @@ impl Scanning<CapyVM> for ScmScanning {
             let tls: &'static mut Thread = transmute(tls);
 
             let mut edges = vec![];
-            //visit_roots(tls.stackchain, &mut edges);
-
             for handle in tls.handles.assume_init_ref().iterate_for_gc() {
                 let edge = SimpleEdge::from_address(handle.location());
                 edges.push(edge);

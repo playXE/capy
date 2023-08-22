@@ -70,7 +70,6 @@ macro_rules! for_each_opcode {
             (op_expand_apply_argument, "expand-apply-argument", {})
             (op_subr_call, "subr-call", { idx: u24 })
             (op_foreign_call, "foreign-call", { cif_idx: u16, ptr_idx: u16 })
-            (op_continuation_call, "continuation-call", { contregs: u24 })
             (op_call_intrinsic, "call-intrinsic", { intrinsic: u32 })
             (op_call_intrinsic_val, "call-intrinsic-val", { a: u24, intrinsic: u32 })
             (op_call_intrinsic_val_val, "call-intrinsic-val-val", { a: u16, b: u16, intrinsic: u32 })
@@ -104,7 +103,7 @@ macro_rules! for_each_opcode {
             (op_global_ref, "global-ref", { dst: u24, offset: u32})
             // Sets global variable from constant pool to `src`.
             (op_global_set, "global-set", { src: u24, offset: u32})
-
+            (op_not, "not", { dst: u16, src: u16 })
             (op_add, "add", { dst: u16, a: u16, b: u16 })
             (op_add_imm, "add/immediate", { dst: u16, a: u16, b: i32 })
             (op_sub, "sub", { dst: u16, a: u16, b: u16 })
@@ -136,6 +135,8 @@ macro_rules! for_each_opcode {
             (op_numerically_equal, "=", { dst: u16, a: u16, b: u16 })
             (op_equal_imm, "=/immediate", { dst: u16, a: u16, b: i32 })
             (op_eq, "eq?", { dst: u16, a: u16, b: u16 })
+            (op_eqv, "eqv?", { dst: u16, a: u16, b: u16 })
+            (op_equal, "equal?", { dst: u16, a: u16, b: u16 })
             (op_heap_tag_eq, "heap-tag-eq?", { dst: u16, src: u24, tag: u32} )
             (op_immediate_tag_eq, "immediate-tag-eq?", { dst: u16, src: u24, tag: u32 })
             (op_is_false, "false?", { dst: u16, src: u16 })
@@ -153,6 +154,9 @@ macro_rules! for_each_opcode {
             (op_car, "car", { dst: u16, src: u16 })
             (op_cdr, "cdr", { dst: u16, src: u16 })
             (op_bind_optionals, "bind-optionals", { nargs: u24 })
+
+            (op_continuation_call, "continuation-call", { contregs: u8 })
+            (op_capture_continuation, "capture-continuation", { dst: u8 })
         }
     };
 }

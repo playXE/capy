@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 use super::{object::TypeId, symbol::scm_intern, value::Value};
-use crate::gc_frame;
+use crate::gc_protect;
 use crate::runtime::object::{scm_set_car, scm_set_cdr, scm_vector_set};
 use crate::vm::thread::Thread;
 use std::io::Read;
@@ -19,13 +19,17 @@ pub struct FASLReader<'a, const IMMORTAL: bool, R: std::io::Read + AsRef<[u8]>> 
 }
 
 impl<'a, const IMMORTAL: bool, R: std::io::Read + AsRef<[u8]>> FASLReader<'a, IMMORTAL, R> {
-    pub fn new(buffer: &'a mut Cursor<R>, code: Option<&'a [u8]>, global_name_resolver: &'a dyn Fn(Value) -> Value) -> Self {
+    pub fn new(
+        buffer: &'a mut Cursor<R>,
+        code: Option<&'a [u8]>,
+        global_name_resolver: &'a dyn Fn(Value) -> Value,
+    ) -> Self {
         Self {
             buffer,
             lites: HashMap::new(),
             programs: Vec::new(),
             code,
-            global_name_resolver
+            global_name_resolver,
         }
     }
 
@@ -171,55 +175,52 @@ impl<'a, const IMMORTAL: bool, R: std::io::Read + AsRef<[u8]>> FASLReader<'a, IM
                 let len = self.read_u32()?;
 
                 let t = Thread::current();
-                let v = t.make_vector::<IMMORTAL>(len as _, Value::encode_null_value());
+                let mut v = t.make_vector::<IMMORTAL>(len as _, Value::encode_null_value());
 
-                gc_frame!(t.stackchain() => v = v);
                 for i in 0..len {
-                    let datum = self.get_datum()?;
-                    scm_vector_set(*v, t, i, datum);
+                    let datum = gc_protect!(t => v => self.get_datum()?);
+                    scm_vector_set(v, t, i, datum);
                 }
 
-                return Ok(*v);
+                return Ok(v);
             }
 
             TAG_PLIST => {
                 let count = self.read_u32()?;
-                let lst = Value::encode_null_value();
+                let mut lst = Value::encode_null_value();
                 let t = Thread::current();
-                gc_frame!(t.stackchain() => lst = lst);
 
                 for _ in 0..count {
                     let pair = t.make_cons::<IMMORTAL>(
                         Value::encode_null_value(),
                         Value::encode_null_value(),
                     );
-                    let car = self.get_datum()?;
+                    let car = gc_protect!(t => lst => self.get_datum()?);
                     scm_set_car(pair, t, car);
-                    scm_set_cdr(pair, t, *lst);
-                    *lst = pair;
+                    scm_set_cdr(pair, t, lst);
+                    lst = pair;
                 }
 
-                return Ok(*lst);
+                return Ok(lst);
             }
 
             TAG_DLIST => {
                 let count = self.read_u32()?;
-                let lst = self.get_datum()?;
+                let mut lst = self.get_datum()?;
                 let t = Thread::current();
-                gc_frame!(t.stackchain() => lst = lst);
 
                 for _ in 0..count {
-                    let pair = t.make_cons::<IMMORTAL>(
+                    let mut pair = gc_protect!(t => lst => t.make_cons::<IMMORTAL>(
                         Value::encode_null_value(),
                         Value::encode_null_value(),
-                    );
-                    let car = self.get_datum()?;
+                    ));
+                    let car = gc_protect!(t => lst, pair => self.get_datum()?);
                     scm_set_car(pair, t, car);
-                    scm_set_cdr(pair, t, *lst);
-                    *lst = pair;
+                    scm_set_cdr(pair, t, lst);
+                    lst = pair;
                 }
 
-                return Ok(*lst);
+                return Ok(lst);
             }
 
             _ => todo!(),

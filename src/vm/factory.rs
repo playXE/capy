@@ -1,9 +1,9 @@
 use std::mem::{size_of, transmute};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use mmtk::{util::ObjectReference, AllocationSemantics, MutatorContext};
 
 use crate::{
-    gc_frame,
     runtime::{object::{Header, ScmCellHeader, ScmCellRef, TypeId, ScmSyntaxExpander, ScmIdentifier, ScmLVar, CleanerType}, environment::ScmEnvironment},
     runtime::{
         hashtable::{
@@ -18,6 +18,7 @@ use crate::{
     },
     utils::round_up, compiler::{P, tree_il::LVar, expand::define_syntax}, gc_protect,
 };
+use crate::runtime::control::Winder;
 
 use super::{sync::mutex::{RawMutex, Mutex}, thread::Thread};
 
@@ -382,10 +383,10 @@ impl Thread {
                 AllocationSemantics::Default,
             );
 
-            let datum = Value::encode_object_value(transmute(datum_addr));
-            gc_frame!(Thread::current().stackchain() => datum_root = datum);
-            let mem = mutator.alloc(size, size_of::<usize>(), 0, AllocationSemantics::Default);
-            let datum = *datum_root;
+            let mut datum = Value::encode_object_value(transmute(datum_addr));
+            
+            let mem = gc_protect!(self => datum => self.mutator().alloc(size, size_of::<usize>(), 0, AllocationSemantics::Default));
+            
             let hashtable = mem.to_mut_ptr::<ScmHashTable>();
             hashtable.write(ScmHashTable {
                 hdr: ScmCellHeader {
@@ -405,7 +406,7 @@ impl Thread {
             });
 
             let reference = transmute::<_, ObjectReference>(mem);
-            mutator.post_alloc(reference, size, AllocationSemantics::Default);
+            self.mutator().post_alloc(reference, size, AllocationSemantics::Default);
 
             Value::encode_object_value(ScmCellRef(transmute(reference)))
         }
@@ -534,6 +535,28 @@ impl Thread {
             let ht = gc_protect!(self => env => self.make_hashtable(128, HashTableType::Eq));
             env.cast_as::<ScmEnvironment>().ht.assign(env, ht);
             env
+        }
+    }
+
+    pub fn make_winder(&mut self) -> Value {
+        static ID: AtomicU32 = AtomicU32::new(0);
+        let size = round_up(size_of::<Winder>(), 8, 0);
+
+        let mem = self.mutator().alloc(size, 8, 0, AllocationSemantics::Default);
+
+        unsafe {
+            mem.store(Winder {
+                id: ID.fetch_add(1, Ordering::AcqRel),
+                after: Value::encode_null_value(),
+                before: Value::encode_null_value(),
+                handlers: None,
+                next: None,
+                header: ScmCellHeader::new(TypeId::Winder)
+            });
+            let reference = ObjectReference::from_raw_address(mem);
+            self.mutator().post_alloc(reference, size, AllocationSemantics::Default);
+
+            Value::encode_object_value(transmute(reference))
         }
     }
 }

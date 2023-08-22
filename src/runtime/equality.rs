@@ -1,6 +1,12 @@
 use std::cmp::Ordering;
 
-use super::{object::*, value::Value};
+use crate::vm::thread::Thread;
+
+use super::{
+    gsubr::{scm_define_subr, Subr},
+    object::*,
+    value::Value,
+};
 
 pub fn eqv(a: Value, b: Value) -> bool {
     if a.is_double() && b.is_double() {
@@ -32,13 +38,8 @@ pub fn scm_compare(a: Value, b: Value) -> Option<Ordering> {
             }
         } else if a.is_string() && b.is_string() {
             return Some(scm_symbol_str(a).cmp(&scm_symbol_str(b)));
-        
         } else {
-            return if a == b {
-                Some(Ordering::Equal)
-            } else {
-                None
-            }
+            return if a == b { Some(Ordering::Equal) } else { None };
         }
     }
 }
@@ -92,7 +93,7 @@ pub fn equal(mut a: Value, mut b: Value) -> bool {
                 return true;
             }
 
-            return false; 
+            return false;
         }
 
         if a.is_string() {
@@ -104,4 +105,22 @@ pub fn equal(mut a: Value, mut b: Value) -> bool {
         }
         break eqv(a, b);
     }
+}
+
+extern "C-unwind" fn eq_subr(_thread: &mut Thread, a: &mut Value, b: &mut Value) -> Value {
+    Value::encode_bool_value(eq(*a, *b))
+}
+
+extern "C-unwind" fn eqv_subr(_thread: &mut Thread, a: &mut Value, b: &mut Value) -> Value {
+    Value::encode_bool_value(eqv(*a, *b))
+}
+
+extern "C-unwind" fn equal_subr(_thread: &mut Thread, a: &mut Value, b: &mut Value) -> Value {
+    Value::encode_bool_value(equal(*a, *b))
+}
+
+pub(crate) fn init() {
+    scm_define_subr("eq?", 2, 0, 0, Subr::F2(eq_subr));
+    scm_define_subr("eqv?", 2, 0, 0, Subr::F2(eqv_subr));
+    scm_define_subr("equal?", 2, 0, 0, Subr::F2(equal_subr));
 }

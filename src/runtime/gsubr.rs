@@ -1,15 +1,17 @@
-use std::{mem::size_of, ptr::{NonNull, null_mut}, sync::atomic::{AtomicU32, Ordering}};
-
-use crate::{
-    bytecode::{
-        opcodes::{JITFunctionData,OpSubrCall, OP_ENTER, OP_ASSERT_NARGS_EE, OP_ASSERT_NARGS_LE, OP_BIND_OPTIONALS, OP_BIND_REST, OP_ASSERT_NARGS_GE, disassemble, OP_SUBR_CALL, OP_RETURN_VALUES},
-        u24::u24,
-    },
-    utils::round_up_to_power_of_two,
-    vm::{sync::mutex::Mutex, thread::Thread}, interpreter::stackframe::StackElement,
+use std::{
+    mem::size_of,
+    ptr::{null_mut, NonNull},
+    sync::atomic::{AtomicU32, Ordering},
 };
 
-use super::{value::Value, environment::scm_define, symbol::scm_intern};
+use crate::{
+    bytecode::{opcodes::*, u24::u24},
+    interpreter::stackframe::StackElement,
+    utils::round_up_to_power_of_two,
+    vm::{sync::mutex::Mutex, thread::Thread},
+};
+
+use super::{environment::scm_define, symbol::scm_intern, value::Value};
 
 struct SubrState {
     subrs: Vec<Subr>,
@@ -108,7 +110,7 @@ pub fn scm_i_alloc_primitive_code_with_instrumentation(
         ret.add(1).cast::<i32>().write(padded_byte_size as i32 - 5);
 
         *write_ptr = ret.add(size_of::<i32>() + 1);
-        
+
         data.write(JITFunctionData {
             mcode: 0,
             counter: 0,
@@ -122,7 +124,7 @@ pub fn scm_i_alloc_primitive_code_with_instrumentation(
 fn alloc_subr_code(subr_idx: u32, code: &[u8]) -> *const u8 {
     let post = {
         let subr_call = OpSubrCall::new(u24::new(subr_idx));
-      
+
         let mut buf = [0u8; 1 + size_of::<OpSubrCall>() + 1];
         let mut ptr = buf.as_mut_ptr();
         unsafe {
@@ -135,13 +137,11 @@ fn alloc_subr_code(subr_idx: u32, code: &[u8]) -> *const u8 {
     };
     let mut write = null_mut();
     let ret = scm_i_alloc_primitive_code_with_instrumentation(code.len() + 3, &mut write);
-    
+
     unsafe {
         write.copy_from_nonoverlapping(code.as_ptr(), code.len());
         write = write.add(code.len());
         write.copy_from_nonoverlapping(post.as_ptr(), post.len());
-
-        disassemble::<true>(std::slice::from_raw_parts(ret, write.add(post.len()).offset_from(ret) as _));
     }
     ret
 }
@@ -162,7 +162,6 @@ pub enum ArityKind {
 fn get_subr_stub_code(subr_idx: u32, nreq: usize, nopt: usize, rest: usize) -> *const u8 {
     let mut kind = ArityKind::Nullary as u8;
 
-
     if nreq != 0 {
         kind |= ArityKind::Req as u8;
     }
@@ -178,17 +177,25 @@ fn get_subr_stub_code(subr_idx: u32, nreq: usize, nopt: usize, rest: usize) -> *
     let kind = unsafe { std::mem::transmute::<_, ArityKind>(kind) };
 
     match kind {
-        ArityKind::Nullary
-        | ArityKind::Req => {
+        ArityKind::Nullary | ArityKind::Req => {
             let nargs = u24::new(nreq as u32 + 1);
-            alloc_subr_code(subr_idx, &[OP_ASSERT_NARGS_EE, nargs.0[0], nargs.0[1], nargs.0[2]])
+            alloc_subr_code(
+                subr_idx,
+                &[OP_ASSERT_NARGS_EE, nargs.0[0], nargs.0[1], nargs.0[2]],
+            )
         }
 
         ArityKind::Opt => {
             let nopt = u24::new(nopt as u32 + 1);
             let code = &[
-                OP_ASSERT_NARGS_LE, nopt.0[0], nopt.0[1], nopt.0[2],
-                OP_BIND_OPTIONALS, nopt.0[0], nopt.0[1], nopt.0[2],
+                OP_ASSERT_NARGS_LE,
+                nopt.0[0],
+                nopt.0[1],
+                nopt.0[2],
+                OP_BIND_OPTIONALS,
+                nopt.0[0],
+                nopt.0[1],
+                nopt.0[2],
             ];
 
             alloc_subr_code(subr_idx, code)
@@ -200,12 +207,21 @@ fn get_subr_stub_code(subr_idx: u32, nreq: usize, nopt: usize, rest: usize) -> *
         }
 
         ArityKind::ReqOpt => {
-            let nreq_nopt = u24::new(nreq  as u32+ nopt as u32 + 1);
+            let nreq_nopt = u24::new(nreq as u32 + nopt as u32 + 1);
             let nreq = u24::new(nreq as u32 + 1);
             let code = &[
-                OP_ASSERT_NARGS_GE, nreq.0[0], nreq.0[1], nreq.0[2],
-                OP_ASSERT_NARGS_LE, nreq_nopt.0[0], nreq_nopt.0[1], nreq_nopt.0[2],
-                OP_BIND_OPTIONALS, nreq_nopt.0[0], nreq_nopt.0[1], nreq_nopt.0[2],
+                OP_ASSERT_NARGS_GE,
+                nreq.0[0],
+                nreq.0[1],
+                nreq.0[2],
+                OP_ASSERT_NARGS_LE,
+                nreq_nopt.0[0],
+                nreq_nopt.0[1],
+                nreq_nopt.0[2],
+                OP_BIND_OPTIONALS,
+                nreq_nopt.0[0],
+                nreq_nopt.0[1],
+                nreq_nopt.0[2],
             ];
 
             alloc_subr_code(subr_idx, code)
@@ -215,8 +231,14 @@ fn get_subr_stub_code(subr_idx: u32, nreq: usize, nopt: usize, rest: usize) -> *
             let nreq = u24::new(nreq as u32 + 1);
 
             let code = &[
-                OP_ASSERT_NARGS_GE, nreq.0[0], nreq.0[1], nreq.0[2],
-                OP_BIND_REST, nreq.0[0], nreq.0[1], nreq.0[2],
+                OP_ASSERT_NARGS_GE,
+                nreq.0[0],
+                nreq.0[1],
+                nreq.0[2],
+                OP_BIND_REST,
+                nreq.0[0],
+                nreq.0[1],
+                nreq.0[2],
             ];
 
             alloc_subr_code(subr_idx, code)
@@ -226,8 +248,14 @@ fn get_subr_stub_code(subr_idx: u32, nreq: usize, nopt: usize, rest: usize) -> *
             let nopt = u24::new(nopt as u32 + 1);
 
             let code = &[
-                OP_BIND_OPTIONALS, nopt.0[0], nopt.0[1], nopt.0[2],
-                OP_BIND_REST, nopt.0[0], nopt.0[1], nopt.0[2],
+                OP_BIND_OPTIONALS,
+                nopt.0[0],
+                nopt.0[1],
+                nopt.0[2],
+                OP_BIND_REST,
+                nopt.0[0],
+                nopt.0[1],
+                nopt.0[2],
             ];
 
             alloc_subr_code(subr_idx, code)
@@ -238,9 +266,18 @@ fn get_subr_stub_code(subr_idx: u32, nreq: usize, nopt: usize, rest: usize) -> *
             let nreq = u24::new(nreq as u32 + 1);
 
             let code = &[
-                OP_ASSERT_NARGS_GE, nreq.0[0], nreq.0[1], nreq.0[2],
-                OP_BIND_OPTIONALS, nreq_nopt.0[0], nreq_nopt.0[1], nreq_nopt.0[2],
-                OP_BIND_REST, nreq_nopt.0[0], nreq_nopt.0[1], nreq_nopt.0[2],
+                OP_ASSERT_NARGS_GE,
+                nreq.0[0],
+                nreq.0[1],
+                nreq.0[2],
+                OP_BIND_OPTIONALS,
+                nreq_nopt.0[0],
+                nreq_nopt.0[1],
+                nreq_nopt.0[2],
+                OP_BIND_REST,
+                nreq_nopt.0[0],
+                nreq_nopt.0[1],
+                nreq_nopt.0[2],
             ];
 
             alloc_subr_code(subr_idx, code)
@@ -274,7 +311,14 @@ fn record_subr_name(subr_idx: u32, name: &'static str) {
     state.names[subr_idx as usize] = name;
 }
 
-fn create_subr(define: bool, name: &'static str, nreq: u32, nopt: u32, rest: u32, func: Subr) -> Value {
+fn create_subr(
+    define: bool,
+    name: &'static str,
+    nreq: u32,
+    nopt: u32,
+    rest: u32,
+    func: Subr,
+) -> Value {
     let idx = alloc_subr_idx(func);
     record_subr_name(idx, name);
 
@@ -395,15 +439,7 @@ pub unsafe fn scm_apply_subr(thread: &mut Thread, sp: *mut StackElement, idx: u3
         Subr::F3(f) => f(thread, arg!(2), arg!(1), arg!(0)),
         Subr::F4(f) => f(thread, arg!(3), arg!(2), arg!(1), arg!(0)),
         Subr::F5(f) => f(thread, arg!(4), arg!(3), arg!(2), arg!(1), arg!(0)),
-        Subr::F6(f) => f(
-            thread,
-            arg!(5),
-            arg!(4),
-            arg!(3),
-            arg!(2),
-            arg!(1),
-            arg!(0),
-        ),
+        Subr::F6(f) => f(thread, arg!(5), arg!(4), arg!(3), arg!(2), arg!(1), arg!(0)),
         Subr::F7(f) => f(
             thread,
             arg!(6),
@@ -450,6 +486,5 @@ pub unsafe fn scm_apply_subr(thread: &mut Thread, sp: *mut StackElement, idx: u3
             arg!(1),
             arg!(0),
         ),
-
     }
 }

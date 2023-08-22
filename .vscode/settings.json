@@ -3,5 +3,6 @@
     "diffEditor.codeLens": true,
     "rust-analyzer.linkedProjects": [
         "./Cargo.toml"
-    ]
+    ],
+    "C_Cpp.dimInactiveRegions": false
 }

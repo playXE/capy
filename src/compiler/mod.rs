@@ -21,7 +21,7 @@ use crate::runtime::value::Value;
 
 use self::{
     sexpr::{sexp_acons, sexp_cons, sexp_eq, Identifier, Sexpr, SyntaxRules},
-    tree_il::IForm,
+    tree_il::IForm, primitives::resolve_primitives,
 };
 
 pub fn make_identifier(name: Sexpr, senv: P<SyntaxEnv>, env: Sexpr) -> P<Identifier> {
@@ -280,7 +280,8 @@ pub fn compile(
     let expanded = expand::pass1(sexpr, cenv)?;
 
     let immut = assignment_elimination::assignment_elimination(expanded);
-    if opt {
+    let immut = resolve_primitives(immut);
+    if  opt {
         let opt = pass2::pass2(immut, recover_loops)?;
 
         Ok(opt)

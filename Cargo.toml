@@ -15,6 +15,7 @@ cfg-if = "1.0"
 errno = "0.3"
 log = "0.4"
 once_cell = "1.8"
+alloca = "0.4"
 num-traits = "0.2"
 env_logger = "*"
 pico-args = "0.5"
@@ -22,7 +23,7 @@ r7rs-parser = { git = "https://github.com/playxe/r7rs-parser" }
 pretty = { version = "0.12", features = ["termcolor"]}
 termcolor = "1.1"
 murmur3 = "0.5"
-
+rsetjmp = { git = "https://github.com/playxe/rsetjmp" }
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = [
     "memoryapi",

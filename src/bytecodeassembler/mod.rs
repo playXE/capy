@@ -137,14 +137,13 @@ impl Assembler {
     pub fn emit_jnz(&mut self, src: u16) -> impl FnOnce(&mut Assembler) {
         let off = self.code.len();
         OpJnz::new(src, i32::MAX).write(self);
-        let end = self.code.len();
+        
         move |this| {
             let diff = this.code.len() - off - 7;
             let diff = diff as u32;
 
             let diff_bytes = diff.to_le_bytes();
             let off = off + 2;
-            println!("{} {}", off, end);
             this.code[off + 1] = diff_bytes[0];
             this.code[off + 2] = diff_bytes[1];
             this.code[off + 3] = diff_bytes[2];
@@ -322,6 +321,10 @@ impl Assembler {
 
     pub fn emit_cdr(&mut self, dst: u16, obj: u16) {
         OpCdr::new(dst, obj).write(self);
+    }
+
+    pub fn emit_not(&mut self, dst: u16, obj: u16) {
+        OpNot::new(dst, obj).write(self);
     }
 
     pub fn emit_vector_ref(&mut self, dst: u16, src: u16, idx: u16) {

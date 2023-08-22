@@ -13,7 +13,6 @@ use capy::{
         tree_il::{IForm, Lambda, LambdaFlag, Seq},
         Cenv, P,
     },
-    gc_frame,
     interpreter::scm_call_n,
     runtime::{
         gsubr::{scm_define_subr, Subr},

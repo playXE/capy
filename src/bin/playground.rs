@@ -1,12 +1,4 @@
-use capy::{
-    gc_protect,
-    runtime::{
-        hashtable::{put_hashtable, HashTableType, ScmHashTable},
-        symbol::scm_intern,
-        value::Value,
-    },
-    vm::{options::VMOptions, scm_init, scm_virtual_machine, thread::Thread}, gc::objstorage::{ObjStorage, ParState},
-};
+use capy::vm::{options::VMOptions, scm_init};
 
 fn main() {
     let opts = match VMOptions::parse() {
@@ -29,15 +21,4 @@ fn main() {
     mmtk.set_option("threads", "4");
 
     let _vm = scm_init(mmtk.build());
-
-    let storage = ObjStorage::new("objects");
-
-    let p = storage.allocate();
-
-    println!("allocated {:p}", p);
-
-    ParState::<false>::new(storage.clone(), 1).iterate(|slot| {
-        println!("slot: {:p}", slot);
-    });
-
 }

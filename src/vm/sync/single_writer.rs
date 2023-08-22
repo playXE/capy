@@ -1,6 +1,6 @@
 use super::semaphore::Sem;
-use std::sync::atomic::Ordering;
 use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 
 ///  Synchronization primitive inspired by RCU.
 ///
@@ -104,10 +104,9 @@ impl SingleWriterSynchronizer {
     }
 }
 
-
 pub struct CriticalSection<'a> {
     synchronizer: &'a SingleWriterSynchronizer,
-    enter_value: usize 
+    enter_value: usize,
 }
 
 impl<'a> CriticalSection<'a> {
@@ -127,7 +126,7 @@ impl<'a> Drop for CriticalSection<'a> {
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::{Arc, atomic::AtomicI32}, time::Duration};
+    use std::{sync::atomic::AtomicI32, time::Duration};
 
     use super::*;
 
@@ -138,34 +137,39 @@ mod tests {
         let synchronized_value = AtomicUsize::new(0);
         let continue_running = AtomicI32::new(1);
         std::thread::scope(|scope| {
-            let readers = (0..NREADERS).map(|_| {
-                scope.spawn(|| {
-                    let mut iterations = 0;
-                    let mut values_changed = 0;
+            let readers = (0..NREADERS)
+                .map(|_| {
+                    scope.spawn(|| {
+                        let mut iterations = 0;
+                        let mut values_changed = 0;
 
-                    while continue_running.load(Ordering::Acquire) != 0 {
-                        iterations += 1;
-                        let cs = CriticalSection::new(&synchronizer);
-                        let value = synchronized_value.load(Ordering::Acquire);
-                        let mut new_value = value;
+                        while continue_running.load(Ordering::Acquire) != 0 {
+                            iterations += 1;
+                            let cs = CriticalSection::new(&synchronizer);
+                            let value = synchronized_value.load(Ordering::Acquire);
+                            let mut new_value = value;
 
-                        for _ in 0..10 {
-                            new_value = synchronized_value.load(Ordering::Acquire);
-                            if value != new_value {
-                                assert_eq!(value + 1, new_value);
+                            for _ in 0..10 {
+                                new_value = synchronized_value.load(Ordering::Acquire);
+                                if value != new_value {
+                                    assert_eq!(value + 1, new_value);
+                                }
                             }
+
+                            if value != new_value {
+                                values_changed += 1;
+                            }
+
+                            drop(cs);
                         }
 
-                        if value != new_value {
-                            values_changed += 1;
-                        }
-
-                        drop(cs);
-                    }
-
-                    println!("reader iterations: {}, changes: {}", iterations, values_changed);
+                        println!(
+                            "reader iterations: {}, changes: {}",
+                            iterations, values_changed
+                        );
+                    })
                 })
-            }).collect::<Vec<_>>();
+                .collect::<Vec<_>>();
 
             let writer = scope.spawn(|| {
                 while continue_running.load(Ordering::Acquire) != 0 {
@@ -173,7 +177,10 @@ mod tests {
                     synchronizer.synchronize();
                 }
 
-                println!("writer iterations: {}", synchronized_value.load(Ordering::Acquire));
+                println!(
+                    "writer iterations: {}",
+                    synchronized_value.load(Ordering::Acquire)
+                );
             });
 
             std::thread::sleep(Duration::from_millis(1000));

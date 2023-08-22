@@ -6,11 +6,11 @@ use std::ptr::null;
 use mmtk::memory_manager::object_reference_write;
 
 use crate::bytecode::encode::Decode;
-use crate::runtime::equality::scm_compare;
+use crate::runtime::equality::{scm_compare, eqv, equal};
 use crate::runtime::gsubr::scm_apply_subr;
 use crate::runtime::object::*;
 use crate::runtime::value::Value;
-use crate::vm::intrinsics::{cons_rest, get_callee_vcode, self};
+use crate::vm::intrinsics::{cons_rest, get_callee_vcode, self, reinstate_continuation_x};
 use crate::vm::thread::Thread;
 
 use super::stackframe::StackElement;
@@ -177,12 +177,13 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 thread.interpreter().fp = new_fp;
 
                 reset_frame!(call.nlocals().value() as isize);
-
+                thread.interpreter().ip = ip;
                 ip = get_callee_vcode(thread);
                 cache_sp!();
             }
 
             OP_TAIL_CALL => {
+                thread.interpreter().ip = ip;
                 ip = get_callee_vcode(thread);
 
                 cache_sp!();
@@ -246,7 +247,7 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 
                     sync_sp!();
                     sync_ip!();
-                    todo!("no values error"); // FIXME: Throw error
+                    todo!("no values error, expected {}, got {}", assert_nargs_ee.n().value(), frame_locals_count!()); // FIXME: Throw error
                 }
             }
 
@@ -257,7 +258,7 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 if unlikely(frame_locals_count!() < assert_nargs_ge.n().value() as isize) {
                     sync_sp!();
                     sync_ip!();
-                    todo!("no values error"); // FIXME: Throw error
+                    todo!("no values error, expected {}", assert_nargs_ge.n().value()); // FIXME: Throw error
                 }
             }
             
@@ -441,6 +442,7 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 );
                 let value = global.cast_as::<ScmGloc>().value;
                 sp_set!(global_ref.dst().value(), value);
+                //println!("global-ref {}, {}, {}", global_ref.dst().value(), global.cast_as::<ScmGloc>().name, value);
             }
 
             OP_GLOBAL_SET => {
@@ -836,6 +838,26 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 sp_set!(eq.dst(), Value::encode_bool_value(a == b));
             }
 
+            OP_EQV => {
+                let eqv_ = OpEqv::read(ip);
+                ip = ip.add(size_of::<OpEqv>());
+
+                let a = sp_ref!(eqv_.a());
+                let b = sp_ref!(eqv_.b());
+
+                sp_set!(eqv_.dst(), Value::encode_bool_value(eqv(a, b)));
+            }
+
+            OP_EQUAL => {
+                let equal_ = OpEqual::read(ip);
+                ip = ip.add(size_of::<OpEqual>());
+
+                let a = sp_ref!(equal_.a());
+                let b = sp_ref!(equal_.b());
+
+                sp_set!(equal_.dst(), Value::encode_bool_value(equal(a, b)));
+            }
+
             OP_HEAP_TAG_EQ => {
                 let heap_tag_eq = OpHeapTagEq::read(ip);
                 ip = ip.add(size_of::<OpHeapTagEq>());
@@ -858,6 +880,15 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 let src = sp_ref!(is_false.src());
 
                 sp_set!(is_false.dst(), Value::encode_bool_value(src.is_false()));
+            }
+
+            OP_NOT => {
+                let not = OpNot::read(ip);
+                ip = ip.add(size_of::<OpNot>());
+
+                let src = sp_ref!(not.src());
+
+                sp_set!(not.dst(), Value::encode_bool_value(src.is_false()));
             }
 
             OP_IS_TRUE => {
@@ -924,7 +955,6 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 let src = sp_ref!(car.src());
 
                 if unlikely(!src.is_pair()) {
-                    println!("{}", src);
                     todo!("error")
                 }
 
@@ -980,6 +1010,28 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 ip = thread.interpreter().ip;
                 sp = thread.interpreter().sp;   
 
+            }
+
+            OP_CONTINUATION_CALL => {
+                let continuation_call = OpContinuationCall::read(ip);
+                let cont = scm_program_free_variable(current_program!(), continuation_call.contregs as _);
+                thread.interpreter().ip = ip;
+                thread.interpreter().sp = sp;
+            
+                reinstate_continuation_x(thread, cont);
+            }
+
+            OP_CAPTURE_CONTINUATION => {
+                let capture_continuation = OpCaptureContinuation::read(ip);
+                ip = ip.add(size_of::<OpCaptureContinuation>());
+
+                let dst = capture_continuation.dst();
+                thread.interpreter().ip = ip;
+                thread.interpreter().sp = sp;
+                let cont = crate::runtime::control::capture_continuation(thread);
+                sp = thread.interpreter().sp;
+                ip = thread.interpreter().ip;
+                sp_set!(dst, cont);
             }
 
             _ => (),

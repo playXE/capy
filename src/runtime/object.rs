@@ -48,6 +48,9 @@ pub enum TypeId {
     SyntaxExpander,
     PVRef,
     Identifier,
+    Winder,
+    VMCont,
+    Continuation,
     
 }
 
@@ -76,6 +79,16 @@ pub union ScmCellHeader {
     pub as_word: u64,
 }
 impl ScmCellHeader {
+    pub const fn new(type_id: TypeId) -> Self {
+        Self {
+            as_header: Header {
+                type_id,
+                pad: [0; 4],
+                flags: 0
+            }
+        }
+    }
+
     pub fn type_id(self) -> TypeId {
         unsafe { self.as_header.type_id }
     }

@@ -1,7 +1,7 @@
 use capy::{
     bytecode::image::load_image_from_memory,
     interpreter::scm_call_n,
-    vm::{options::VMOptions, scm_init, thread::Thread},
+    vm::{options::VMOptions, scm_init, thread::Thread}, runtime::{gsubr::{scm_define_subr, Subr}, value::Value},
 };
 
 fn main() {
@@ -27,6 +27,21 @@ fn main() {
 
     let vm = scm_init(mmtk.build());
     vm.disassemble = opts.disassemble;
+
+    scm_define_subr(
+        "print",
+        0,
+        0,
+        1,
+        Subr::F1({
+            extern "C-unwind" fn print(_: &mut Thread, rest: &mut Value) -> Value {
+                println!("{}", rest);
+                Value::encode_null_value()
+            }
+
+            print
+        }),
+    );
     if let Some(file) = opts.filename {
         let memory = std::fs::read(file).unwrap();
         let image = match load_image_from_memory(&memory, None) {

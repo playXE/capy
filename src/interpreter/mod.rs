@@ -1,28 +1,39 @@
-use std::{
-    mem::size_of,
-    panic::AssertUnwindSafe,
-    ptr::{null, null_mut},
-};
-
-use mmtk::{
-    util::Address,
-    vm::{edge_shape::SimpleEdge, RootsWorkFactory},
-};
-
-use crate::{
-    gc::virtual_memory::{PlatformVirtualMemory, VirtualMemory, VirtualMemoryImpl},
-    runtime::value::Value,
-    vm::{intrinsics::get_callee_vcode, thread::Thread, BOOT_CONTINUATION_CODE},
-};
-
 use self::stackframe::{
     frame_dynamic_link, frame_local, frame_previous_sp, set_frame_dynamic_link,
     set_frame_machine_return_address, set_frame_virtual_return_address, StackElement,
 };
-
-pub mod llint;
+use crate::{
+    gc::virtual_memory::{PlatformVirtualMemory, VirtualMemory, VirtualMemoryImpl},
+    runtime::{
+        control::{restore_cont_jump, ScmContinuation, Winder},
+        value::Value,
+    },
+    vm::{
+        intrinsics::{get_callee_vcode, UnwindAndContinue},
+        thread::Thread,
+        BOOT_CONTINUATION_CODE,
+    },
+};
+use mmtk::{
+    util::Address,
+    vm::{edge_shape::SimpleEdge, RootsWorkFactory},
+};
+use rsetjmp::{JumpBuf, setjmp};
+use std::{
+    mem::size_of,
+    panic::AssertUnwindSafe,
+    ptr::{null, null_mut, NonNull},
+    sync::atomic::AtomicU64,
+};
 pub mod engine;
+pub mod llint;
 pub mod stackframe;
+
+/// A simple counter used to identify different interpreter entrypoints.
+///
+/// Used to protect call/cc from being called from a different interpreter
+/// or call/cc going through a Rust frame.
+static ENTRY: AtomicU64 = AtomicU64::new(0);
 
 pub const NUM_ENGINES: usize = 1;
 
@@ -31,11 +42,8 @@ pub struct InterpreterState {
     pub ip: *const u8,
     pub sp: *mut StackElement,
     pub fp: *mut StackElement,
-    pub entry_fp: *mut StackElement,
-    pub prev_fp: *mut StackElement,
-    pub prev_entry_fp: *mut StackElement,
     pub stack_limit: *mut StackElement,
-    
+    pub entry_id: u64,
     /// Disable JIT
     pub disable_mcode: u8,
     pub stack_size: usize,
@@ -43,6 +51,8 @@ pub struct InterpreterState {
     pub stack_top: *mut StackElement,
     pub mra_after_abort: *const u8,
     pub stack_memory: VirtualMemory,
+    pub registers: *mut JumpBuf,
+    pub winders: Option<NonNull<Winder>>,
     pub engines: [unsafe extern "C-unwind" fn(&mut Thread) -> Value; 1],
 }
 
@@ -60,13 +70,12 @@ impl InterpreterState {
     pub fn new() -> Self {
         let mut this = Self {
             ip: null(),
+            registers: null_mut(),
             sp: null_mut(),
             fp: null_mut(),
-            prev_entry_fp: null_mut(),
-            prev_fp: null_mut(),
-            entry_fp: null_mut(),
+            entry_id: ENTRY.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
             stack_limit: null_mut(),
-            
+
             disable_mcode: 0,
             stack_size: 0,
             stack_bottom: null_mut(),
@@ -74,6 +83,7 @@ impl InterpreterState {
             mra_after_abort: null(),
             engines: [engine::rust_engine],
             stack_memory: VirtualMemory::null(),
+            winders: None,
         };
         unsafe {
             this.prepare_stack();
@@ -103,7 +113,6 @@ impl InterpreterState {
                 if (*value).is_object() {
                     let edge = SimpleEdge::from_address(Address::from_ptr(value));
                     edges.push(edge);
-                    
                 }
                 sp = sp.add(1);
             }
@@ -112,6 +121,10 @@ impl InterpreterState {
         }
 
         self.return_unused_stack_to_os();
+        if let Some(ref mut winders) = self.winders {
+            let edge = SimpleEdge::from_address(Address::from_ptr(winders));
+            edges.push(edge);
+        }
         factory.create_process_edge_roots_work(edges);
     }
 
@@ -187,6 +200,7 @@ impl InterpreterState {
             self.sp = new_sp;
         }
     }
+
 }
 
 fn allocate_stack(mut size: usize) -> VirtualMemory {
@@ -212,11 +226,10 @@ pub fn scm_call_n(thread: &mut Thread, proc: Value, args: &[Value]) -> Result<Va
     call.  */
     let stack_reserve_words = call_nlocals + frame_size + return_nlocals + frame_size;
     unsafe {
-        let save_prev_fp = thread.interpreter().prev_fp;
-        let save_prev_entry_fp = thread.interpreter().prev_entry_fp;
+        let off = thread.shadow_stack.offset_for_save();
 
-        thread.interpreter().prev_fp = thread.interpreter().fp;
-        thread.interpreter().prev_entry_fp = thread.interpreter().entry_fp;
+        let prev_id = thread.interpreter().entry_id;
+        thread.interpreter().entry_id = ENTRY.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let new_sp = thread.interpreter().sp.sub(stack_reserve_words);
         thread.interpreter().push_sp(new_sp);
         let call_fp = thread.interpreter().sp.add(call_nlocals);
@@ -238,30 +251,45 @@ pub fn scm_call_n(thread: &mut Thread, proc: Value, args: &[Value]) -> Result<Va
         }
 
         thread.interpreter().fp = call_fp;
-        thread.interpreter().entry_fp = return_fp;
-        {
-            let call = AssertUnwindSafe(|| {
-                thread.interpreter().ip = get_callee_vcode(thread);
 
+        {
+            let prev_registers = thread.interpreter().registers;
+            let mut registers = JumpBuf::new();
+            let resume = setjmp(&mut registers);
+            let call = AssertUnwindSafe(|| {
+                
+                if resume == 0 {
+                    thread.interpreter().ip = get_callee_vcode(thread);
+                } else {
+                    thread.safepoint();
+                }
+                thread.interpreter().registers = &mut registers;
                 (thread.interpreter().engines[0])(thread)
             });
-            
+
             let result = std::panic::catch_unwind(|| call());
-           
-            thread.interpreter().fp = thread.interpreter().prev_fp;
-            thread.interpreter().entry_fp = thread.interpreter().prev_entry_fp;
-            thread.interpreter().prev_fp = save_prev_fp;
-            thread.interpreter().prev_entry_fp = save_prev_entry_fp;
-            match result {
-                Ok(val) => return Ok(val),
+
+            let result = match result {
+                Ok(val) => Ok(val),
                 Err(err) => {
                     if let Some(val) = err.downcast_ref::<Value>() {
-                        return Err(*val);
+                        Err(*val)
+                    } else if let Some(contregs) = err.downcast_ref::<UnwindAndContinue>() {
+                        // Continuation was invoked, we unwound the stack to drop values that need to be dropped,
+                        // now we can safely longjmp to continuation buffer (`restore_cont_jump` actually allocates necessary
+                        // ammount of stack space before jumping to JmpBuf).
+                        let cont: &mut ScmContinuation = contregs.0.cast_as::<ScmContinuation>();
+                        restore_cont_jump(cont);
                     } else {
                         std::panic::resume_unwind(err);
                     }
                 }
-            }
+            };
+            thread.interpreter().registers = prev_registers;
+            thread.interpreter().entry_id = prev_id;
+            thread.shadow_stack.restore_from_offset(off);
+
+            result
         }
     }
 }

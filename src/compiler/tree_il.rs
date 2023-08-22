@@ -574,7 +574,7 @@ impl IForm {
                 let body_pret = lambda.body.pretty::<REF, _>(allocator);
 
                 allocator
-                    .text("lambda")
+                    .text(format!("lambda[{:p}]", lambda.as_ptr()))
                     .append(allocator.space())
                     .append(name_pret)
                     .append(allocator.space())

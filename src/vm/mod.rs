@@ -13,10 +13,9 @@ use crate::{
     },
     runtime::{
         self,
-        environment::Environment,
         hashtable::HashTableType,
         object::{CleanerType, ScmCellRef},
-        value::Value,
+        value::Value, control, equality,
     },
 };
 
@@ -78,9 +77,9 @@ impl VirtualMachine {
                 }
             });
             if self.interaction_environment.is_object() {
-                let edge = SimpleEdge::from_address(
-                    Address::from_mut_ptr(&mut self.interaction_environment)
-                );
+                let edge = SimpleEdge::from_address(Address::from_mut_ptr(
+                    &mut self.interaction_environment,
+                ));
                 edges.push(edge);
             }
             let edge = SimpleEdge::from_address(Address::from_mut_ptr(&mut self.module_obarray));
@@ -125,6 +124,8 @@ pub fn scm_init(mmtk: mmtk::MMTK<CapyVM>) -> &'static mut VirtualMachine {
         scm_virtual_machine().module_obarray = modules;
         runtime::environment::init_env();
         intrinsics::init();
+        control::init();
+        equality::init();
 
         this
     }

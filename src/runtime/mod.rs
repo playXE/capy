@@ -9,3 +9,4 @@ pub mod symbol;
 pub mod value;
 pub mod gsubr;
 pub mod module;
+pub mod control;

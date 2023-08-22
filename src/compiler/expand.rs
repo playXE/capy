@@ -653,9 +653,7 @@ pub fn define_syntax() -> P<SyntaxEnv> {
             sr
         };
 
-        let id = if let Sexpr::Identifier(mut id) = name {
-            let sym = Sexpr::Gensym(P(scm_symbol_str(unwrap_identifier(id.clone())).to_string()));
-            id.name = sym;
+        let id = if let Sexpr::Identifier(id) = name {
             id
         } else {
             make_identifier(name, cenv.syntax_env.clone(), Sexpr::Null)

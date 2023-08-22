@@ -12,6 +12,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "alloca"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5a7d05ea6aea7e9e64d25b9156ba2fee3fdd659e34e41063cd2fc7cd020d7f4"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "arrayvec"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -65,6 +74,7 @@ dependencies = [
 name = "capy"
 version = "0.1.0"
 dependencies = [
+ "alloca",
  "cfg-if",
  "env_logger",
  "errno",
@@ -80,6 +90,7 @@ dependencies = [
  "pico-args",
  "pretty",
  "r7rs-parser",
+ "rsetjmp",
  "termcolor",
  "winapi",
 ]
@@ -487,6 +498,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9252111cf132ba0929b6f8e030cac2a24b507f3a4d6db6fb2896f27b354c714b"
 
 [[package]]
+name = "naked-function"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3b8d5fca6ab1e6215b010aefd3b9ac5aae369dae0faea3a7f34f296cc9f719ac"
+dependencies = [
+ "cfg-if",
+ "naked-function-macro",
+]
+
+[[package]]
+name = "naked-function-macro"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5b4123e70df5fe0bb370cff166ae453b9c5324a2cfc932c0f7e55498147a0475"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.28",
+]
+
+[[package]]
 name = "ntapi"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -771,6 +803,15 @@ name = "regex-syntax"
 version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5ea92a5b6195c6ef2a0295ea818b312502c6fc94dde986c5553242e18fd4ce2"
+
+[[package]]
+name = "rsetjmp"
+version = "1.0.0"
+source = "git+https://github.com/playxe/rsetjmp#b15216cf839ae647489ddbf730eacb623f12a902"
+dependencies = [
+ "cfg-if",
+ "naked-function",
+]
 
 [[package]]
 name = "rustc_version"
