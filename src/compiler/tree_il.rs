@@ -1,6 +1,6 @@
 use std::{collections::HashSet, hash::Hash};
 
-use super::{p::Weak, primitives::TRANSPARENT_PRIMITIVE_NAMES, sexpr::Sexpr, P};
+use super::{p::Weak, primitives::TRANSPARENT_PRIMITIVE_NAMES, sexpr::{Sexpr, SourceLoc}, P};
 
 pub enum IForm {
     Const(Sexpr),
@@ -15,7 +15,7 @@ pub enum IForm {
     Lambda(P<Lambda>),
     Label(Label),
     Call(Call),
-    PrimCall(&'static str, Vec<P<IForm>>),
+    PrimCall(Option<SourceLoc>, &'static str, Vec<P<IForm>>),
     PrimRef(&'static str),
     Let(Let),
     LetValues(LetValues),
@@ -37,6 +37,22 @@ impl Hash for IForm {
 }
 
 impl IForm {
+    pub fn src(&self) -> Option<SourceLoc> {
+        match self {
+            Self::Define(def) => def.src,
+            Self::If(if_) => if_.src,
+            Self::GSet(gset) => gset.src,
+            Self::Seq(seq) => seq.src,
+            Self::Lambda(lambda) => lambda.src,
+            Self::Label(label) => label.src,
+            Self::Call(call) => call.src,
+            Self::PrimCall(src, _, _) => *src,
+            Self::Let(let_) => let_.src,
+            Self::LetValues(vals) => vals.src,
+            _ => None,
+        }
+    }
+
     pub fn lref_lvar(&self) -> Option<&P<LVar>> {
         match self {
             Self::LRef(lref) => Some(&lref.lvar),
@@ -100,7 +116,7 @@ impl IForm {
                 }
             }
 
-            Self::PrimCall(name, args) => {
+            Self::PrimCall(_, name, args) => {
                 if !args.iter().all(|arg| arg.is_transparent()) {
                     return false;
                 }
@@ -177,7 +193,7 @@ impl IForm {
                 lvals.init.count_refs();
                 lvals.body.count_refs();
             }
-            Self::PrimCall(_, args) => {
+            Self::PrimCall(_, _, args) => {
                 for arg in args {
                     arg.count_refs();
                 }
@@ -188,6 +204,7 @@ impl IForm {
 }
 
 pub struct Define {
+    pub src: Option<SourceLoc>,
     pub name: Sexpr,
     pub value: P<IForm>,
 }
@@ -238,6 +255,7 @@ pub struct LSet {
 }
 
 pub struct If {
+    pub src: Option<SourceLoc>,
     pub cond: P<IForm>,
     pub consequent: P<IForm>,
     pub alternative: P<IForm>,
@@ -248,15 +266,18 @@ pub struct GRef {
 }
 
 pub struct GSet {
+    pub src: Option<SourceLoc>,
     pub name: Sexpr,
     pub value: P<IForm>,
 }
 
 pub struct Seq {
+    pub src: Option<SourceLoc>,
     pub forms: Vec<P<IForm>>,
 }
 
 pub struct Lambda {
+    pub src: Option<SourceLoc>,
     pub name: Option<String>,
     pub reqargs: u32,
     pub optarg: bool,
@@ -293,11 +314,13 @@ pub enum LambdaFlag {
 
 #[repr(C)]
 pub struct Label {
+    pub src: Option<SourceLoc>,
     pub label: Option<i64>,
     pub body: P<IForm>,
 }
 
 pub struct Call {
+    pub src: Option<SourceLoc>,
     pub proc: P<IForm>,
     pub args: Vec<P<IForm>>,
     pub flag: CallFlag,
@@ -321,6 +344,7 @@ pub enum LetType {
 }
 
 pub struct Let {
+    pub src: Option<SourceLoc>,
     pub typ: LetType,
     pub lvars: Vec<P<LVar>>,
     pub inits: Vec<P<IForm>>,
@@ -337,6 +361,7 @@ pub struct Let {
 /// (call-with-values (lambda () <init>) (lambda (v0 v1 ...) <body>))
 /// ```
 pub struct LetValues {
+    pub src: Option<SourceLoc>,
     pub lvars: Vec<P<LVar>>,
     pub optarg: bool,
     pub init: P<IForm>,
@@ -353,7 +378,7 @@ impl IForm {
         D::Doc: Clone,
     {
         match self {
-            IForm::PrimCall(name, args) => {
+            IForm::PrimCall(_, name, args) => {
                 let args_pret = allocator.intersperse(
                     args.iter().map(|arg| arg.pretty::<REF, _>(allocator)),
                     allocator.line(),

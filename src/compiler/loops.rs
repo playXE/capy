@@ -7,7 +7,7 @@
 
 use crate::compiler::{
     p::Weak,
-    tree_il::{LSet, Seq, LRef},
+    tree_il::{LRef, LSet, Seq},
 };
 
 use super::{
@@ -57,7 +57,7 @@ fn is_misused(x: &IForm, tail: bool, lvar: P<LVar>, formals: &[P<LVar>]) -> bool
                         .any(|x| is_misused(x, false, lvar.clone(), formals))
             }
         }
-        IForm::PrimCall(_, args) => args
+        IForm::PrimCall(_, _, args) => args
             .iter()
             .any(|x| is_misused(x, false, lvar.clone(), formals)),
         IForm::Define(def) => is_misused(&def.value, tail, lvar, formals),
@@ -99,7 +99,7 @@ fn is_captured(x: &IForm, in_lambda: bool, lvar: P<LVar>) -> bool {
         IForm::Label(x) => is_captured(&x.body, in_lambda, lvar),
 
         IForm::Lambda(lam) => is_captured(&lam.body, true, lvar),
-        IForm::PrimCall(_, args) => args.iter().any(|x| is_captured(x, in_lambda, lvar.clone())),
+        IForm::PrimCall(_, _, args) => args.iter().any(|x| is_captured(x, in_lambda, lvar.clone())),
         IForm::LetValues(lvals) => {
             is_captured(&lvals.init, in_lambda, lvar.clone())
                 || is_captured(&lvals.body, in_lambda, lvar.clone())
@@ -242,7 +242,7 @@ pub fn recover_loops_rec(
 
         IForm::It => iform,
         IForm::Goto(_) => iform,
-        IForm::PrimCall(_, args) => {
+        IForm::PrimCall(_, _, args) => {
             for arg in args.iter_mut() {
                 *arg = recover_loops_rec(arg.clone(), penv, false, changed);
             }
@@ -319,6 +319,7 @@ fn optimize_loop(
     init: Vec<P<IForm>>,
 ) -> P<IForm> {
     let mut label = P(IForm::Label(Label {
+        src: lambda.body.src(),
         label: None,
         body: lambda.body.clone(),
     }));
@@ -327,7 +328,8 @@ fn optimize_loop(
         match &mut *x {
             IForm::Call(call) => {
                 if call.proc.is_lref() && call.proc.lref_lvar().unwrap().as_ptr() == lvar.as_ptr() {
-                    let temp_lvars = formals.iter()
+                    let temp_lvars = formals
+                        .iter()
                         .map(|lvar| {
                             let temp_lvar = P(LVar {
                                 name: lvar.name.clone(),
@@ -335,27 +337,39 @@ fn optimize_loop(
                                 arg: false,
                                 boxed: false,
                                 ref_count: 0,
-                                set_count: 0
+                                set_count: 0,
                             });
                             temp_lvar
-                        }).collect::<Vec<_>>();
+                        })
+                        .collect::<Vec<_>>();
 
-                    let mut set_vars = temp_lvars.iter()
+                    let mut set_vars = temp_lvars
+                        .iter()
                         .zip(formals.iter())
                         .map(|(temp_lvar, lvar)| {
                             P(IForm::LSet(LSet {
                                 lvar: lvar.clone(),
-                                value: P(IForm::LRef(LRef { lvar: temp_lvar.clone() })),
+                                value: P(IForm::LRef(LRef {
+                                    lvar: temp_lvar.clone(),
+                                })),
                             }))
                         })
                         .collect::<Vec<_>>();
                     set_vars.push(P(IForm::Goto(Weak::new(&label))));
-                    let inits = call.args.iter().map(|x| rewrite(x.clone(), lvar, formals, label.clone())).collect::<Vec<_>>();
+                    let inits = call
+                        .args
+                        .iter()
+                        .map(|x| rewrite(x.clone(), lvar, formals, label.clone()))
+                        .collect::<Vec<_>>();
                     let temps = P(IForm::Let(Let {
+                        src: call.src,
                         typ: LetType::Let,
                         lvars: temp_lvars,
                         inits,
-                        body: P(IForm::Seq(Seq { forms: set_vars })),
+                        body: P(IForm::Seq(Seq {
+                            src: call.src,
+                            forms: set_vars,
+                        })),
                     }));
 
                     temps
@@ -417,7 +431,7 @@ fn optimize_loop(
                 x
             }
 
-            IForm::PrimCall(_, args) => {
+            IForm::PrimCall(_, _, args) => {
                 args.iter_mut().for_each(|x| {
                     *x = rewrite(x.clone(), lvar, formals, label.clone());
                 });
@@ -444,6 +458,7 @@ fn optimize_loop(
     lbl_.body = body;
 
     let binding = P(IForm::Let(Let {
+        src: lambda.src,
         typ: LetType::Let,
         lvars: lambda.lvars.clone(),
         inits: init,

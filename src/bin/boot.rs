@@ -1,5 +1,7 @@
 //! Bootstrap compiler. Takes input files as arguments and outputs single bytecode file.
 
+use std::collections::HashMap;
+
 use capy::compiler::expand::define_syntax;
 use capy::compiler::sexpr::r7rs_expr_to_sexpr;
 use capy::compiler::sexpr::Sexpr;
@@ -7,6 +9,7 @@ use capy::compiler::tree_il::*;
 use capy::compiler::Cenv;
 use capy::compiler::P;
 use capy::compiler::{compile, compile_bytecode::compile_bytecode};
+use capy::runtime::symbol::scm_intern;
 use capy::vm::scm_init;
 use r7rs_parser::expr::*;
 use r7rs_parser::parser::*;
@@ -29,7 +32,7 @@ fn main() {
     let mut interner = NoIntern;
 
     let mut toplevel_seq = vec![];
-
+    let mut source_info = HashMap::new();
     for filename in args.iter() {
         let src = match std::fs::read_to_string(filename) {
             Ok(src) => src,
@@ -48,12 +51,14 @@ fn main() {
             let result = parser.parse(true);
             match result {
                 Ok(expr) => {
+                    
+                    let interner = NoIntern;
+                    let sexpr = r7rs_expr_to_sexpr(&interner, scm_intern(filename), &expr, &mut source_info);
                     let cenv = Cenv {
                         frames: Sexpr::Null,
                         syntax_env: env.clone(),
+                        source_loc: &source_info,
                     };
-                    let interner = NoIntern;
-                    let sexpr = r7rs_expr_to_sexpr(&interner, &expr);
                     let iform = match compile(&sexpr, &cenv, true, true) {
                         Ok(iform) => iform,
                         Err(err) => {
@@ -73,11 +78,13 @@ fn main() {
     }
 
     let toplevel_lambda = P(Lambda {
+        src: None,
         name: Some("<toplevel>".to_string()),
         reqargs: 0,
         optarg: false,
         lvars: vec![],
         body: P(IForm::Seq(Seq {
+            src: None,
             forms: toplevel_seq,
         })),
         bound_lvars: Default::default(),

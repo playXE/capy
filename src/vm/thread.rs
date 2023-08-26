@@ -34,7 +34,7 @@ pub struct Thread {
     pub gc_state: i8,
     pub kind: ThreadKind,
     pub handles: MaybeUninit<HandleMemory>,
-  
+    pub obj_handles: MaybeUninit<ObjStorage>,
     pub local_finalization_queue: MaybeUninit<Vec<(ObjectReference, CleanerType)>>,
 }
 
@@ -51,6 +51,7 @@ impl Thread {
     pub fn current() -> &'static mut Thread {
         unsafe { &mut THREAD }
     }
+    
 
     pub fn interpreter(&mut self) -> &mut InterpreterState {
         unsafe { &mut *self.interpreter.as_mut_ptr() }
@@ -151,6 +152,11 @@ impl Thread {
         !self.safepoint.is_null() && unsafe { self.safepoint != &mut SINK }
     }
 
+    pub fn obj_storage(&self) -> &ObjStorage {
+        assert!(self.is_registered());
+        unsafe { &*self.obj_handles.as_ptr() }
+    }
+
     pub(crate) fn register_mutator(&mut self) {
         self.safepoint = super::safepoint::SAFEPOINT_PAGE.address();
         self.kind = ThreadKind::Mutator;
@@ -166,6 +172,18 @@ impl Thread {
         self.interpreter = MaybeUninit::new(InterpreterState::new());
         self.shadow_stack.init();
         self.local_finalization_queue = MaybeUninit::new(Vec::with_capacity(128));
+        self.obj_handles = MaybeUninit::new(ObjStorage::new("thread-handles"));
+    }
+
+    pub(crate) fn deregister_mutator(&mut self) {
+        unsafe {
+            self.flush_cleaner_queue();
+            self.local_finalization_queue.assume_init_drop();
+            self.obj_handles.assume_init_drop();
+            self.handles.assume_init_drop();
+            let th = threads();
+            th.remove_current_thread();
+        }
     }
 
     pub fn register_cleaner(&mut self, object: ObjectReference, cleaner: CleanerType) {
@@ -210,6 +228,7 @@ impl Thread {
     }
 }
 
+use crate::gc::objstorage::ObjStorage;
 use crate::gc::refstorage::HandleMemory;
 use crate::gc::shadow_stack::ShadowStack;
 use crate::interpreter::InterpreterState;
@@ -338,5 +357,6 @@ static mut THREAD: Thread = Thread {
     shadow_stack: ShadowStack::new(),
     kind: ThreadKind::None,
     handles: MaybeUninit::uninit(),
+    obj_handles: MaybeUninit::uninit(),
     local_finalization_queue: MaybeUninit::uninit(),
 };

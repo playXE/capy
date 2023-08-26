@@ -67,3 +67,4 @@
         (cons (car args) (cons* (cdr args)))))
 
 (for-all print (list 1 2 3 4) (list 5 6 7 8))
+

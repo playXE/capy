@@ -15,7 +15,7 @@ use crate::{
         self,
         hashtable::HashTableType,
         object::{CleanerType, ScmCellRef},
-        value::Value, control, equality,
+        value::Value, control, equality, subr_core, symbol::scm_intern, struct_::StructGlobals,
     },
 };
 
@@ -38,6 +38,7 @@ pub mod thread;
 pub static BOOT_CONTINUATION_CODE: &'static [u8] = &[OP_HALT];
 
 pub struct VirtualMachine {
+    pub(crate) initialized: bool,
     pub mmtk: mmtk::MMTK<CapyVM>,
     pub gc_waiters_lock: Monitor<()>,
     pub safepoint_lock_data: Option<MutexGuard<'static, Vec<*mut Thread>>>,
@@ -45,6 +46,8 @@ pub struct VirtualMachine {
     pub(crate) symtab_lock: RawMutex,
     pub(crate) images: ImageRegistry,
     pub(crate) finalization_registry: Mutex<Vec<(ObjectReference, CleanerType)>>,
+    pub(crate) weakmapping_registry: Mutex<Vec<ObjectReference>>,
+    pub(crate) weakhashtable_registry: Mutex<Vec<ObjectReference>>,
     pub(crate) gc_counter: u64,
 
     pub(crate) boot_continuation: Value,
@@ -52,6 +55,8 @@ pub struct VirtualMachine {
     pub disassemble: bool,
     pub interaction_environment: Value,
     pub(crate) globals: ObjStorage,
+    pub struct_globals: StructGlobals,
+    pub symbols: [Value; InherentSymbols::Last as usize]
 }
 
 impl VirtualMachine {
@@ -85,7 +90,7 @@ impl VirtualMachine {
             let edge = SimpleEdge::from_address(Address::from_mut_ptr(&mut self.module_obarray));
             edges.push(edge);
         }
-
+        self.struct_globals.scan_roots(factory);
         factory.create_process_edge_roots_work(edges);
     }
 }
@@ -95,10 +100,12 @@ pub fn scm_init(mmtk: mmtk::MMTK<CapyVM>) -> &'static mut VirtualMachine {
     let this = Box::leak(Box::new(VirtualMachine {
         mmtk,
         gc_waiters_lock: Monitor::new(()),
+        weakmapping_registry: Mutex::new(Vec::with_capacity(128)),
         safepoint_lock_data: None,
         symtab_lock: RawMutex::INIT,
         symtable: HashMap::with_capacity(128),
         images: ImageRegistry::new(),
+        weakhashtable_registry: Mutex::new(Vec::with_capacity(128)),
         finalization_registry: Mutex::new(Vec::with_capacity(128)),
         gc_counter: 0,
         boot_continuation: Value::encode_undefined_value(),
@@ -106,6 +113,9 @@ pub fn scm_init(mmtk: mmtk::MMTK<CapyVM>) -> &'static mut VirtualMachine {
         globals: ObjStorage::new("global-roots"),
         module_obarray: Value::encode_undefined_value(),
         interaction_environment: Value::encode_null_value(),
+        symbols: [Value::encode_undefined_value(); InherentSymbols::Last as usize],
+        struct_globals: StructGlobals::default(),
+        initialized: false,
     }));
 
     unsafe {
@@ -122,16 +132,28 @@ pub fn scm_init(mmtk: mmtk::MMTK<CapyVM>) -> &'static mut VirtualMachine {
 
         let modules = Thread::current().make_hashtable(128, HashTableType::Eq);
         scm_virtual_machine().module_obarray = modules;
+        this.init_inherent();
         runtime::environment::init_env();
         intrinsics::init();
         control::init();
         equality::init();
-
+        subr_core::init();
+        
+        this.initialized = true;
         this
     }
 }
 
-impl VirtualMachine {}
+impl VirtualMachine {
+    fn init_inherent(&mut self) {
+        self.symbols[InherentSymbols::Ellipsis as usize] = scm_intern("...");
+        self.symbols[InherentSymbols::Underbar as usize] = scm_intern("_");
+    }
+
+    pub fn inherent_symbol(&self, sym: InherentSymbols) -> Value {
+        self.symbols[sym as usize]
+    }
+}
 
 static mut VIRTUAL_MACHINE: *mut VirtualMachine = std::ptr::null_mut();
 
@@ -150,4 +172,12 @@ pub fn scm_global_roots() -> &'static ObjStorage {
 
 pub fn scm_init_thread() {
     Thread::current().register_mutator();
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum InherentSymbols {
+    Ellipsis,
+    Underbar,
+    Last,
 }

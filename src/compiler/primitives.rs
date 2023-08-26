@@ -224,7 +224,7 @@ pub fn resolve_primitives(mut exp: P<IForm>) -> P<IForm> {
             }
 
             if let IForm::PrimRef(name) = &*call.proc {
-                return P(IForm::PrimCall(*name, call.args.clone()));
+                return P(IForm::PrimCall(call.src, *name, call.args.clone()));
             }
 
             exp

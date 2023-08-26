@@ -195,6 +195,8 @@ macro_rules! decl_opcodes {
                         $(
                             self.$field().write(gen);
                         )*
+
+                        gen.write_finish();
                     }
                 }
 

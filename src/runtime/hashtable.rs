@@ -84,6 +84,8 @@ pub enum HashTableType {
     Generic,
 }
 
+
+
 pub const SCM_HASHTABLE_HANDLER_SIGNATURE: usize = 0;
 pub const SCM_HASHTABLE_HANDLER_HASH: usize = 1;
 pub const SCM_HASHTABLE_HANDLER_EQUIV: usize = 2;
@@ -99,21 +101,6 @@ pub const SCM_HASHTABLE_HANDLER_EQUIV_FUNC: usize = 11;
 pub const SCM_HASHTABLE_HANDLER_MUTABLE: usize = 12;
 pub const SCM_HASHTABLE_HANDLER_ALIST: usize = 13;
 
-#[repr(C)]
-pub(crate) struct WeakHashTableRec {
-    pub capacity: u32,
-    pub used: u32,
-    pub live: u32,
-    pub elts: [Value; 1],
-}
-
-#[repr(C)]
-pub struct ScmWeakHashtable {
-    pub(crate) hdr: ScmCellHeader,
-    pub lock: RawMutex,
-    pub(crate) datum: *mut WeakHashTableRec,
-    pub(crate) rehash: bool,
-}
 
 pub fn address_hash1(adrs: *const u8, bound: u32) -> u32 {
     ((((adrs as usize) >> 3) * 2654435761 + (adrs as usize & 7)) % bound as usize) as u32
@@ -575,6 +562,43 @@ pub(crate) fn inplace_rehash_hashtable(ht: Value) {
     }
 }
 
+pub(crate) fn inplace_rehash_weak_hashtable(ht: Value) {
+    let h = ht;
+    let datum = ht.cast_as::<WeakHashtable>().datum;
+
+    let nelts = unsafe { (*datum).capacity };
+    
+    let datum_size = size_of::<WeakHashTableRec>() + size_of::<Value>() * ((nelts as usize ) - 1);
+    let save_datum = mmtk::memory_manager::malloc(datum_size).to_mut_ptr::<u8>();
+    unsafe {
+        save_datum.copy_from_nonoverlapping(datum as *const u8, datum_size);
+        let save_datum = save_datum.cast::<WeakHashTableRec>();
+        clear_volatile_weak_hashtable(ht.cast_as());
+        for i in 0..nelts {
+            let elt = (*save_datum).elts.as_ptr().add(i as _).read();
+            if elt.is_empty() {
+                continue;
+            }
+
+            if elt
+                .is_undefined()
+            {
+                continue;
+            }
+            assert!(elt.type_of() == TypeId::WeakMapping);
+            if !elt.cast_as::<ScmWeakMapping>().key.is_object() {
+                continue;
+            }
+            put_weak_hashtable(
+                h,
+                elt
+            );
+        }
+
+        mmtk::memory_manager::free(Address::from_mut_ptr(save_datum));
+    }
+}
+
 pub(crate) fn clear_volatile_hashtable(ht: &mut ScmHashTable) {
     let n = ht.datum().capacity;
     ht.datum_mut().live = 0;
@@ -585,6 +609,18 @@ pub(crate) fn clear_volatile_hashtable(ht: &mut ScmHashTable) {
     }
 }
 
+
+pub(crate) fn clear_volatile_weak_hashtable(ht: &mut WeakHashtable) {
+    unsafe {
+        let n = (*ht.datum).capacity;
+        (*ht.datum).live = 0;
+        (*ht.datum).used = 0;
+
+        for i in 0..n {
+            (*ht.datum).elts.as_mut_ptr().add(i as _).write(Value::encode_empty_value());
+        }
+    }
+}
 pub fn rehash_hashtable(thread: &mut Thread, mut ht: Value, nsize: u32) -> Value {
     
     let nelts = ht.cast_as::<ScmHashTable>().datum().capacity;
@@ -614,6 +650,44 @@ pub fn rehash_hashtable(thread: &mut Thread, mut ht: Value, nsize: u32) -> Value
     ht
 }
 
+pub fn rehash_weak_hashtable(thread: &mut Thread, mut ht: Value, nsize: u32) -> Value {
+    unsafe {
+        let nelts = (*ht.cast_as::<WeakHashtable>().datum).capacity;
+
+        let ht2 = {
+            // protect ht from GC
+            let ht2 = gc_protect!(thread => ht => thread.make_weak_hashtable(nsize));
+            ht2
+        };
+
+        ht2.cast_as::<WeakHashtable>().lock.lock(true);
+
+        for i in 0..nelts {
+            let elt = (*ht.cast_as::<WeakHashtable>().datum).elts.as_ptr().add(i as _).read();
+            if elt.is_empty() {
+                continue;
+            }
+
+            if elt.is_undefined() {
+                continue;
+            }
+
+            assert!(elt.type_of() == TypeId::WeakMapping);
+            if !elt.cast_as::<ScmWeakMapping>().key.is_object() {
+                continue;
+            }
+            put_weak_hashtable(
+                ht2,
+                elt
+            );
+        }
+
+        ht2.cast_as::<WeakHashtable>().lock.unlock();
+        std::mem::swap(&mut (*ht.cast_as::<WeakHashtable>().datum), &mut (*ht2.cast_as::<WeakHashtable>().datum));
+        ht
+    }
+}
+
 pub fn dummy_hash(_key: Value, _nsize: u32) -> u32 {
     todo!()
 }
@@ -628,4 +702,155 @@ pub fn hashtable_lock(ht: Value) {
 
 pub fn hashtable_unlock(ht: Value) {
     ht.cast_as::<ScmHashTable>().lock.unlock();
+}
+
+#[repr(C)]
+pub struct WeakHashTableRec {
+    pub header: ScmCellHeader,
+    pub capacity: u32,
+    pub used: u32,
+    pub live: u32,
+    pub elts: [Value; 1],
+}
+
+#[repr(C)]
+pub struct WeakHashtable {
+    pub header: ScmCellHeader,
+    pub lock: RawMutex,
+    pub datum: *mut WeakHashTableRec,
+}
+
+pub fn lookup_weak_hashtable(ht: Value, key: Value) -> Value {
+    let datum = ht.cast_as::<WeakHashtable>().datum;
+    unsafe {
+        let datum = &mut *datum;
+        let nsize = datum.capacity;
+        let hash1 = u64_hash1(key.get_raw() as _, nsize as _);
+        let hash2 = u64_hash2(key.get_raw() as _, nsize as _);
+        let mut index = hash1;
+        loop {
+            let entry = datum.elts.as_ptr().add(index as _).read();
+            if entry.is_empty() {
+                return Value::encode_undefined_value();
+            }
+            
+            if entry != Value::encode_undefined_value() {
+                let wmap = entry.cast_as::<ScmWeakMapping>();
+                if wmap.key.is_false() {
+                    datum.elts.as_mut_ptr().add(index as _).write(Value::encode_undefined_value());
+                    datum.live -= 1;
+                } else {
+                    if wmap.key == key {
+                        return wmap.value;
+                    }
+                }
+            }
+
+            index = index.wrapping_add(hash2);
+            if index >= nsize {
+                index -= nsize;
+            }
+            if index == hash1 {
+                panic!("lookup_weak_hashtable: table overflow")
+            }
+        }
+    }
+}
+
+pub fn put_weak_hashtable(ht: Value, wmap: Value) -> u32 {
+    assert!(wmap.type_of() == TypeId::WeakMapping);
+    let key = wmap.cast_as::<ScmWeakMapping>().key;
+    unsafe {
+        let datum = &mut*ht.cast_as::<WeakHashtable>().datum;
+        let nsize = datum.capacity;
+        let hash1 = u64_hash1(key.get_raw() as _, nsize as _);
+        let hash2 = u64_hash2(key.get_raw() as _, nsize as _);
+        let mut index = hash1;
+
+        let found = loop {
+            let entry = datum.elts.as_ptr().add(index as _).read();
+            if entry.is_empty() {
+                datum.live += 1;
+                datum.used += 1;
+                break true;
+            }
+
+            if entry.is_undefined() {
+                datum.live += 1;
+                break true;
+            }
+
+            index = index.wrapping_add(hash2);
+            if index >= nsize {
+                index -= nsize;
+            }
+
+            if index == hash1 {
+                break false;
+            }
+        };
+
+        if found {
+           
+            datum.elts.as_mut_ptr().add(index as _).write(wmap);
+            if datum.used < hash_busy_threshold(nsize) {
+                return 0;
+            }
+
+            if datum.live < hash_sparse_threshold(nsize) {
+                return lookup_hashtable_size(datum.live);
+            }
+
+            if datum.live < hash_dense_threshold(nsize) {
+                return nsize;
+            }
+
+            return lookup_hashtable_size(nsize);
+        } else {
+            panic!("put_weak_hashtable: table overflow")
+        }
+    }
+
+}
+
+pub fn remove_weak_hashtable(ht: Value, key: Value) -> u32 {
+    unsafe {
+        let datum = &mut*ht.cast_as::<WeakHashtable>().datum;
+        let nsize = datum.capacity;
+        let hash1 = u64_hash1(key.get_raw() as _, nsize as _);
+        let hash2 = u64_hash2(key.get_raw() as _, nsize as _);
+        let mut index = hash1;
+
+        loop {
+            let entry = datum.elts.as_ptr().add(index as _).read();
+            if entry.is_empty() {
+                return 0;
+            }
+
+            if !entry.is_undefined() {
+                let wmap = entry.cast_as::<ScmWeakMapping>();
+                if !wmap.key.is_object() {
+                    datum.elts.as_mut_ptr().add(index as _).write(Value::encode_undefined_value());
+                    datum.live -= 1;
+                } else {
+                    datum.elts.as_mut_ptr().add(index as _).write(Value::encode_undefined_value());
+                    datum.live -= 1;
+                    if datum.live < hash_sparse_threshold(nsize) {
+                        return lookup_hashtable_size(hash_mutable_size(datum.live));
+                    } else {
+                        return 0;
+                    }
+                }
+            }
+
+            index = index.wrapping_add(hash2);
+            if index >= nsize {
+                index -= nsize;
+            }
+
+            if index == hash1 {
+                return 0;
+            }
+        }
+    }
 }

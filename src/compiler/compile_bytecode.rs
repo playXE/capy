@@ -101,7 +101,6 @@ pub fn scan<const RESET_CALL: bool>(
             let mut lam = lam.clone();
 
             if lam.flag != LambdaFlag::Dissolved {
-                
                 if false && toplevel {
                     lam.lifted_var = LiftedVar::Candidate;
                 }
@@ -119,7 +118,7 @@ pub fn scan<const RESET_CALL: bool>(
             lam.bound_lvars = lbs;
         }
 
-        IForm::PrimCall(_, args) => {
+        IForm::PrimCall(_, _, args) => {
             args.iter().for_each(|arg| {
                 scan::<RESET_CALL>(arg, fs, bs, toplevel, labels);
             });
@@ -168,7 +167,7 @@ fn compute_frame_size(lam: P<Lambda>) -> usize {
                 1 + call.args.iter().map(|arg| visit(arg)).sum::<usize>() + 3 /* call frame size */
             }
 
-            IForm::PrimCall(_, args) => 3 + args.iter().map(|arg| visit(arg)).sum::<usize>(),
+            IForm::PrimCall(_, _, args) => 3 + args.iter().map(|arg| visit(arg)).sum::<usize>(),
 
             IForm::If(cond) => {
                 let test = visit(&cond.cond);
@@ -386,6 +385,7 @@ pub fn compile_closure(
         ctx: Context,
         state: &mut State,
     ) -> Option<P<Env>> {
+        asm.maybe_source(var.src);
         match var.typ {
             LetType::Let => {
                 let mut env = env.clone();
@@ -424,6 +424,7 @@ pub fn compile_closure(
             !seq.forms.is_empty(),
             "empty sequence during bytecode generation"
         );
+        asm.maybe_source(seq.src);
         for i in 0..seq.forms.len() - 1 {
             for_effect(asm, &seq.forms[i], env, state);
         }
@@ -432,6 +433,7 @@ pub fn compile_closure(
     }
 
     fn visit_if(cond: &If, asm: &mut Assembler, env: &P<Env>, ctx: Context, state: &mut State) {
+        asm.maybe_source(cond.src);
         let value = for_value(asm, &cond.cond, env, state); // for_effect(asm, &cond.cond, env, state);
         let je = asm.emit_jnz(value.idx as _);
         for_context(asm, ctx, &cond.alternative, env, state);
@@ -459,6 +461,7 @@ pub fn compile_closure(
     ) {
         match &**exp {
             IForm::Call(call) => {
+                asm.maybe_source(call.src);
                 let env = push_frame(env.clone());
                 let from = stack_height(&env, state);
                 let mut tmp = for_push(asm, &call.proc, &env, state);
@@ -543,12 +546,20 @@ pub fn compile_closure(
                 asm.emit_global_ref(u24::new(dst as _), scm_intern(name));
             }
 
-            IForm::GSet(_) | IForm::Define(_) => {
+            IForm::GSet(gset) => {
+                asm.maybe_source(gset.src);
+                for_effect(asm, exp, env, state);
+                asm.emit_make_immediate(dst as _, Value::encode_undefined_value().get_raw() as _);
+            }
+
+            IForm::Define(gset) => {
+                asm.maybe_source(gset.src);
                 for_effect(asm, exp, env, state);
                 asm.emit_make_immediate(dst as _, Value::encode_undefined_value().get_raw() as _);
             }
 
             IForm::Lambda(lam) => {
+                asm.maybe_source(lam.src);
                 let label = state
                     .closures
                     .iter()
@@ -591,6 +602,7 @@ pub fn compile_closure(
             }
 
             IForm::Call(call) => {
+                asm.maybe_source(call.src);
                 let env = push_frame(env.clone());
                 let mut tmp = for_push(asm, &call.proc, &env, state);
                 for arg in call.args.iter() {
@@ -607,6 +619,7 @@ pub fn compile_closure(
             }
 
             IForm::Label(label) => {
+                asm.maybe_source(label.src);
                 let pos = asm.code.len();
                 state.labels.insert(exp.clone(), pos);
                 let off = state.data_start as i32 - asm.code.len() as i32;
@@ -618,30 +631,68 @@ pub fn compile_closure(
                 for_effect(asm, exp, env, state);
             }
 
-            IForm::PrimCall(name, args) => match *name {
-                "list" => {
-                    let args = for_args(asm, state, args, env);
-                    asm.emit_make_immediate(0, Value::encode_null_value().get_raw() as _);
-                    for arg in args.iter().rev() {
-                        asm.emit_cons(0, *arg as u16, 0);
-                    }
-                    asm.emit_mov(dst as _, 0);
-                }
-
-                "vector" => {
-                    let args = for_args(asm, state, args, env);
-                    asm.emit_make_vector(0, args.len() as _);
-                    for (i, arg) in args.iter().enumerate() {
-                        asm.emit_vector_set_immediate(0, i as _, *arg as _);
+            IForm::PrimCall(src, name, args) => {
+                asm.maybe_source(*src);
+                match *name {
+                    "list" => {
+                        let args = for_args(asm, state, args, env);
+                        asm.emit_make_immediate(0, Value::encode_null_value().get_raw() as _);
+                        for arg in args.iter().rev() {
+                            asm.emit_cons(0, *arg as u16, 0);
+                        }
+                        asm.emit_mov(dst as _, 0);
                     }
 
-                    asm.emit_mov(dst as _, 0);
-                }
+                    "vector" => {
+                        let args = for_args(asm, state, args, env);
+                        asm.emit_make_vector(0, args.len() as _);
+                        for (i, arg) in args.iter().enumerate() {
+                            asm.emit_vector_set_immediate(0, i as _, *arg as _);
+                        }
 
-                _ => {
-                    let prim = PRIMITIVES.get(name);
-                    if let Some(prim) = prim {
-                        if args.len() as isize != prim.nargs && prim.nargs >= 0 {
+                        asm.emit_mov(dst as _, 0);
+                    }
+
+                    _ => {
+                        let prim = PRIMITIVES.get(name);
+                        if let Some(prim) = prim {
+                            if args.len() as isize != prim.nargs && prim.nargs >= 0 {
+                                let env = push_frame(env.clone());
+                                let mut tmp = for_push(
+                                    asm,
+                                    &P(IForm::GRef(GRef {
+                                        name: Sexpr::Symbol(scm_intern(name)),
+                                    })),
+                                    &env,
+                                    state,
+                                );
+                                for arg in args.iter() {
+                                    tmp = for_push(asm, arg, &tmp, state);
+                                }
+                                let proc_slot = stack_height(&env, state);
+
+                                asm.emit_call(u24::new(proc_slot), args.len() as u32 + 1);
+                                asm.emit_receive(
+                                    stack_height_under_local(dst, state.frame_size) as _,
+                                    proc_slot as _,
+                                    u24::new(state.frame_size),
+                                );
+                            } else {
+                                if !prim.has_result {
+                                    for_effect(asm, exp, env, state);
+                                    asm.emit_make_immediate(
+                                        dst as _,
+                                        Value::encode_undefined_value().get_raw() as _,
+                                    );
+                                } else {
+                                    let args = for_args(asm, state, args, env);
+                                    let mut rargs = vec![dst];
+                                    rargs.extend_from_slice(&args);
+
+                                    (prim.emit)(asm, &rargs);
+                                }
+                            }
+                        } else {
                             let env = push_frame(env.clone());
                             let mut tmp = for_push(
                                 asm,
@@ -662,47 +713,11 @@ pub fn compile_closure(
                                 proc_slot as _,
                                 u24::new(state.frame_size),
                             );
-                        } else {
-                            if !prim.has_result {
-                                for_effect(asm, exp, env, state);
-                                asm.emit_make_immediate(
-                                    dst as _,
-                                    Value::encode_undefined_value().get_raw() as _,
-                                );
-                            } else {
-                                
-                                let args = for_args(asm, state, args, env);
-                                let mut rargs = vec![dst];
-                                rargs.extend_from_slice(&args);
-
-                                (prim.emit)(asm, &rargs);
-                            }
                         }
-                    } else {
-                        let env = push_frame(env.clone());
-                        let mut tmp = for_push(
-                            asm,
-                            &P(IForm::GRef(GRef {
-                                name: Sexpr::Symbol(scm_intern(name)),
-                            })),
-                            &env,
-                            state,
-                        );
-                        for arg in args.iter() {
-                            tmp = for_push(asm, arg, &tmp, state);
-                        }
-                        let proc_slot = stack_height(&env, state);
-
-                        asm.emit_call(u24::new(proc_slot), args.len() as u32 + 1);
-                        asm.emit_receive(
-                            stack_height_under_local(dst, state.frame_size) as _,
-                            proc_slot as _,
-                            u24::new(state.frame_size),
-                        );
                     }
                 }
-            },
-        
+            }
+
             _ => todo!("{}", exp),
         }
     }
@@ -756,6 +771,7 @@ pub fn compile_closure(
         state: &mut State,
         ctx: Context,
     ) {
+        asm.maybe_source(exp.src);
         for_values(asm, &exp.init, env, state);
         visit_values_handler(asm, &exp.lvars, exp.optarg, &exp.body, env, state, ctx);
     }
@@ -791,6 +807,7 @@ pub fn compile_closure(
             }
 
             IForm::Define(def) => {
+                asm.maybe_source(def.src);
                 let env = for_value(asm, &def.value, env, state);
 
                 asm.emit_global_set(u24::new(env.idx), def.name.unwrap_id());
@@ -798,6 +815,7 @@ pub fn compile_closure(
             }
 
             IForm::GSet(gset) => {
+                asm.maybe_source(gset.src);
                 let env = for_value(asm, &gset.value, env, state);
                 asm.emit_global_set(u24::new(env.idx), gset.name.unwrap_id());
                 None
@@ -814,6 +832,7 @@ pub fn compile_closure(
             IForm::Let(var) => visit_let(var, asm, env, Context::Effect, state),
             IForm::Const(_) | IForm::Lambda(_) | IForm::It | IForm::LRef(_) => None,
             IForm::Call(call) => {
+                asm.maybe_source(call.src);
                 let env = push_frame(env.clone());
                 let mut tmp = for_push(asm, &call.proc, &env, state);
                 for arg in call.args.iter() {
@@ -827,6 +846,7 @@ pub fn compile_closure(
             }
 
             IForm::Label(label) => {
+                asm.maybe_source(label.src);
                 let pos = asm.code.len();
                 state.labels.insert(exp.clone(), pos);
                 let off = state.data_start as i32 - asm.code.len() as i32;
@@ -845,7 +865,8 @@ pub fn compile_closure(
                 None
             }
 
-            IForm::PrimCall(name, args) => {
+            IForm::PrimCall(src, name, args) => {
+                asm.maybe_source(*src);
                 let prim = PRIMITIVES.get(*name);
                 if let Some(prim) = prim {
                     if args.len() as isize != prim.nargs && prim.nargs >= 0 {
@@ -936,6 +957,7 @@ pub fn compile_closure(
                 visit_let(var, asm, env, Context::Tail, state);
             }
             IForm::Call(call) => {
+                asm.maybe_source(call.src);
                 // FIXME: Improve parallel moves, right now we can have code like this:
                 // (make-immediate 3 <smth>)
                 // (make-immediate 2 <smth>)
@@ -965,6 +987,7 @@ pub fn compile_closure(
                 for_effect(asm, exp, env, state);
             }
             IForm::Label(label) => {
+                asm.maybe_source(label.src);
                 let pos = asm.code.len();
                 state.labels.insert(exp.clone(), pos);
                 let off = state.data_start as i32 - asm.code.len() as i32;
@@ -1006,6 +1029,7 @@ pub fn compile_closure(
         push_temp(env.clone())
     }
 
+    asm.maybe_source(lam.src);
     let off = data_start as i32 - (asm.code.len() as i32 + 5);
     asm.emit_enter(off);
     let size = compute_frame_size(lam.clone());
@@ -1029,7 +1053,7 @@ pub fn compile_bytecode(exp: P<IForm>, output: &mut Vec<u8>) {
             let IForm::Lambda(lam) = &**iform else {
                 unreachable!()
             };
-           
+
             lam.clone()
         })
         .collect::<Vec<_>>();
@@ -1148,8 +1172,28 @@ pub fn compile_bytecode(exp: P<IForm>, output: &mut Vec<u8>) {
         .collect::<Vec<_>>();
     let label = actual_locations[&toplevel_ix];
     let entrypoint = Sexpr::Program(label as _);
+    asm.sources.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
+    let debug_offsets = asm
+        .sources
+        .iter()
+        .map(|(off, loc)| {
+            Sexpr::Pair(P((
+                Sexpr::Fixnum(*off as i32),
+                Sexpr::Vector(P(vec![
+                    Sexpr::String(P(loc.file.to_string())),
+                    Sexpr::Fixnum(loc.line as _),
+                    Sexpr::Fixnum(loc.column as _),
+                ])),
+            )))
+        })
+        .collect::<Vec<Sexpr>>();
 
-    let data_section = Sexpr::Vector(P(vec![constants, Sexpr::Vector(P(data)), entrypoint]));
+    let data_section = Sexpr::Vector(P(vec![
+        constants,
+        Sexpr::Vector(P(data)),
+        entrypoint,
+        Sexpr::Vector(P(debug_offsets)),
+    ]));
 
     output.reserve(asm.code.len() + 8 + 128);
     output.extend_from_slice(&CAPY_BYTECODE_MAGIC.to_le_bytes());

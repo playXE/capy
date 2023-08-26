@@ -27,6 +27,7 @@ fn make_cell_ref(lvar: P<LVar>) -> IForm {
     }));
 
     IForm::Call(Call {
+        src: None,
         proc: name,
         args: vec![lref],
         flag: CallFlag::None,
@@ -41,6 +42,7 @@ fn make_cell_set(lvar: P<LVar>, value: P<IForm>) -> IForm {
     }));
 
     IForm::Call(Call {
+        src: None,
         proc: name,
         args: vec![lref, value],
         flag: CallFlag::None,
@@ -54,6 +56,7 @@ fn make_make_cell(value: P<IForm>) -> IForm {
     }));
 
     IForm::Call(Call {
+        src: None,
         proc: name,
         args: vec![value],
         flag: CallFlag::None,
@@ -148,6 +151,7 @@ fn assignment_elimination_rec(mut tree: P<IForm>) -> P<IForm> {
             }
 
             let bindings = P(IForm::Let(Let {
+                src: None,
                 typ: LetType::Let,
                 lvars,
                 inits,
@@ -182,7 +186,7 @@ fn assignment_elimination_rec(mut tree: P<IForm>) -> P<IForm> {
             tree
         }
 
-        IForm::PrimCall(_, args) => {
+        IForm::PrimCall(_, _, args) => {
             for arg in args {
                 *arg = assignment_elimination_rec(arg.clone());
             }
@@ -217,6 +221,7 @@ fn assignment_elimination_rec(mut tree: P<IForm>) -> P<IForm> {
             }
             let body = assignment_elimination_substitute(vals.body.clone(), &substitutes);
             let let_iform = P(IForm::Let(Let {
+                src: None,
                 typ: LetType::Let,
                 lvars,
                 inits,
@@ -320,7 +325,7 @@ fn assignment_elimination_substitute(
             tree
         }
 
-        IForm::PrimCall(_, args) => {
+        IForm::PrimCall(_, _, args) => {
             for arg in args {
                 *arg = assignment_elimination_substitute(arg.clone(), substitute);
             }

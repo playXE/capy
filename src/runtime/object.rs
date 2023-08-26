@@ -1,8 +1,20 @@
 use std::mem::{size_of, transmute};
 
-use mmtk::{memory_manager::object_reference_write, util::Address, vm::edge_shape::SimpleEdge};
+use mmtk::{
+    memory_manager::object_reference_write,
+    util::{Address, ObjectReference},
+    vm::edge_shape::SimpleEdge,
+};
 
-use crate::{runtime::value::Value, utils::bitfield::BitField, vm::thread::Thread, compiler::{P, tree_il::LVar}};
+use crate::{
+    compiler::{
+        tree_il::{IForm, LVar},
+        P,
+    },
+    runtime::value::Value,
+    utils::bitfield::BitField,
+    vm::thread::Thread,
+};
 
 pub type HashStateSpec = BitField<2, 59, false>;
 pub type ImmutSpec = BitField<1, 55, false>;
@@ -38,6 +50,7 @@ pub enum TypeId {
     HashTableRec,
     WeakHashTable,
     WeakHashTableRec,
+    WeakMapping,
     Module,
     IForm,
     LVar,
@@ -51,7 +64,7 @@ pub enum TypeId {
     Winder,
     VMCont,
     Continuation,
-    
+    Struct,
 }
 
 pub const HASH_STATE_UNHASHED: u8 = 0;
@@ -84,8 +97,8 @@ impl ScmCellHeader {
             as_header: Header {
                 type_id,
                 pad: [0; 4],
-                flags: 0
-            }
+                flags: 0,
+            },
         }
     }
 
@@ -115,7 +128,9 @@ impl ScmCellRef {
     pub fn to_address(self) -> Address {
         unsafe { transmute(self) }
     }
-
+    pub fn object_reference(self) -> ObjectReference {
+        unsafe { transmute(self) }
+    }
     #[inline]
     pub fn slot_ref(self, offset: usize) -> Value {
         unsafe {
@@ -235,6 +250,38 @@ pub fn scm_car(cell: Value) -> Value {
 
 pub fn scm_cdr(cell: Value) -> Value {
     cell.get_object().cast_as::<ScmPair>().cdr
+}
+
+pub fn scm_caar(cell: Value) -> Value {
+    scm_car(scm_car(cell))
+}
+
+pub fn scm_cdar(cell: Value) -> Value {
+    scm_car(scm_cdr(cell))
+}
+
+pub fn scm_cadr(cell: Value) -> Value {
+    scm_car(scm_cdr(cell))
+}
+
+pub fn scm_caddr(cell: Value) -> Value {
+    scm_car(scm_cdr(scm_cdr(cell)))
+}
+
+pub fn scm_cadddr(cell: Value) -> Value {
+    scm_car(scm_cdr(scm_cdr(scm_cdr(cell))))
+}
+
+pub fn scm_cadar(cell: Value) -> Value {
+    scm_car(scm_cdr(scm_car(cell)))
+}
+
+pub fn scm_cdadr(cell: Value) -> Value {
+    scm_cdr(scm_car(scm_cdr(cell)))
+}
+
+pub fn scm_cdddr(cell: Value) -> Value {
+    scm_cdr(scm_cdr(scm_cdr(cell)))
 }
 
 #[inline]
@@ -465,6 +512,18 @@ pub fn scm_string_str<'a>(str: Value) -> &'a str {
     }
 }
 
+pub fn scm_string_mut_str<'a>(str: Value) -> &'a mut str {
+    unsafe {
+        debug_assert!(str.is_string());
+        let mut str = str.get_object();
+        let str = str.cast_as::<ScmString>();
+        std::str::from_utf8_unchecked_mut(std::slice::from_raw_parts_mut(
+            str.name.as_mut_ptr(),
+            str.length,
+        ))
+    }
+}
+
 pub fn scm_string_cstr<'a>(str: Value) -> &'a str {
     unsafe {
         debug_assert!(str.is_string());
@@ -670,7 +729,7 @@ pub struct ScmIdentifier {
 #[repr(C)]
 pub struct ScmSyntaxExpander {
     pub header: ScmCellHeader,
-    pub callback: fn(Value, Value) -> Result<Value, Value>
+    pub callback: fn(Value, Value) -> P<IForm>,
 }
 
 #[repr(C)]
@@ -682,4 +741,11 @@ pub struct ScmLVar {
 pub enum CleanerType {
     Drop(fn(*mut ())),
     Callback(Box<dyn FnOnce()>),
+}
+
+#[repr(C)]
+pub struct ScmWeakMapping {
+    pub header: ScmCellHeader,
+    pub key: Value,
+    pub value: Value,
 }

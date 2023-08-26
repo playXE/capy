@@ -875,8 +875,6 @@ impl ObjHandle {
     }
 }
 
-unsafe impl Send for ObjHandle {}
-unsafe impl Sync for ObjHandle {}
 
 impl Clone for ObjHandle {
     fn clone(&self) -> Self {

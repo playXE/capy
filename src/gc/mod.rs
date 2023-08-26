@@ -23,10 +23,13 @@ use crate::{
     runtime::{
         control::{ScmContinuation, VMCont, Winder},
         environment::ScmEnvironment,
-        hashtable::{HashTableRec, ScmHashTable},
+        hashtable::{
+            inplace_rehash_weak_hashtable, HashTableRec, ScmHashTable, WeakHashTableRec,
+            WeakHashtable,
+        },
         module::ScmModule,
         object::*,
-        value::Value,
+        value::Value, synrules::{SyntaxRules, SyntaxRuleBranch, SyntaxPattern, PVRef}, struct_::ScmStruct,
     },
     utils::round_up,
     vm::{
@@ -171,6 +174,14 @@ impl ObjectModel<CapyVM> for ScmObjectModel {
 
                 TypeId::HashTable => size_of::<ScmHashTable>(),
 
+                TypeId::WeakHashTableRec => unsafe {
+                    let datum = reference.to_address().to_mut_ptr::<WeakHashTableRec>();
+                    let n = (*datum).capacity;
+                    size_of::<HashTableRec>() + size_of::<Value>() + (n as usize - 1)
+                },
+
+                TypeId::WeakHashTable => size_of::<WeakHashtable>(),
+
                 TypeId::Module => size_of::<ScmModule>(),
                 TypeId::Identifier => size_of::<ScmIdentifier>(),
                 TypeId::SyntaxExpander => size_of::<ScmSyntaxExpander>(),
@@ -182,6 +193,20 @@ impl ObjectModel<CapyVM> for ScmObjectModel {
                     base + reference.cast_as::<VMCont>().stack_size * size_of::<StackElement>()
                 }
                 TypeId::Continuation => size_of::<ScmContinuation>(),
+                TypeId::WeakMapping => size_of::<ScmWeakMapping>(),
+                TypeId::SyntaxRules => {
+                    let synrules = reference.cast_as::<SyntaxRules>();
+
+                    size_of::<SyntaxRules>() + synrules.num_rules as usize * size_of::<SyntaxRuleBranch>()
+                }
+
+                TypeId::SyntaxPattern => size_of::<SyntaxPattern>(),
+                TypeId::PVRef => size_of::<PVRef>(),
+                TypeId::Struct => {
+                    let s = reference.cast_as::<ScmStruct>();
+                    let sz = s.vtable.cast_as::<ScmStruct>().vtable_size() as usize;
+                    size_of::<ScmStruct>() + sz * size_of::<Value>()
+                }
                 _ => unreachable!(),
             },
             8,
@@ -221,7 +246,6 @@ impl ObjectModel<CapyVM> for ScmObjectModel {
 pub struct ScmActivePlan;
 
 impl ActivePlan<CapyVM> for ScmActivePlan {
-
     fn global() -> &'static dyn mmtk::Plan<VM = CapyVM> {
         scm_virtual_machine().mmtk.get_plan()
     }
@@ -263,7 +287,7 @@ impl ActivePlan<CapyVM> for ScmActivePlan {
         _object: ObjectReference,
         _worker: &mut mmtk::scheduler::GCWorker<CapyVM>,
     ) -> ObjectReference {
-        unsafe {
+        {
             println!(
                 "cannot trace object {:p}",
                 _object.to_raw_address().to_ptr::<u8>(),
@@ -513,6 +537,74 @@ impl Scanning<CapyVM> for ScmScanning {
                 cont.visit_edges(edge_visitor);
             }
 
+            TypeId::WeakMapping => {
+                // do not trace `value` as strong reference here, weak-mapping behaves like ephemeron here.
+                scm_virtual_machine()
+                    .weakmapping_registry
+                    .lock(false)
+                    .push(object);
+            }
+
+            TypeId::WeakHashTableRec => {
+                let datum = reference.cast_as::<WeakHashTableRec>();
+                for i in 0..datum.capacity {
+                    unsafe {
+                        let elt = datum.elts.as_mut_ptr().add(i as _);
+                        let val = elt.read();
+                        if val.is_empty() || val.is_undefined() {
+                            continue;
+                        }
+                        if (*elt).type_of() == TypeId::WeakMapping {
+                            let wmap = (*elt).cast_as::<ScmWeakMapping>();
+                            if !wmap.key.is_object() {
+                                elt.write(Value::encode_undefined_value());
+                                datum.live -= 1;
+                            } else {
+                                let edge = SimpleEdge::from_address(Address::from_mut_ptr(elt));
+                                edge_visitor.visit_edge(edge);
+                            }
+                        }
+                    }
+                }
+            }
+
+            TypeId::WeakHashTable => {
+                let weakhashtable = reference.cast_as::<WeakHashtable>();
+                if !weakhashtable.datum.is_null() {
+                    let datum_edge =
+                        SimpleEdge::from_address(Address::from_mut_ptr(&mut weakhashtable.datum));
+
+                    edge_visitor.visit_edge(datum_edge);
+                }
+
+                scm_virtual_machine()
+                    .weakhashtable_registry
+                    .lock(false)
+                    .push(object);
+            }
+
+            TypeId::SyntaxPattern => {
+                let synpat = reference.cast_as::<SyntaxPattern>();
+
+                synpat.vars.visit_edge(edge_visitor);
+            }
+
+            TypeId::SyntaxRules => {
+                let synrules = reference.cast_as::<SyntaxRules>();
+
+                synrules.name.visit_edge(edge_visitor);
+                synrules.env.visit_edge(edge_visitor);
+                synrules.syntax_env.visit_edge(edge_visitor);
+                for branch in synrules.iter_mut() {
+                    branch.pattern.visit_edge(edge_visitor);
+                    branch.template.visit_edge(edge_visitor);
+                }
+            }
+            TypeId::Struct => {
+                let s = reference.cast_as::<ScmStruct>();
+                s.visit_edges(edge_visitor);
+            }
+
             _ => (),
         }
     }
@@ -558,10 +650,56 @@ impl Scanning<CapyVM> for ScmScanning {
     fn prepare_for_roots_re_scanning() {}
 
     fn process_weak_refs(
-        _worker: &mut mmtk::scheduler::GCWorker<CapyVM>,
-        _tracer_context: impl ObjectTracerContext<CapyVM>,
+        worker: &mut mmtk::scheduler::GCWorker<CapyVM>,
+        tracer_context: impl ObjectTracerContext<CapyVM>,
     ) -> bool {
         let vm = scm_virtual_machine();
+        // Process weak reference queue. Objects are appended here if we see `WeakMapping` in `scan_object`.
+        let mut enqueued = false;
+        let mut weaks = vm.weakmapping_registry.lock(false);
+        tracer_context.with_tracer(worker, |tracer| {
+            while let Some(mapping_ref) = weaks.pop() {
+                unsafe {
+                    let mapping = &mut *mapping_ref
+                        .get_forwarded_object()
+                        .unwrap_or(mapping_ref)
+                        .to_address::<CapyVM>()
+                        .to_mut_ptr::<ScmWeakMapping>();
+
+                    debug_assert!(mapping.key.is_object());
+                    let key = mapping.key.get_object().to_address();
+                    let keyref = ObjectReference::from_address::<CapyVM>(key);
+
+                    if keyref.is_reachable() {
+                        mapping.key = Value::encode_object_value(ScmCellRef::from_address(
+                            keyref
+                                .get_forwarded_object()
+                                .unwrap_or(keyref)
+                                .to_address::<CapyVM>(),
+                        ));
+                        if mapping.value.is_object() {
+                            enqueued = true;
+                            mapping.value = Value::encode_object_value(ScmCellRef::from_address(
+                                tracer
+                                    .trace_object(ObjectReference::from_raw_address(
+                                        mapping.value.get_object().to_address(),
+                                    ))
+                                    .to_address::<CapyVM>(),
+                            ));
+                        }
+                    } else {
+                        mapping.key = Value::encode_bool_value(false);
+                        mapping.value = Value::encode_bool_value(false);
+                    }
+                }
+            }
+        });
+
+        // do not process finalization queue, we can resurrect objects from ephemerons
+        if enqueued {
+            return true;
+        }
+
         let mut queue = vm.finalization_registry.lock(false);
         let mut new_queue = Vec::with_capacity(queue.len());
 
@@ -580,6 +718,16 @@ impl Scanning<CapyVM> for ScmScanning {
                 }
             }
         }
+
+        
+        let mut weakhashtabs = vm.weakhashtable_registry.lock(false);
+
+        while let Some(ht) = weakhashtabs.pop() {
+            let ht = ht.get_forwarded_object().unwrap_or(ht);
+            let ht = ht.to_address::<CapyVM>().to_mut_ptr::<WeakHashtable>();
+            inplace_rehash_weak_hashtable(Value::encode_object_value(ScmCellRef(ht as _)));
+        }
+
         let ienv = vm.interaction_environment.get_object();
         let iref = ObjectReference::from_raw_address(ienv.to_address());
         assert!(iref.is_reachable());

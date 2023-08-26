@@ -4,7 +4,10 @@ use crate::{
     runtime::{
         environment::environment_get_cell,
         fasl::FASLReader,
-        object::{scm_symbol_str, scm_vector_length, scm_vector_ref, ScmProgram},
+        object::{
+            scm_car, scm_cdr, scm_symbol_str, scm_vector_as_slice, scm_vector_length,
+            scm_vector_ref, ScmProgram,
+        },
         symbol::scm_intern,
         value::Value,
     },
@@ -19,18 +22,12 @@ use std::{io::Cursor, mem::transmute, sync::Arc};
 
 use super::opcodes::{disassemble, CAPY_BYTECODE_MAGIC};
 
-pub struct DebugEntry {
-    pub funcname: u32,
-    pub line: u32,
-    pub column: u32,
-    pub file: u32,
-}
-
 pub struct Image {
     pub code: Vec<u8>,
     pub constants: Value,
     pub data: Value,
     pub programs: Vec<Value>,
+    pub debug_offsets: Value,
     pub entry_program: Value,
 }
 
@@ -43,7 +40,8 @@ impl Image {
             let program = SimpleEdge::from_address(Address::from_ptr(program));
             factory.create_process_edge_roots_work(vec![program]);
         }
-        factory.create_process_edge_roots_work(vec![edge, data, entry]);
+        let debug = SimpleEdge::from_address(Address::from_ptr(&self.debug_offsets));
+        factory.create_process_edge_roots_work(vec![edge, data, entry, debug]);
     }
 
     pub fn disassemble(&self) {
@@ -116,6 +114,7 @@ pub fn load_image_from_memory(
         let constants = scm_vector_ref(section, 0);
         let data = scm_vector_ref(section, 1);
         let entry_program = scm_vector_ref(section, 2);
+        let debug_offsets = scm_vector_ref(section, 3);
 
         for program in reader.programs.iter_mut() {
             let edge = SimpleEdge::from_address(Address::from_mut_ptr(
@@ -139,6 +138,7 @@ pub fn load_image_from_memory(
             data,
             constants,
             entry_program,
+            debug_offsets,
             programs: std::mem::take(&mut reader.programs),
             code,
         });
@@ -212,14 +212,45 @@ impl ImageRegistry {
         }
     }
 
-    pub fn lookup_image(&self, pc: *const u8) -> Option<Arc<Image>> {
+    pub fn lookup_image(&self, ip: *const u8) -> Option<Arc<Image>> {
         for image in self.images.iter() {
             let start = image.code.as_ptr();
             let end = unsafe { start.add(image.code.len() as usize) };
-            if pc >= start && pc < end {
+            if ip >= start && ip < end {
                 return Some(image.clone());
             }
         }
+        None
+    }
+
+    /// Searches for image where `ip` is located, and then searches
+    /// for debug offset for `ip` in that image.
+    ///
+    /// Returns `(<filename> <line> <column>)` if found, `None` otherwise.
+    pub fn debug_info(&self, ip: *const u8) -> Option<(Value, u32, u32)> {
+        let image = self.lookup_image(ip)?;
+
+        let debug = image.debug_offsets;
+        let target_pc = (ip as usize - image.code.as_ptr() as usize) as u32;
+
+        let slice = scm_vector_as_slice(debug);
+
+        let high = slice.partition_point(|data| scm_car(*data).get_int32() as u32 <= target_pc);
+      
+        for data in slice[..high].iter().rev() {
+            let offset = scm_car(*data);
+            let vector = scm_cdr(*data);
+            let pc = offset.get_int32() as u32;
+           
+            if pc <= target_pc {
+                return Some((
+                    scm_vector_ref(vector, 0),
+                    scm_vector_ref(vector, 1).get_int32() as u32,
+                    scm_vector_ref(vector, 2).get_int32() as u32,
+                ));
+            }
+        }
+
         None
     }
 }

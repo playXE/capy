@@ -6,6 +6,7 @@ use std::ptr::null;
 use mmtk::memory_manager::object_reference_write;
 
 use crate::bytecode::encode::Decode;
+use crate::raise_exn;
 use crate::runtime::equality::{scm_compare, eqv, equal};
 use crate::runtime::gsubr::scm_apply_subr;
 use crate::runtime::object::*;
@@ -247,7 +248,8 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 
                     sync_sp!();
                     sync_ip!();
-                    todo!("no values error, expected {}, got {}", assert_nargs_ee.n().value(), frame_locals_count!()); // FIXME: Throw error
+                    raise_exn!(FailContractArity, &[], "expected {}, got {}", assert_nargs_ee.n().value() - 1, frame_locals_count!() - 1);
+                    //todo!("no values error, expected {}, got {}", assert_nargs_ee.n().value(), frame_locals_count!()); // FIXME: Throw error
                 }
             }
 
@@ -385,6 +387,7 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 ip = ip.add(size_of::<OpJ>());
 
                 ip = ip.offset(j.offset() as isize);
+              
             }
 
             OP_JNZ => {
@@ -392,6 +395,7 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 ip = ip.add(size_of::<OpJnz>());
 
                 let val = sp_ref!(jnz.src());
+            
                 if !val.is_false() {
                     ip = ip.offset(jnz.offset() as isize);
                 }
@@ -623,9 +627,11 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                     if let Some(result) = a.get_int32().checked_add(b.get_int32()) {
                         sp_set!(add.dst(), Value::encode_int32(result));
                         continue;
+                    } else {
+                        todo!("ovf");
                     }
                 } else {
-                    todo!("slow add")
+                    todo!("slow add {}, {}", a, b);
                 }
             }
 
@@ -811,7 +817,7 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
 
                 let a = sp_ref!(numerically_equal.a());
                 let b = sp_ref!(numerically_equal.b());
-
+               
                 let cmp = scm_compare(a, b);
 
                 match cmp {

@@ -16,7 +16,7 @@ use crate::{
         object::{scm_car, scm_cdr, ScmPair, ScmProgram},
         symbol::scm_intern,
         value::Value,
-    },
+    }, raise_exn,
 };
 
 use super::{scm_virtual_machine, thread::Thread};
@@ -31,7 +31,8 @@ pub unsafe extern "C" fn get_callee_vcode(thread: &mut Thread) -> *const u8 {
     let ip = thread.interpreter().ip;
     thread.interpreter().ip = frame_virtual_return_address(thread.interpreter().fp);
 
-    todo!("throw error: {} at {:p}<>{:p}", proc, thread.interpreter().ip, ip);
+    raise_exn!(Fail, &[], "not a procedure: {}", proc);
+    //todo!("throw error: {} at {:p}<>{:p}", proc, thread.interpreter().ip, ip);
 }
 
 pub unsafe extern "C-unwind" fn cons_rest(thread: &mut Thread, base: u32) -> Value {

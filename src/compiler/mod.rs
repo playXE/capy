@@ -12,6 +12,7 @@ pub mod pass3;
 pub mod primitives;
 pub mod synrules;
 pub mod tree_il;
+pub mod expandv2;
 
 use std::collections::HashMap;
 
@@ -20,7 +21,7 @@ pub use p::P;
 use crate::runtime::value::Value;
 
 use self::{
-    sexpr::{sexp_acons, sexp_cons, sexp_eq, Identifier, Sexpr, SyntaxRules},
+    sexpr::{sexp_acons, sexp_cons, sexp_eq, Identifier, Sexpr, SyntaxRules, SourceInfo, SourceLoc, EqSexpr},
     tree_il::IForm, primitives::resolve_primitives,
 };
 
@@ -113,12 +114,21 @@ pub enum Denotation {
 }
 
 #[derive(Clone)]
-pub struct Cenv {
+pub struct Cenv<'a> {
     pub syntax_env: P<SyntaxEnv>,
     pub frames: Sexpr,
+    pub source_loc: &'a SourceInfo
 }
 
-impl Cenv {
+impl Cenv<'_> {
+    pub fn maybe_source(&self, sexpr: &Sexpr) -> Option<SourceLoc> {
+        if let Some(loc) = self.source_loc.get(&EqSexpr(sexpr.clone())) {
+            Some(loc.clone())
+        } else {
+            None
+        }
+    }
+
     fn lookup_int(&self, name: Sexpr) -> Sexpr {
         let mut y = name.clone();
 
@@ -174,6 +184,7 @@ impl Cenv {
         Self {
             syntax_env: self.syntax_env.clone(),
             frames: sexp_acons(typ, frame, self.frames.clone()),
+            source_loc: self.source_loc
         }
     }
 
@@ -191,11 +202,13 @@ pub fn is_free_identifier_eq(id1: Sexpr, id2: Sexpr) -> bool {
             let b1 = Cenv {
                 syntax_env: id1.env.clone(),
                 frames: identifier_env(id1.clone()),
+                source_loc: &SourceInfo::new()
             }
             .lookup_int(id1.name.clone());
             let b2 = Cenv {
                 syntax_env: id2.env.clone(),
                 frames: identifier_env(id2.clone()),
+                source_loc: &SourceInfo::new()
             }
             .lookup_int(id2.name.clone());
 
@@ -218,11 +231,13 @@ pub fn er_compare(a: Sexpr, b: Sexpr, env: P<SyntaxEnv>, frames: Sexpr) -> bool 
         let a1 = Cenv {
             syntax_env: env.clone(),
             frames: frames.clone(),
+            source_loc: &SourceInfo::new()
         }
         .lookup(a);
         let b1 = Cenv {
             syntax_env: env.clone(),
             frames: frames.clone(),
+            source_loc: &SourceInfo::new()
         }
         .lookup(b);
 

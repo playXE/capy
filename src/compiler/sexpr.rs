@@ -1,6 +1,14 @@
-use std::hash::Hash;
+use std::{collections::HashMap, hash::Hash};
 
-use crate::{runtime::{object::{scm_symbol_str, scm_set_car, scm_vector_set, scm_set_cdr}, symbol::scm_intern, value::Value}, vm::thread::Thread, gc_protect};
+use crate::{
+    gc_protect,
+    runtime::{
+        object::{scm_set_car, scm_set_cdr, scm_symbol_str, scm_vector_set},
+        symbol::scm_intern,
+        value::Value,
+    },
+    vm::thread::Thread,
+};
 
 use super::{
     tree_il::{IForm, LVar},
@@ -128,6 +136,80 @@ impl Hash for Sexpr {
             }
 
             _ => 255.hash(state),
+        }
+    }
+}
+
+pub struct EqSexpr(pub Sexpr);
+
+impl PartialEq for EqSexpr {
+    fn eq(&self, other: &Self) -> bool {
+        sexp_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for EqSexpr {}
+
+impl Hash for EqSexpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        match self.0 {
+            Sexpr::Pair(ref pair) => {
+                pair.as_ptr().hash(state);
+            }
+
+            Sexpr::Fixnum(num) => {
+                num.hash(state);
+            }
+
+            Sexpr::Char(ch) => {
+                ch.hash(state);
+            }
+
+            Sexpr::Flonum(num) => {
+                num.to_bits().hash(state);
+            }
+
+            Sexpr::Boolean(b) => {
+                b.hash(state);
+            }
+
+            Sexpr::String(ref s) => {
+                s.as_ptr().hash(state);
+            }
+
+            Sexpr::Vector(ref vec) => {
+                vec.as_ptr().hash(state);
+            }
+
+            Sexpr::Bytevector(ref vec) => {
+                vec.as_ptr().hash(state);
+            }
+
+            Sexpr::Global(val) => {
+                val.hash(state);
+            }
+
+            Sexpr::Program(prog) => {
+                prog.hash(state);
+            }
+
+            Sexpr::Identifier(ref ident) => {
+                ident.as_ptr().hash(state);
+            }
+
+            Sexpr::SyntaxRules(ref rules) => {
+                rules.as_ptr().hash(state);
+            }
+
+            Sexpr::SyntaxPattern(ref pat) => {
+                pat.as_ptr().hash(state);
+            }
+
+            Sexpr::Special(_) => 18.hash(state),
+
+            _ => {
+                255.hash(state);
+            }
         }
     }
 }
@@ -666,7 +748,12 @@ impl std::fmt::Display for Sexpr {
     }
 }
 
-pub fn r7rs_expr_to_sexpr<I: Interner>(interner: &I, expr: &Expr<I>) -> Sexpr {
+pub fn r7rs_expr_to_sexpr<I: Interner>(
+    interner: &I,
+    filename: Value,
+    expr: &Expr<I>,
+    source_loc: &mut SourceInfo,
+) -> Sexpr {
     match expr {
         Expr::Fixnum(x) => Sexpr::Fixnum(*x),
         Expr::Bool(x) => Sexpr::Boolean(*x),
@@ -674,18 +761,31 @@ pub fn r7rs_expr_to_sexpr<I: Interner>(interner: &I, expr: &Expr<I>) -> Sexpr {
         Expr::Str(x) => Sexpr::String(P::new(x.clone())),
         Expr::ByteVector(x) => Sexpr::Bytevector(P::new(x.to_vec())),
         Expr::Pair(x, y) => {
-            let x = r7rs_expr_to_sexpr(interner, &x);
-            let y = r7rs_expr_to_sexpr(interner, &y);
+            let x = r7rs_expr_to_sexpr(interner, filename, &x, source_loc);
+            let y = r7rs_expr_to_sexpr(interner, filename, &y, source_loc);
 
             Sexpr::cons(x, y)
         }
 
         Expr::ImmutableVector(vec) | Expr::GrowableVector(vec) => Sexpr::Vector(P(vec
             .iter()
-            .map(|x| r7rs_expr_to_sexpr(interner, &x))
+            .map(|x| r7rs_expr_to_sexpr(interner, filename, &x, source_loc))
             .collect())),
 
-        Expr::Syntax(_, expr) => r7rs_expr_to_sexpr(interner, &expr),
+        Expr::Syntax(loc, expr) => {
+            let sexpr = r7rs_expr_to_sexpr(interner, filename, &expr, source_loc);
+            if let Sexpr::Pair(_) = sexpr {
+                source_loc.insert(
+                    EqSexpr(sexpr.clone()),
+                    SourceLoc {
+                        file: filename,
+                        line: loc.line,
+                        column: loc.col,
+                    },
+                );
+            }
+            sexpr
+        }
         Expr::Null => Sexpr::Null,
         Expr::Symbol(x) => Sexpr::Symbol(scm_intern(interner.description(x))),
 
@@ -782,7 +882,7 @@ pub fn sexpr_to_value(thread: &mut Thread, sexpr: &Sexpr) -> Value {
             let pair = gc_protect!(thread => car, cdr => thread.make_cons::<false>(Value::encode_null_value(), Value::encode_null_value()));
             scm_set_car(pair, thread, car);
             scm_set_cdr(pair, thread, cdr);
-            pair 
+            pair
         }
 
         Sexpr::Vector(vector) => {
@@ -802,13 +902,19 @@ pub fn sexpr_to_value(thread: &mut Thread, sexpr: &Sexpr) -> Value {
         Sexpr::Char(x) => Value::encode_char(*x),
         Sexpr::Null => Value::encode_null_value(),
         Sexpr::Undefined => Value::encode_undefined_value(),
-        Sexpr::Bytevector(bv) => {
-            thread.make_bytevector_from_slice::<false>(bv)
-        }
+        Sexpr::Bytevector(bv) => thread.make_bytevector_from_slice::<false>(bv),
 
         Sexpr::Symbol(x) => *x,
         Sexpr::String(x) => thread.make_string::<false>(x),
-        _ => todo!()
-        
+        _ => todo!(),
     }
 }
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct SourceLoc {
+    pub file: Value,
+    pub line: u32,
+    pub column: u32,
+}
+
+pub type SourceInfo = HashMap<EqSexpr, SourceLoc>;

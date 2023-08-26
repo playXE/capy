@@ -37,7 +37,7 @@ pub fn pass2_rec(
             Ok(iform)
         }
 
-        IForm::PrimCall(name, args) => {
+        IForm::PrimCall(src, name, args) => {
             for arg in args.iter_mut() {
                 *arg = pass2_rec(arg.clone(), penv, false, ctx)?;
             }
@@ -94,6 +94,7 @@ pub fn pass2_rec(
                     if let IForm::Lambda(second) = &*second {
                         ctx.changed = true;
                         let let_values = LetValues {
+                            src: *src,
                             body: second.body.clone(),
                             lvars: second.lvars.clone(),
                             init: lam.body.clone(),
@@ -645,10 +646,12 @@ fn local_call_inliner(
 
         if let IForm::Seq(inlined) = &*inlined {
             *call_node = IForm::Seq(Seq {
+                src: call_node.src(),
                 forms: inlined.forms.clone(),
             });
         } else {
             *call_node = IForm::Seq(Seq {
+                src: call_node.src(),
                 forms: vec![inlined],
             })
         }
@@ -686,17 +689,19 @@ pub fn pass2_branch_cut(
 }
 
 pub fn pass2_update_if(
-    _: P<IForm>,
+    orig: P<IForm>,
     new_test: P<IForm>,
     new_then: P<IForm>,
     new_else: P<IForm>,
 ) -> P<IForm> {
     if new_then.as_ptr() == new_else.as_ptr() {
         return P(IForm::Seq(Seq {
+            src: orig.src(),
             forms: vec![new_test, new_then],
         }));
     } else {
         return P(IForm::If(If {
+            src: orig.src(),
             cond: new_test,
             consequent: new_then,
             alternative: new_else,

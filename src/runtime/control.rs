@@ -547,7 +547,7 @@ extern "C-unwind" fn continuation_p(_thread: &mut Thread, cont: &mut Value) -> V
     Value::encode_bool_value(true)
 }
 
-extern "C-unwind" fn error(thread: &mut Thread, val: &mut Value) -> Value {
+extern "C-unwind" fn error(_thread: &mut Thread, val: &mut Value) -> Value {
     eprintln!("error: {}", val);
     std::process::abort();
 }

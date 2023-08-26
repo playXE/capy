@@ -71,4 +71,5 @@ pub trait InstructionStream {
     fn write_u8(&mut self, value: u8);
     fn write_u16(&mut self, value: u16);
     fn write_u32(&mut self, value: u32);
+    fn write_finish(&mut self) {}
 }

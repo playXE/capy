@@ -17,7 +17,12 @@ use crate::{
     vm::sync::mutex::Mutex,
 };
 
-use super::{make_identifier, sexpr::Sexpr, tree_il::*, unmangled, Cenv, SyntaxEnv, P};
+use super::{
+    make_identifier,
+    sexpr::{Sexpr, SourceInfo},
+    tree_il::*,
+    unmangled, Cenv, SyntaxEnv, P,
+};
 
 fn is_call_declared(cenv: &Cenv) -> bool {
     let name = scm_intern(".call");
@@ -52,6 +57,7 @@ pub fn expand_call(
 
     if args.is_null() {
         Ok(P(IForm::Call(Call {
+            src: cenv.maybe_source(&_program),
             proc,
             args: Vec::new(),
             flag: CallFlag::None,
@@ -64,6 +70,7 @@ pub fn expand_call(
         }
 
         Ok(P(IForm::Call(Call {
+            src: cenv.maybe_source(&_program),
             proc,
             args: iargs,
             flag: CallFlag::None,
@@ -87,6 +94,7 @@ pub fn expand_inline_procedure(iform: P<IForm>, iargs: &[P<IForm>]) -> Result<P<
         }
 
         Ok(P(IForm::Let(Let {
+            src: lambda.src.clone(),
             typ: LetType::Let,
             lvars: lvars.clone(),
             inits: args,
@@ -138,6 +146,11 @@ pub fn adjust_arglist(
                 let opts = opts.to_vec();
 
                 P(IForm::Call(Call {
+                    src: if iargs.len() != 0 {
+                        iargs[0].src()
+                    } else {
+                        None
+                    },
                     proc: P(IForm::GRef(GRef {
                         name: Sexpr::Symbol(scm_intern("list")),
                     })),
@@ -310,6 +323,7 @@ pub fn define_syntax() -> P<SyntaxEnv> {
             let alternative = pass1(&form.cadddr(), cenv)?;
 
             Ok(P(IForm::If(If {
+                src: cenv.maybe_source(&form),
                 cond,
                 consequent,
                 alternative,
@@ -319,6 +333,7 @@ pub fn define_syntax() -> P<SyntaxEnv> {
             let consequent = pass1(&form.caddr(), cenv)?;
 
             Ok(P(IForm::If(If {
+                src: cenv.maybe_source(&form),
                 cond,
                 consequent,
                 alternative: P(IForm::Const(Sexpr::Undefined)),
@@ -327,6 +342,7 @@ pub fn define_syntax() -> P<SyntaxEnv> {
             Err(format!("illegal if: {}", form))
         }
     });
+
 
     define_syntax!("lambda", form, cenv, {
         if form.list_length().filter(|x| *x >= 3).is_some() {
@@ -387,7 +403,11 @@ pub fn define_syntax() -> P<SyntaxEnv> {
             if let Sexpr::LVar(lvar) = var {
                 Ok(P(IForm::LSet(LSet { lvar, value })))
             } else {
-                Ok(P(IForm::GSet(GSet { name: var, value })))
+                Ok(P(IForm::GSet(GSet {
+                    src: cenv.maybe_source(&form),
+                    name: var,
+                    value,
+                })))
             }
         } else {
             Err(format!("illegal set!: {}", form))
@@ -469,6 +489,7 @@ pub fn define_syntax() -> P<SyntaxEnv> {
                 let body = pass1_body(&body, &newenv)?;
 
                 Ok(P(IForm::Let(Let {
+                    src: cenv.maybe_source(&form),
                     typ: LetType::Let,
                     lvars: vars,
                     inits,
@@ -549,6 +570,7 @@ pub fn define_syntax() -> P<SyntaxEnv> {
             let body = pass1_body(&body, &env2)?;
 
             let lam = P(IForm::Lambda(P(Lambda {
+                src: cenv.maybe_source(&form),
                 name: None,
                 reqargs: args.len() as _,
                 optarg: false,
@@ -575,10 +597,12 @@ pub fn define_syntax() -> P<SyntaxEnv> {
             }
 
             let letrec = P(IForm::Let(Let {
+                src: cenv.maybe_source(&form),
                 typ: LetType::Rec,
                 lvars: vec![lvar.clone()],
                 inits: vec![lam],
                 body: P(IForm::Call(Call {
+                    src: cenv.maybe_source(&form),
                     proc: P(IForm::LRef(LRef { lvar })),
                     args: cargs,
                     flag: CallFlag::None,
@@ -606,7 +630,10 @@ pub fn define_syntax() -> P<SyntaxEnv> {
         if seq.len() == 1 {
             Ok(seq[0].clone())
         } else {
-            Ok(P(IForm::Seq(Seq { forms: seq })))
+            Ok(P(IForm::Seq(Seq {
+                src: cenv.maybe_source(&form),
+                forms: seq,
+            })))
         }
     });
 
@@ -816,6 +843,7 @@ fn expand_letrec(form: Sexpr, cenv: &Cenv, typ: LetType) -> Result<P<IForm>, Str
         let body = pass1_body(&body, &newnev)?;
 
         Ok(P(IForm::Let(Let {
+            src: cenv.maybe_source(&form),
             typ,
             lvars: vars,
             inits,
@@ -864,6 +892,7 @@ fn pass1_define(form: Sexpr, oform: Sexpr, cenv: &Cenv) -> Result<P<IForm>, Stri
         }
 
         Ok(P(IForm::Define(Define {
+            src: cenv.maybe_source(&oform),
             name: Sexpr::Identifier(id),
             value,
         })))
@@ -909,6 +938,7 @@ fn pass1_vanilla_lambda(
     let body = pass1_body(&body, &cenv)?;
 
     Ok(P(IForm::Lambda(P(Lambda {
+        src: cenv.maybe_source(&_form),
         name: None,
         reqargs: nreqs as _,
         optarg: nopts != 0,
@@ -1187,9 +1217,10 @@ fn pass1_body_finish(
             ls = ls.cdr();
         }
 
-        let body = pass1_body_rest(exprs, cenv)?;
+        let body = pass1_body_rest(exprs.clone(), cenv)?;
 
         Ok(P(IForm::Let(Let {
+            src: cenv.maybe_source(&exprs),
             typ: LetType::Rec,
             lvars,
             inits,
@@ -1221,7 +1252,10 @@ fn pass1_body_rest(exprs: Sexpr, cenv: &Cenv) -> Result<P<IForm>, String> {
             ls = ls.cdr();
         }
 
-        Ok(P(IForm::Seq(Seq { forms: seq })))
+        Ok(P(IForm::Seq(Seq {
+            src: cenv.maybe_source(&exprs),
+            forms: seq,
+        })))
     }
 }
 
@@ -1243,6 +1277,7 @@ pub fn expand_default(expr: &Sexpr) -> Result<P<IForm>, String> {
     let res = pass1(
         expr,
         &Cenv {
+            source_loc: &SourceInfo::new(),
             syntax_env: expander.env.clone(),
             frames: Sexpr::Null,
         },

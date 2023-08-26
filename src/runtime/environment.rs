@@ -21,9 +21,11 @@ pub fn scm_define(name: Value, value: Value) {
 pub struct ScmEnvironment {
     pub(crate) header: ScmCellHeader,
     pub(crate) syntactic_environment: Mutex<P<SyntaxEnv>>,
+    
     pub(crate) name: Value,
     pub(crate) mutable: bool,
     pub(crate) ht: Value,
+    pub(crate) synenv: Value,
 }
 
 #[derive(Debug, Clone, Copy)]

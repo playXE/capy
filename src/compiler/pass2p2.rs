@@ -115,7 +115,7 @@ pub fn scan<const RESET_CALL: bool>(
             lam.defs = defs;
         }
 
-        IForm::PrimCall(_, args) => {
+        IForm::PrimCall(_, _, args) => {
             args.iter().for_each(|arg| {
                 scan::<RESET_CALL>(arg, fs, bs, toplevel, labels);
             });
@@ -198,7 +198,7 @@ pub fn pass2_substitute(mut iform: P<IForm>, map: &HashMap<P<LVar>, P<LVar>>) {
             pass2_substitute(label.body.clone(), map);
         }
 
-        IForm::PrimCall(_, args) => {
+        IForm::PrimCall(_, _, args) => {
             args.iter_mut().for_each(|arg| {
                 pass2_substitute(arg.clone(), map);
             });

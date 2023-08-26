@@ -2,11 +2,17 @@ use std::{collections::HashMap, mem::size_of};
 
 use crate::{
     bytecode::{encode::InstructionStream, encode::*, opcodes::*, u24::*},
-    compiler::sexpr::Sexpr,
+    compiler::sexpr::{Sexpr, SourceLoc},
     runtime::value::Value,
 };
 
 pub struct Assembler {
+    /// A list of (pos . source) pairs, indicating source information.  POS
+    /// is relative to the beginning of the code section, and SOURCE is in
+    /// the same format that source-properties returns.
+    ///
+    pub sources: Vec<(u32, SourceLoc)>,
+    pub asm_start: u32,
     pub relocs: Vec<Reloc>,
     pub code: Vec<u8>,
     pub constants: Vec<Sexpr>,
@@ -28,6 +34,10 @@ impl InstructionStream for Assembler {
         let le = value.to_le_bytes();
         self.code.extend_from_slice(&le);
     }
+
+    fn write_finish(&mut self) {
+        self.reset_asm_start();
+    }
 }
 
 impl Assembler {
@@ -38,7 +48,27 @@ impl Assembler {
             constants: Vec::with_capacity(16),
             constant_map: HashMap::with_capacity(16),
             patch_programs: Vec::new(),
+            asm_start: 0,
+            sources: Vec::with_capacity(128),
         }
+    }
+
+    pub fn maybe_source(&mut self, src: Option<SourceLoc>) {
+        if let Some(src) = src {
+            self.sources.push((self.asm_start as u32, src));
+        }
+    }
+
+    pub fn reset_asm_start(&mut self) {
+        self.asm_start = self.code.len() as u32;
+    }
+
+    pub fn asm_start(&self) -> u32 {
+        self.asm_start
+    }
+
+    pub fn set_asm_start(&mut self, start: u32) {
+        self.asm_start = start;
     }
 
     pub fn emit_mov(&mut self, dst: u32, src: u32) {
@@ -67,6 +97,7 @@ impl Assembler {
 
     pub fn emit_box_set(&mut self, dst: u32, src: u32) {
         OpBoxSet::new(dst as _, src as _).write(self);
+        
     }
 
     pub fn emit_cons(&mut self, dst: u16, car: u16, cdr: u16) {
@@ -137,7 +168,7 @@ impl Assembler {
     pub fn emit_jnz(&mut self, src: u16) -> impl FnOnce(&mut Assembler) {
         let off = self.code.len();
         OpJnz::new(src, i32::MAX).write(self);
-        
+
         move |this| {
             let diff = this.code.len() - off - 7;
             let diff = diff as u32;

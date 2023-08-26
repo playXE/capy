@@ -441,16 +441,15 @@ impl std::fmt::Display for Value {
 
             write!(f, ")")
         } else if self.is_vector() {
-            let mut vec = *self;
+            let vec = *self;
 
             write!(f, "#(")?;
-
+            let mut i = 0;
             loop {
-                write!(f, "{}", scm_vector_ref(vec, 0))?;
+                write!(f, "{}", scm_vector_ref(vec, i))?;
 
-                vec = scm_vector_ref(vec, 1);
-
-                if vec.is_null() {
+                i += 1;
+                if i >= scm_vector_length(vec) {
                     break;
                 }
 
@@ -469,7 +468,7 @@ impl std::fmt::Display for Value {
         } else if self.is_program() {
             write!(f, "#<program at {:p}>", self.cast_as::<ScmProgram>().vcode)
         } else {
-            write!(f, "#<unknown {:x}>", self.get_raw())
+            write!(f, "#<unknown {:x}:{:?}>", self.get_raw(), self.get_object().header().type_id())
         }
     }
 }
