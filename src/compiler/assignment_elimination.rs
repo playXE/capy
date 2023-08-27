@@ -129,7 +129,7 @@ fn assignment_elimination_rec(mut tree: P<IForm>) -> P<IForm> {
                         initval: None,
                         boxed: true,
                         ref_count: 0,
-                        set_count: 0,
+                        set_count: 1,
                     });
                     lvar.ref_count = 1;
                     lvar.set_count = 0;
@@ -211,7 +211,7 @@ fn assignment_elimination_rec(mut tree: P<IForm>) -> P<IForm> {
                     initval: None,
                     boxed: true,
                     ref_count: 0,
-                    set_count: 0,
+                    set_count: 1,
                 });
                 substitutes.insert(lvar.clone(), new_lvar.clone());
                 lvars.push(new_lvar.clone());

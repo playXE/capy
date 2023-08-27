@@ -1,5 +1,5 @@
 use std::mem::{size_of, transmute};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{Ordering, AtomicI32};
 
 use mmtk::{util::ObjectReference, AllocationSemantics, MutatorContext};
 
@@ -627,7 +627,7 @@ impl Thread {
     }
 
     pub fn make_winder(&mut self) -> Value {
-        static ID: AtomicU32 = AtomicU32::new(0);
+        static ID: AtomicI32 = AtomicI32::new(i32::MIN);
         let size = round_up(size_of::<Winder>(), 8, 0);
 
         let mem = self
@@ -636,7 +636,7 @@ impl Thread {
 
         unsafe {
             mem.store(Winder {
-                id: ID.fetch_add(1, Ordering::AcqRel),
+                id: ID.fetch_add(1, Ordering::AcqRel)+1,
                 after: Value::encode_null_value(),
                 before: Value::encode_null_value(),
                 handlers: None,

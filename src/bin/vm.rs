@@ -26,7 +26,7 @@ fn main() {
     println!("GC size: {}..{}M", opts.gc_min_heap_size / 1024, opts.gc_max_heap_size / 1024);
     mmtk.set_option("threads", "4");
 
-    let vm = scm_init(mmtk.build());
+    let vm = scm_init(mmtk.build(), opts.gc_plan);
     vm.disassemble = opts.disassemble;
 
     scm_define_subr(

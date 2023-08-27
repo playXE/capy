@@ -20,5 +20,5 @@ fn main() {
     );
     mmtk.set_option("threads", "4");
 
-    let _vm = scm_init(mmtk.build());
+    let _vm = scm_init(mmtk.build(), opts.gc_plan);
 }

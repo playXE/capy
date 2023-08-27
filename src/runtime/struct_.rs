@@ -593,8 +593,9 @@ extern "C-unwind" fn make_struct_simple(
         raise_exn!(
             FailContract,
             &[],
-            "make-struct/simple: wrong number of initializers: {}",
-            ilength
+            "make-struct/simple: wrong number of initializers: {}, expected: {}",
+            ilength,
+            vtable.cast_as::<ScmStruct>().vtable_size()
         );
     }
 

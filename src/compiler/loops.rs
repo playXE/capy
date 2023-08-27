@@ -21,10 +21,15 @@ fn is_misused(x: &IForm, tail: bool, lvar: P<LVar>, formals: &[P<LVar>]) -> bool
         IForm::LSet(lset) => lset.lvar.as_ptr() == lvar.as_ptr(),
         IForm::GSet(gset) => is_misused(&gset.value, tail, lvar, formals),
         IForm::Lambda(lam) => is_misused(&lam.body, tail, lvar, formals),
-        IForm::Seq(seq) => seq
-            .forms
-            .iter()
-            .any(|x| is_misused(x, tail, lvar.clone(), formals)),
+        IForm::Seq(seq) => {
+            for i in 0..seq.forms.len()-1 {
+                if is_misused(&seq.forms[i], false, lvar.clone(), formals) {
+                    return true;
+                }
+            }
+
+            is_misused(&seq.forms[seq.forms.len()-1], tail, lvar, formals)
+        }
 
         IForm::Label(label) => is_misused(&label.body, tail, lvar, formals),
 
@@ -46,7 +51,7 @@ fn is_misused(x: &IForm, tail: bool, lvar: P<LVar>, formals: &[P<LVar>]) -> bool
             // position and this must be a tail call.
 
             let op = call.proc.clone();
-
+            
             if op.is_lref() && op.lref_lvar().unwrap().as_ptr() == lvar.as_ptr() {
                 !tail || call.args.len() != formals.len()
             } else {
@@ -222,9 +227,12 @@ pub fn recover_loops_rec(
         }
 
         IForm::Seq(seq) => {
-            for form in seq.forms.iter_mut() {
-                *form = recover_loops_rec(form.clone(), penv, false, changed);
+            for i in 0..seq.forms.len() - 1{
+                seq.forms[i] = recover_loops_rec(seq.forms[i].clone(), penv, false, changed);
             }
+            let lidx = seq.forms.len() - 1;
+            seq.forms[lidx] =
+                recover_loops_rec(seq.forms[seq.forms.len() - 1].clone(), penv, tail, changed);
 
             iform
         }

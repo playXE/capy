@@ -67,7 +67,7 @@ fn get_binding_frame(var: Value, env: Value) -> Value {
     Value::encode_null_value()
 }
 
-pub fn identifier_env(mut id: Value) -> Value {
+pub fn identifier_env(id: Value) -> Value {
     let idr = id.cast_as::<ScmIdentifier>();
     if scm_car(idr.frames).is_false() {
         let f = get_binding_frame(idr.name, scm_cdr(idr.frames));

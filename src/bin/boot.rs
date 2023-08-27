@@ -20,7 +20,7 @@ fn main() {
     builder.set_option("gc_trigger", "FixedHeapSize:128m");
     builder.set_option("threads", "1");
 
-    let _ = scm_init(builder.build());
+    let _ = scm_init(builder.build(), capy::vm::options::GCPlan::Immix);
 
     let args = std::env::args().skip(1).collect::<Vec<_>>();
 
@@ -95,10 +95,9 @@ fn main() {
         lifted_var: LiftedVar::Candidate,
     });
 
-    let mut out = termcolor::StandardStream::stdout(termcolor::ColorChoice::Always);
+   
     let lam = P(IForm::Lambda(toplevel_lambda));
-    lam.pretty_print::<true>(&mut out).unwrap();
-    println!();
+    
     let mut bcode = vec![];
 
     compile_bytecode(lam, &mut bcode);

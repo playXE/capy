@@ -41,4 +41,120 @@
         '()
         (cons (car args) (cons* (cdr args)))))
 
-(for-all print (list 1 2 3 4))
+; 0: kind, 1: message, 2: stack-trace
+(define exn-vtable (make-vtable (string-append standard-vtable-fields "phphph")))
+
+(define (exn? x)
+    (if (struct? x)
+        (eq? (struct-vtable x) exn-vtable)
+        #f))
+
+(define (exn-message exn)
+    (if (exn? exn)
+        (struct-ref exn 1)
+        #f))
+
+(define (exn-stack-trace exn)
+    (if (exn? exn)
+        (struct-ref exn 2)
+        #f))
+
+(define (exn-kind exn)
+    (if (exn? exn)
+        (struct-ref exn 0)
+        #f))
+
+(define (make-exn kind message stacktrace)
+    (make-struct/simple exn-vtable kind message stacktrace))
+
+(define (make-parameter init . o)
+  (let ((converter
+           (if (pair? o) (car o) (lambda (x) x))))
+    (lambda args
+      (if (null? args)
+        (converter init)
+        (if (eq? (car args) '<param-set!>)
+            (set! init (converter (car (cdr args))))
+            (if (eq? (car args) '<param-convert>)
+                converter)
+                (set! init (converter (car args))))))))
+
+(define (parent-exception-handler) (make-parameter #f))
+(define (current-exception-handler) (wind-up-raise #f #f))
+
+(define (raise c)
+    (let ([eh (current-exception-handler)])
+        (if eh 
+            (eh c)
+            (let ([parent-eh (parent-exception-handler)])
+                (if parent-eh 
+                    (parent-eh c)
+                    (%raise c)))
+            (%raise "Uncaught exception"))))
+
+
+(define (call-with-current-continuation proc)
+    (%call/cc (lambda (k)
+        (proc 
+            (lambda args
+                (let loop ([base (%dynamic-wind-base k)])
+                    (if (eqv? (%dynamic-wind-current) base)
+                        #f  
+                        (begin 
+                            ((cdr (%wind-down)))
+                            (loop base))))
+                (let loop ([winders (%dynamic-winders k)])
+                    (if (null? winders)
+                        (apply k args)
+                        (begin 
+                            ((car (car winders)))))
+                            (%wind-up (car (car winders)) (cdr (car winders)))
+                            (loop (cdr winders))))))))
+
+(define call/cc call-with-current-continuation)
+
+(define (dynamic-wind before thunk after)
+    (before)
+    (%wind-up before after)
+    (let ([result (thunk)])
+        ((cdr (%wind-down)))
+        result))
+
+
+(define (make-parameter init . o)
+  (let ((converter
+           (if (pair? o) (car o) (lambda (x) x))))
+    (lambda args
+      (if (null? args)
+        (converter init)
+        (if (eq? (car args) '<param-set!>)
+            (set! init (converter (car (cdr args))))
+            (if (eq? (car args) '<param-convert>)
+                converter
+                (set! init (converter (car args)))))))))
+
+(define (current-exception-handler) (%wind-up-raise undefined undefined))
+(define (undefined) (if #f #f))
+(define (raise c)
+    (let ([eh (current-exception-handler)])
+        (if (not eh)
+            (%raise "Uncaught exception")
+            (begin 
+                (print "eh" eh)
+                (eh c)
+                (%raise c)))))
+
+(define (with-exception-handler handler thunk)
+    (print "with-exception-handler" handler)
+    (%wind-up undefined undefined handler)
+    (let ([result (thunk)])
+        (%wind-down)
+        result))
+
+(with-exception-handler 
+    (lambda (val)
+        (print "Exception" val)
+        (raise val))
+    (lambda ()
+        (print "Hello")
+        (raise "World")))

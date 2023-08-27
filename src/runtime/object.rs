@@ -359,13 +359,16 @@ pub fn scm_vector_set(vector: Value, thread: &mut Thread, index: u32, value: Val
     let vec = v.cast_as::<ScmVector>();
 
     if value.is_object() {
-        unsafe {
+        /*unsafe {
             object_reference_write(
                 thread.mutator(),
                 transmute(vector),
                 transmute(vec.values.as_mut_ptr().add(index as usize)),
                 transmute(value),
             );
+        }*/ 
+        unsafe {
+            thread.reference_write(transmute(vector), transmute(vec.values.as_mut_ptr().add(index as usize)), transmute(value));
         }
     } else {
         unsafe {

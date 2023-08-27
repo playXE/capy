@@ -1,11 +1,14 @@
+use std::intrinsics::unlikely;
 use std::mem::transmute;
 use std::slice::Iter;
 use std::sync::atomic::{AtomicI8, Ordering};
 use std::{mem::MaybeUninit, panic::AssertUnwindSafe};
 
 use mmtk::memory_manager::bind_mutator;
+use mmtk::util::metadata::side_metadata::GLOBAL_SIDE_METADATA_VM_BASE_ADDRESS;
 use mmtk::util::ObjectReference;
-use mmtk::Mutator;
+use mmtk::vm::edge_shape::SimpleEdge;
+use mmtk::{Mutator, MutatorContext};
 
 use crate::gc::CapyVM;
 
@@ -27,8 +30,10 @@ pub enum ThreadKind {
 #[repr(C)]
 pub struct Thread {
     interpreter: MaybeUninit<InterpreterState>,
+    pub needs_wb: bool,
     pub mutator: MaybeUninit<Mutator<CapyVM>>,
     pub shadow_stack: ShadowStack,
+
     pub id: u64,
     pub safepoint: *mut u8,
     pub gc_state: i8,
@@ -43,7 +48,6 @@ impl Thread {
         unsafe { transmute(self) }
     }
 
-
     pub fn mutator(&mut self) -> &mut Mutator<CapyVM> {
         unsafe { &mut *self.mutator.as_mut_ptr() }
     }
@@ -51,7 +55,6 @@ impl Thread {
     pub fn current() -> &'static mut Thread {
         unsafe { &mut THREAD }
     }
-    
 
     pub fn interpreter(&mut self) -> &mut InterpreterState {
         unsafe { &mut *self.interpreter.as_mut_ptr() }
@@ -173,6 +176,7 @@ impl Thread {
         self.shadow_stack.init();
         self.local_finalization_queue = MaybeUninit::new(Vec::with_capacity(128));
         self.obj_handles = MaybeUninit::new(ObjStorage::new("thread-handles"));
+        self.needs_wb = scm_virtual_machine().needs_wb;
     }
 
     pub(crate) fn deregister_mutator(&mut self) {
@@ -225,6 +229,42 @@ impl Thread {
 
         let th = threads();
         th.add_thread(Thread::current());
+    }
+
+    /// Performs write barrier for objects.
+    ///
+    /// Arguments:
+    /// - `src`: The modified source object.
+    /// - `slot`: The location of the field to be modified.
+    /// - `target`: The target for the write operation.
+    #[inline]
+    pub fn reference_write(
+        &mut self,
+        src: ObjectReference,
+        slot: SimpleEdge,
+        target: ObjectReference,
+    ) {
+        unsafe {
+            // use transmutes here because MMTk calls are inlined only with PGO enabled builds
+            // and we still want somewhat decent performance when developing without PGO.
+            let addr = transmute::<_, *mut ObjectReference>(slot);
+            addr.write(target);
+            if self.needs_wb {
+                // load unlogged bit from side-metadata.
+                // if it is set then we invoke slow-path from MMTk.
+                let addr = transmute::<_, usize>(src);
+                let meta_addr =
+                    transmute::<_, usize>(GLOBAL_SIDE_METADATA_VM_BASE_ADDRESS) + (addr >> 6);
+                let shift = (addr >> 3) & 0b111;
+
+                let byte_val = (meta_addr as *const u8).read();
+                if unlikely((byte_val >> shift) & 1 == 1) {
+                    self.mutator()
+                        .barrier()
+                        .object_reference_write_slow(src, slot, target);
+                }
+            }
+        }
     }
 }
 
@@ -350,6 +390,7 @@ static mut SINK: u8 = 0;
 #[thread_local]
 static mut THREAD: Thread = Thread {
     id: 0,
+    needs_wb: false,
     interpreter: MaybeUninit::uninit(),
     mutator: MaybeUninit::uninit(),
     safepoint: std::ptr::null_mut(),

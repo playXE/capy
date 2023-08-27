@@ -41,7 +41,7 @@ use crate::{
 #[repr(C)]
 pub struct Winder {
     pub(crate) header: ScmCellHeader,
-    pub(crate) id: u32,
+    pub(crate) id: i32,
     pub(crate) before: Value,
     pub(crate) after: Value,
     pub(crate) handlers: Option<Value>,
@@ -433,6 +433,7 @@ extern "C-unwind" fn wind_up_raise(
                 after,
                 &mut scm_cdr(val), /* will be rooted inside the wind_up */
             );
+            println!("val {}", val);
             scm_car(val)
         }
 
@@ -453,6 +454,8 @@ extern "C-unwind" fn dynamic_wind_base(thread: &mut Thread, cont: &mut Value) ->
     if cont.type_of() != TypeId::Continuation {
         return Value::encode_bool_value(false);
     }
+
+    
 
     let base = thread
         .interpreter()
@@ -506,8 +509,10 @@ extern "C-unwind" fn dynamic_winders(thread: &mut Thread, cont: &mut Value) -> V
         .unwrap_or(Value::encode_null_value());
 
     loop {
+        
         // if let Some(winder) = next.filter(|&x| base.is_none() || x != base.unwrap()) {
-        if next != base && !(next.is_null() && base.is_null()) {
+        if next != base && !(next.is_null() || base.is_null()) {
+           
             let mut cons = gc_protect!(thread => base, next, res => thread.make_cons::<false>(Value::encode_null_value(), Value::encode_null_value()));
             scm_set_car(cons, thread, next.cast_as::<Winder>().before);
             scm_set_cdr(cons, thread, next.cast_as::<Winder>().after);
@@ -558,7 +563,7 @@ pub(crate) fn init() {
     scm_define(scm_intern("%call/cc"), unsafe_call_cc);
     scm_define_subr("%wind-down", 0, 0, 0, Subr::F0(wind_down));
     scm_define_subr("%wind-up", 2, 1, 0, Subr::F3(wind_up));
-    scm_define_subr("%wind-raise", 2, 0, 0, Subr::F2(wind_up_raise));
+    scm_define_subr("%wind-up-raise", 2, 0, 0, Subr::F2(wind_up_raise));
     scm_define_subr("%dynamic-wind-base", 1, 0, 0, Subr::F1(dynamic_wind_base));
     scm_define_subr("%dynamic-wind-current", 0, 0, 0, Subr::F0(dynamic_wind_current));
     scm_define_subr("%dynamic-winders", 1, 0, 0, Subr::F1(dynamic_winders));

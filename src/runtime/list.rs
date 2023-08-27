@@ -143,7 +143,7 @@ pub fn scm_append2(list: Value, obj: Value) -> Value {
     if list.is_null() {
         return obj;
     }
-    let mut t = Thread::current();
+    let t = Thread::current();
 
     let mut cp;
     let mut start = Value::encode_null_value();
@@ -183,7 +183,7 @@ pub fn scm_reversex(list: Value) -> Value {
     scm_reverse2x(list, Value::encode_null_value())
 }
 
-extern "C-unwind" fn list_p(thread: &mut Thread, xs: &mut Value) -> Value {
+extern "C-unwind" fn list_p(_thread: &mut Thread, xs: &mut Value) -> Value {
    
     let mut tortoise = *xs;
     let mut hare = *xs;

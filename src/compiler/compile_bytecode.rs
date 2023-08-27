@@ -10,6 +10,9 @@ use crate::bytecode::opcodes::OpEqual;
 use crate::bytecode::opcodes::OpEqv;
 use crate::bytecode::opcodes::CAPY_BYTECODE_MAGIC;
 use crate::bytecode::opcodes::OP_NOP;
+use crate::bytecode::opcodes::OpVectorLength;
+use crate::bytecode::opcodes::OpVectorRef;
+use crate::bytecode::opcodes::OpVectorSet;
 use crate::bytecode::u24::u24;
 use crate::bytecodeassembler::fasl::FASLPrinter;
 use crate::bytecodeassembler::*;
@@ -645,12 +648,21 @@ pub fn compile_closure(
 
                     "vector" => {
                         let args = for_args(asm, state, args, env);
-                        asm.emit_make_vector(0, args.len() as _);
+                        asm.emit_make_vector_immediate(0, args.len() as _);
                         for (i, arg) in args.iter().enumerate() {
                             asm.emit_vector_set_immediate(0, i as _, *arg as _);
                         }
 
                         asm.emit_mov(dst as _, 0);
+                    }
+
+                    "make-vector" if args.len() == 2 || args.len() == 1 => {
+                        let n = for_value(asm, &args[0], env, state);
+                        asm.emit_make_vector(0, n.idx as _);
+                        if args.len() == 2 {
+                            let init = for_value(asm, &args[1], env, state);
+                            asm.emit_vector_fill(0, init.idx as _);
+                        }
                     }
 
                     _ => {
@@ -1353,6 +1365,13 @@ static PRIMITIVES: Lazy<HashMap<&'static str, Primitive>> = Lazy::new(|| {
         ("car", 1, false, true, asm, args => {
             asm.emit_car(args[0] as _, args[1] as _)
         })
+        ("set-car!", 2, false, false, asm, args => {
+            asm.emit_set_car(args[0] as _, args[1] as _)
+        })
+
+        ("set-cdr!", 2, false, false, asm, args => {
+            asm.emit_set_cdr(args[0] as _, args[1] as _)
+        })
 
         ("cdr", 1, false ,true, asm, args => {
             asm.emit_cdr(args[0] as _, args[1] as _)
@@ -1376,6 +1395,18 @@ static PRIMITIVES: Lazy<HashMap<&'static str, Primitive>> = Lazy::new(|| {
 
         ("cons", 2, false, true, asm, args => {
             OpCons::new(args[0] as _, args[1] as _, args[2] as _).write(asm);
+        })
+
+        ("vector-set!", 3, false, false, asm, args => {
+            OpVectorSet::new(args[0] as _, args[1] as _, args[2] as _).write(asm);
+        })
+
+        ("vector-ref", 2, false, true, asm, args => {
+            OpVectorRef::new(args[0] as _, args[1] as _, args[2] as _).write(asm);
+        })
+
+        ("vector-length", 1, false, true, asm, args => {
+            OpVectorLength::new(args[0] as _, args[1] as _).write(asm);
         })
     );
 

@@ -21,14 +21,14 @@ use crate::{
 
 use super::{scm_virtual_machine, thread::Thread};
 #[inline(never)]
-pub unsafe extern "C" fn get_callee_vcode(thread: &mut Thread) -> *const u8 {
+pub unsafe extern "C-unwind" fn get_callee_vcode(thread: &mut Thread) -> *const u8 {
     let proc = *frame_local(thread.interpreter().fp, 0);
 
     if proc.is_program() {
         
         return proc.get_object().cast_as::<ScmProgram>().vcode;
     }
-    let ip = thread.interpreter().ip;
+
     thread.interpreter().ip = frame_virtual_return_address(thread.interpreter().fp);
 
     raise_exn!(Fail, &[], "not a procedure: {}", proc);

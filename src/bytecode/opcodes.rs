@@ -86,7 +86,9 @@ macro_rules! for_each_opcode {
             (op_box_ref, "box-ref", { dst: u16, src: u16 })
             (op_box_set, "box-set", { dst: u16, src: u16 })
 
-            (op_make_vector, "make-vector", { dst: u16, len: u32 })
+            (op_make_vector_immediate, "make-vector/immediate", { dst: u16, len: u32 })
+            (op_make_vector, "make-vector", { dst: u16, len: u16 })
+            (op_vector_fill, "vector-fill", { dst: u16, fill: u16 })
             (op_vector_ref, "vector-ref", { dst: u16, src: u16, idx: u16 })
             (op_vector_ref_imm, "vector-ref/immediate", { dst: u16, src: u16, idx: u32 })
             (op_vector_set, "vector-set", { dst: u16, idx: u16, src: u16 })
@@ -153,6 +155,8 @@ macro_rules! for_each_opcode {
 
             (op_car, "car", { dst: u16, src: u16 })
             (op_cdr, "cdr", { dst: u16, src: u16 })
+            (op_set_car, "set-car!", { dst: u16, src: u16 })
+            (op_set_cdr, "set-cdr!", { dst: u16, src: u16 })
             (op_bind_optionals, "bind-optionals", { nargs: u24 })
 
             (op_continuation_call, "continuation-call", { contregs: u8 })

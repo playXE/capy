@@ -24,7 +24,7 @@ use self::{
         monitor::Monitor,
         mutex::{Mutex, MutexGuard, RawMutex},
     },
-    thread::Thread,
+    thread::Thread, options::GCPlan,
 };
 
 pub mod factory;
@@ -38,6 +38,7 @@ pub mod thread;
 pub static BOOT_CONTINUATION_CODE: &'static [u8] = &[OP_HALT];
 
 pub struct VirtualMachine {
+    pub(crate) needs_wb: bool,
     pub(crate) initialized: bool,
     pub mmtk: mmtk::MMTK<CapyVM>,
     pub gc_waiters_lock: Monitor<()>,
@@ -95,10 +96,14 @@ impl VirtualMachine {
     }
 }
 
-pub fn scm_init(mmtk: mmtk::MMTK<CapyVM>) -> &'static mut VirtualMachine {
+pub fn scm_init(mmtk: mmtk::MMTK<CapyVM>, plan: GCPlan) -> &'static mut VirtualMachine {
     safepoint::init();
     let this = Box::leak(Box::new(VirtualMachine {
         mmtk,
+        needs_wb: match plan {
+            GCPlan::GenCopy | GCPlan::GenImmix | GCPlan::StickyImmix => true,
+            _ => false 
+        },
         gc_waiters_lock: Monitor::new(()),
         weakmapping_registry: Mutex::new(Vec::with_capacity(128)),
         safepoint_lock_data: None,

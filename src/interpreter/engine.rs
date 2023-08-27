@@ -4,14 +4,15 @@ use std::mem::{size_of, transmute};
 use std::ptr::null;
 
 use mmtk::memory_manager::object_reference_write;
+use mmtk::vm::edge_shape::MemorySlice;
 
 use crate::bytecode::encode::Decode;
 use crate::raise_exn;
-use crate::runtime::equality::{scm_compare, eqv, equal};
+use crate::runtime::equality::{equal, eqv, scm_compare};
 use crate::runtime::gsubr::scm_apply_subr;
 use crate::runtime::object::*;
 use crate::runtime::value::Value;
-use crate::vm::intrinsics::{cons_rest, get_callee_vcode, self, reinstate_continuation_x};
+use crate::vm::intrinsics::{self, cons_rest, get_callee_vcode, reinstate_continuation_x};
 use crate::vm::thread::Thread;
 
 use super::stackframe::StackElement;
@@ -207,7 +208,13 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 if unlikely(frame_locals_count!() <= proc as isize) {
                     sync_sp!();
                     sync_ip!();
-                    todo!("no values error"); // FIXME: Throw error
+                    raise_exn!(
+                        FailContractArity,
+                        &[],
+                        "expected one value, got {} ({:p})",
+                        frame_locals_count!() - 1,
+                        ip
+                    );
                 }
 
                 fp_set!(dst, *fp_ref!(proc));
@@ -227,7 +234,13 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                     ) {
                         sync_sp!();
                         sync_ip!();
-                        todo!("no values error"); // FIXME: Throw error
+                        raise_exn!(
+                            FailContractArity,
+                            &[],
+                            "expected at least {}, got {}",
+                            nvalues.value() - 1,
+                            frame_locals_count!() - proc.value() as isize - 1
+                        );
                     }
                 } else {
                     if unlikely(
@@ -235,7 +248,13 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                     ) {
                         sync_sp!();
                         sync_ip!();
-                        todo!("no values error"); // FIXME: Throw error
+                        raise_exn!(
+                            FailContractArity,
+                            &[],
+                            "expected {}, got {}",
+                            nvalues.value() - 1,
+                            frame_locals_count!() - proc.value() as isize - 1
+                        );
                     }
                 }
             }
@@ -245,10 +264,15 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 ip = ip.add(size_of::<OpAssertNargsEe>());
 
                 if unlikely(frame_locals_count!() != assert_nargs_ee.n().value() as isize) {
-                
                     sync_sp!();
                     sync_ip!();
-                    raise_exn!(FailContractArity, &[], "expected {}, got {}", assert_nargs_ee.n().value() - 1, frame_locals_count!() - 1);
+                    raise_exn!(
+                        FailContractArity,
+                        &[],
+                        "expected {}, got {}",
+                        assert_nargs_ee.n().value() - 1,
+                        frame_locals_count!() - 1
+                    );
                     //todo!("no values error, expected {}, got {}", assert_nargs_ee.n().value(), frame_locals_count!()); // FIXME: Throw error
                 }
             }
@@ -260,10 +284,16 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 if unlikely(frame_locals_count!() < assert_nargs_ge.n().value() as isize) {
                     sync_sp!();
                     sync_ip!();
-                    todo!("no values error, expected {}", assert_nargs_ge.n().value()); // FIXME: Throw error
+                    raise_exn!(
+                        FailContractArity,
+                        &[],
+                        "expected at least {}, got {}",
+                        assert_nargs_ge.n().value() - 1,
+                        frame_locals_count!() - 1
+                    );
                 }
             }
-            
+
             OP_ASSERT_NARGS_LE => {
                 let assert_nargs_le = OpAssertNargsLe::read(ip);
                 ip = ip.add(size_of::<OpAssertNargsLe>());
@@ -271,10 +301,15 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 if unlikely(frame_locals_count!() > assert_nargs_le.n().value() as isize) {
                     sync_sp!();
                     sync_ip!();
-                    todo!("no values error"); // FIXME: Throw error
+                    raise_exn!(
+                        FailContractArity,
+                        &[],
+                        "expected at most {}, got {}",
+                        assert_nargs_le.n().value() - 1,
+                        frame_locals_count!() - 1
+                    );
                 }
             }
-
 
             /* bind-rest dst:24
              *
@@ -387,7 +422,6 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 ip = ip.add(size_of::<OpJ>());
 
                 ip = ip.offset(j.offset() as isize);
-              
             }
 
             OP_JNZ => {
@@ -395,7 +429,7 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 ip = ip.add(size_of::<OpJnz>());
 
                 let val = sp_ref!(jnz.src());
-            
+
                 if !val.is_false() {
                     ip = ip.offset(jnz.offset() as isize);
                 }
@@ -445,8 +479,17 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                     global_ref.offset(),
                 );
                 let value = global.cast_as::<ScmGloc>().value;
+                if value.is_undefined() {
+                    sync_ip!();
+                    raise_exn!(
+                        Exn,
+                        &[],
+                        "unbound variable: {}",
+                        global.cast_as::<ScmGloc>().name
+                    );
+                }
+
                 sp_set!(global_ref.dst().value(), value);
-                //println!("global-ref {}, {}, {}", global_ref.dst().value(), global.cast_as::<ScmGloc>().name, value);
             }
 
             OP_GLOBAL_SET => {
@@ -491,7 +534,7 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
 
                 let boxed = sp_ref!(box_set.dst());
                 let src = sp_ref!(box_set.src());
-                
+
                 if src.is_object() {
                     object_reference_write(
                         thread.mutator(),
@@ -527,14 +570,48 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 sp_set!(cons.dst(), cell);
             }
 
+            OP_MAKE_VECTOR_IMMEDIATE => {
+                let make_vector = OpMakeVectorImmediate::read(ip);
+                ip = ip.add(size_of::<OpMakeVectorImmediate>());
+                sync_sp!();
+                sync_ip!();
+                let v = thread
+                    .make_vector::<false>(make_vector.len() as _, Value::encode_bool_value(false));
+                sp_set!(make_vector.dst(), v);
+            }
+
             OP_MAKE_VECTOR => {
                 let make_vector = OpMakeVector::read(ip);
                 ip = ip.add(size_of::<OpMakeVector>());
                 sync_sp!();
                 sync_ip!();
-                let v =
-                    thread.make_vector::<false>(make_vector.len() as _, Value::encode_null_value());
+                let len = sp_ref!(make_vector.len());
+                if !len.is_int32() {
+                    sync_ip!();
+                    raise_exn!(Exn, &[], "make-vector: expected integer, got {}", len);
+                }
+                let len = len.get_int32();
+
+                let v = thread.make_vector::<false>(len as _, Value::encode_bool_value(false));
                 sp_set!(make_vector.dst(), v);
+            }
+
+            OP_VECTOR_FILL => {
+                let fill_vector = OpVectorFill::read(ip);
+                ip = ip.add(size_of::<OpVectorFill>());
+
+                let vector = sp_ref!(fill_vector.dst());
+                let fill = sp_ref!(fill_vector.fill());
+
+                if !vector.is_vector() {
+                    sync_ip!();
+                    raise_exn!(Exn, &[], "vector-fill!: expected vector, got {}", vector);
+                }
+
+                let len = scm_vector_length(vector);
+                for i in 0..len {
+                    scm_vector_set(vector, thread, i, fill);
+                }
             }
 
             OP_VECTOR_REF_IMM => {
@@ -542,10 +619,21 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 ip = ip.add(size_of::<OpVectorRefImm>());
 
                 let vector = sp_ref!(vector_ref_imm.src());
+                if !vector.is_vector() {
+                    sync_ip!();
+                    raise_exn!(Exn, &[], "vector-ref: expected vector, got {}", vector);
+                }
                 let imm = vector_ref_imm.idx();
 
                 if scm_vector_length(vector) <= imm {
-                    todo!("vector-ref-imm: out of bounds")
+                    sync_ip!();
+                    raise_exn!(
+                        Exn,
+                        &[],
+                        "vector-ref: out of bounds: {} >= {}",
+                        imm,
+                        scm_vector_length(vector)
+                    );
                 }
 
                 let value = scm_vector_ref(vector, imm);
@@ -557,11 +645,16 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 ip = ip.add(size_of::<OpVectorSetImm>());
 
                 let vector = sp_ref!(vector_set_imm.dst());
+                if !vector.is_vector() {
+                    sync_ip!();
+                    raise_exn!(Exn, &[], "vector-set!: expected vector, got {}", vector);
+                }
                 let imm = vector_set_imm.idx();
                 let src = sp_ref!(vector_set_imm.src());
 
                 if scm_vector_length(vector) <= imm {
-                    todo!("vector-set-imm: out of bounds")
+                    sync_ip!();
+                    raise_exn!(Exn, &[], "vector-set!: out of bounds");
                 }
 
                 scm_vector_set(vector, thread, imm, src);
@@ -572,16 +665,60 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 ip = ip.add(size_of::<OpVectorRef>());
 
                 let vector = sp_ref!(vector_ref.src());
+                if !vector.is_vector() {
+                    sync_ip!();
+                    raise_exn!(Exn, &[], "vector-ref: expected vector, got {}", vector);
+                }
                 let idx = sp_ref!(vector_ref.idx());
                 if !idx.is_int32() {
-                    todo!("vector-ref: index is not int32")
+                    sync_ip!();
+                    raise_exn!(Exn, &[], "vector-ref: expected integer, got {}", idx);
                 }
                 let idx = idx.get_int32();
                 if idx as u32 >= scm_vector_length(vector) {
-                    todo!("vector-ref: out of bounds")
+                    sync_ip!();
+                    raise_exn!(Exn, &[], "vector-ref: out of bounds")
                 }
                 let value = scm_vector_ref(vector, idx as _);
                 sp_set!(vector_ref.dst(), value);
+            }
+
+            OP_VECTOR_SET => {
+                let vector_set = OpVectorSet::read(ip);
+                ip = ip.add(size_of::<OpVectorSet>());
+
+                let vector = sp_ref!(vector_set.dst());
+                if !vector.is_vector() {
+                    sync_ip!();
+                    raise_exn!(Exn, &[], "vector-set!: expected vector, got {}", vector);
+                }
+                let idx = sp_ref!(vector_set.idx());
+                if !idx.is_int32() {
+                    sync_ip!();
+                    raise_exn!(Exn, &[], "vector-set!: expected integer, got {}", idx);
+                }
+                let idx = idx.get_int32();
+                let src = sp_ref!(vector_set.src());
+
+                if idx as u32 >= scm_vector_length(vector) {
+                    sync_ip!();
+                    raise_exn!(Exn, &[], "vector-set!: out of bounds")
+                }
+
+                scm_vector_set(vector, thread, idx as _, src);
+            }
+
+            OP_VECTOR_LENGTH => {
+                let vector_length = OpVectorLength::read(ip);
+                ip = ip.add(size_of::<OpVectorLength>());
+
+                let vector = sp_ref!(vector_length.src());
+                if !vector.is_vector() {
+                    sync_ip!();
+                    raise_exn!(Exn, &[], "vector-length: expected vector, got {}", vector);
+                }
+                let len = scm_vector_length(vector);
+                sp_set!(vector_length.dst(), Value::encode_int32(len as _));
             }
 
             OP_PROGRAM_REF_IMM => {
@@ -727,7 +864,10 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 let b = sp_ref!(less.b());
 
                 if a.is_int32() && b.is_int32() {
-                    sp_set!(less.dst(), Value::encode_bool_value(a.get_int32() < b.get_int32()));
+                    sp_set!(
+                        less.dst(),
+                        Value::encode_bool_value(a.get_int32() < b.get_int32())
+                    );
                     continue;
                 }
 
@@ -817,7 +957,7 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
 
                 let a = sp_ref!(numerically_equal.a());
                 let b = sp_ref!(numerically_equal.b());
-               
+
                 let cmp = scm_compare(a, b);
 
                 match cmp {
@@ -830,7 +970,6 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                         sp_set!(numerically_equal.dst(), Value::encode_bool_value(false));
                         continue;
                     }
-
                 }
             }
 
@@ -961,7 +1100,8 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 let src = sp_ref!(car.src());
 
                 if unlikely(!src.is_pair()) {
-                    todo!("error")
+                    sync_ip!();
+                    raise_exn!(Exn, &[], "car: expected pair, got {}", src)
                 }
 
                 sp_set!(car.dst(), scm_car(src));
@@ -974,10 +1114,41 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 let src = sp_ref!(cdr.src());
 
                 if unlikely(!src.is_pair()) {
-                    todo!("error")
+                    sync_ip!();
+                    raise_exn!(Exn, &[], "cdr: expected pair, got {}", src)
                 }
 
                 sp_set!(cdr.dst(), scm_cdr(src));
+            }
+
+            OP_SET_CAR => {
+                let set_car = OpSetCar::read(ip);
+                ip = ip.add(size_of::<OpSetCar>());
+
+                let src = sp_ref!(set_car.src());
+                let dst = sp_ref!(set_car.dst());
+
+                if unlikely(!dst.is_pair()) {
+                    sync_ip!();
+                    raise_exn!(Exn, &[], "set-car!: expected pair, got {}", dst)
+                }
+
+                scm_set_car(dst, thread, src);
+            }
+
+            OP_SET_CDR => {
+                let set_cdr = OpSetCdr::read(ip);
+                ip = ip.add(size_of::<OpSetCdr>());
+
+                let src = sp_ref!(set_cdr.src());
+                let dst = sp_ref!(set_cdr.dst());
+
+                if unlikely(!dst.is_pair()) {
+                    sync_ip!();
+                    raise_exn!(Exn, &[], "set-cdr!: expected pair, got {}", dst)
+                }
+
+                scm_set_cdr(dst, thread, src);
             }
 
             OP_BIND_OPTIONALS => {
@@ -1014,16 +1185,16 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 thread.interpreter().sp = sp;
                 intrinsics::expand_apply_argument(thread);
                 ip = thread.interpreter().ip;
-                sp = thread.interpreter().sp;   
-
+                sp = thread.interpreter().sp;
             }
 
             OP_CONTINUATION_CALL => {
                 let continuation_call = OpContinuationCall::read(ip);
-                let cont = scm_program_free_variable(current_program!(), continuation_call.contregs as _);
+                let cont =
+                    scm_program_free_variable(current_program!(), continuation_call.contregs as _);
                 thread.interpreter().ip = ip;
                 thread.interpreter().sp = sp;
-            
+
                 reinstate_continuation_x(thread, cont);
             }
 

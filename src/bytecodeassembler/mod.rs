@@ -104,8 +104,16 @@ impl Assembler {
         OpCons::new(dst, car, cdr).write(self);
     }
 
-    pub fn emit_make_vector(&mut self, dst: u16, len: u32) {
+    pub fn emit_make_vector_immediate(&mut self, dst: u16, len: u32) {
+        OpMakeVectorImmediate::new(dst, len).write(self);
+    }
+
+    pub fn emit_make_vector(&mut self, dst: u16, len: u16) {
         OpMakeVector::new(dst, len).write(self);
+    }
+
+    pub fn emit_vector_fill(&mut self, dst: u16, val: u16) {
+        OpVectorFill::new(dst, val).write(self);
     }
 
     pub fn emit_vector_set_immediate(&mut self, dst: u16, imm: u32, val: u16) {
@@ -352,6 +360,14 @@ impl Assembler {
 
     pub fn emit_cdr(&mut self, dst: u16, obj: u16) {
         OpCdr::new(dst, obj).write(self);
+    }
+
+    pub fn emit_set_car(&mut self, dst: u16, obj: u16) {
+        OpSetCar::new(dst, obj).write(self);
+    }
+
+    pub fn emit_set_cdr(&mut self, dst: u16, obj: u16) {
+        OpSetCdr::new(dst, obj).write(self);
     }
 
     pub fn emit_not(&mut self, dst: u16, obj: u16) {

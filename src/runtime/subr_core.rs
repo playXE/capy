@@ -1,16 +1,12 @@
-use crate::{
-    interpreter::stackframe::frame_virtual_return_address,
-    raise_exn,
-    vm::{scm_virtual_machine, thread::Thread},
-};
+use crate::{raise_exn, vm::thread::Thread};
 
 use super::{
     arith::scm_to_u32,
     gsubr::{scm_define_subr, Subr},
     list::scm_length,
     object::{
-        scm_car, scm_cdr, scm_string_mut_str, scm_string_str, scm_symbol_str, ScmString,
-        ScmWeakMapping, TypeId,
+        scm_car, scm_cdr, scm_string_mut_str, scm_string_str, scm_symbol_str, ScmWeakMapping,
+        TypeId,
     },
     symbol::scm_intern,
     value::Value,
@@ -436,6 +432,10 @@ extern "C-unwind" fn string_ge(_thread: &mut Thread, rest: &mut Value) -> Value 
     Value::encode_bool_value(true)
 }
 
+extern "C-unwind" fn raw_raise(thread: &mut Thread, val: &mut Value) -> Value {
+    std::panic::resume_unwind(Box::new(*val))
+}
+
 pub(crate) fn init() {
     scm_define_subr("make-weakmapping", 2, 0, 0, Subr::F2(make_weakmapping));
     scm_define_subr("weakmapping?", 1, 0, 0, Subr::F1(weakmapping_p));
@@ -456,7 +456,9 @@ pub(crate) fn init() {
     scm_define_subr("string>?", 0, 0, 1, Subr::F1(string_gt));
     scm_define_subr("string<=?", 0, 0, 1, Subr::F1(string_le));
     scm_define_subr("string>=?", 0, 0, 1, Subr::F1(string_ge));
+    scm_define_subr("%raise", 1, 0, 0, Subr::F1(raw_raise));
 
     super::subr_hash::init();
     super::struct_::init();
+    super::list::init();
 }

@@ -984,8 +984,8 @@ fn pass1_body_rec(
             let op = exprs.caar();
             let args = exprs.cdar();
 
-            if matches!(vframe, Sexpr::Boolean(false))
-                || matches!(vframe.assq(&op), Sexpr::Boolean(false))
+            if (matches!(vframe, Sexpr::Boolean(false))
+                || matches!(vframe.assq(&op), Sexpr::Boolean(false)))
                     && matches!(op, Sexpr::Identifier(_) | Sexpr::Symbol(_))
             {
                 let head = cenv.lookup(op.clone());

@@ -177,7 +177,7 @@ impl PatternContext {
 
                 let save_elli = self.ellipsis.clone();
                 self.ellipsis = Sexpr::Boolean(false);
-
+               
                 let r = self.compile_rule1(form.cadr(), spat.clone(), false);
                 self.ellipsis = save_elli;
                 return r;
@@ -194,7 +194,7 @@ impl PatternContext {
                                 self.name, self.form)
                         );
                     }
-
+                    
                     ellipsis_seen = true;
                     let base = pp.car();
                     pp = pp.cdr();
@@ -298,7 +298,6 @@ impl PatternContext {
 
                 template_append(&mut h, &mut t, r);
             }
-
             return Ok(h);
         } else if matches!(form, Sexpr::Vector(_)) {
             let Sexpr::Vector(ref vec) = form else {
@@ -973,7 +972,7 @@ pub fn synrule_expand(
             branch: Sexpr::Null,
             sprout: Sexpr::Null,
         });
-
+       
         if match_synrule(
             form.clone(),
             &rule.pattern,
@@ -982,7 +981,7 @@ pub fn synrule_expand(
             &mut mvec,
         ) {
             let r = realize_template(sr, rule, &mvec);
-
+          
             return Ok(r);
         }
     }

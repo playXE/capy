@@ -284,16 +284,12 @@ fn put_eq_hashtable(ht: Value, key: Value, value: Value) -> u32 {
             ht.elt_mut(index).assign(transmute(datum), key);
             ht.elt_mut(index + nsize).assign(transmute(datum), value);
         }
-        if ht.datum().used < hash_busy_threshold(nsize) {
-            return 0;
-        }
+       
 
-        if ht.datum().live < hash_dense_threshold(nsize) {
-            return nsize;
-        }
+      
         return lookup_hashtable_size(nsize);
     } else {
-        panic!("put_eq_hashtable: table overflow")
+        panic!("put_eq_hashtable: table overflow: {}", key)
     }
 }
 

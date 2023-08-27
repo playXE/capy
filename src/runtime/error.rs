@@ -6,13 +6,9 @@ use crate::{
     vm::{scm_virtual_machine, thread::Thread, BOOT_CONTINUATION_CODE},
 };
 
-use super::{
-    list::{scm_acons, scm_cons},
-    object::scm_vector_set,
-    value::Value,
-};
+use super::{list::scm_cons, object::scm_vector_set, value::Value};
 
-pub fn scm_error(_key: Value, subr: &str, message: &str, args: Value, rest: Value) -> ! {
+pub fn scm_error(_key: Value, subr: &str, message: &str, args: Value, _rest: Value) -> ! {
     // TODO: Actually invoke `throw` in boot library
     eprintln!("{}: {}: {}", subr, message, args);
     std::process::exit(1);
@@ -47,6 +43,7 @@ pub enum Exception {
     Other,
 }
 
+#[allow(unused_variables)]
 #[cold]
 #[inline(never)]
 #[doc(hidden)]
@@ -135,3 +132,5 @@ macro_rules! raise_exn {
         $crate::runtime::error::finish_exn_impl::<$t>($crate::runtime::error::Exception::$id, $crate::runtime::error::EXN_TABLE[$crate::runtime::error::Exception::$id as usize].args, $eargs, format!($msg, $($arg),*), None, false)
     }};
 }
+
+
