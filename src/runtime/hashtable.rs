@@ -3,7 +3,8 @@ use std::mem::{size_of, transmute};
 use mmtk::util::Address;
 
 use crate::{
-    vm::{sync::mutex::RawMutex, thread::Thread}, gc_protect,
+    gc_protect,
+    vm::{sync::mutex::RawMutex, thread::Thread},
 };
 
 use super::{
@@ -84,8 +85,6 @@ pub enum HashTableType {
     Generic,
 }
 
-
-
 pub const SCM_HASHTABLE_HANDLER_SIGNATURE: usize = 0;
 pub const SCM_HASHTABLE_HANDLER_HASH: usize = 1;
 pub const SCM_HASHTABLE_HANDLER_EQUIV: usize = 2;
@@ -100,7 +99,6 @@ pub const SCM_HASHTABLE_HANDLER_HASH_FUNC: usize = 10;
 pub const SCM_HASHTABLE_HANDLER_EQUIV_FUNC: usize = 11;
 pub const SCM_HASHTABLE_HANDLER_MUTABLE: usize = 12;
 pub const SCM_HASHTABLE_HANDLER_ALIST: usize = 13;
-
 
 pub fn address_hash1(adrs: *const u8, bound: u32) -> u32 {
     ((((adrs as usize) >> 3) * 2654435761 + (adrs as usize & 7)) % bound as usize) as u32
@@ -273,7 +271,9 @@ fn put_eq_hashtable(ht: Value, key: Value, value: Value) -> u32 {
         if index >= nsize {
             index -= nsize;
         }
-        if index == hash1 {
+        if index != hash1 {
+            continue;
+        } else {
             break false;
         }
     };
@@ -284,9 +284,15 @@ fn put_eq_hashtable(ht: Value, key: Value, value: Value) -> u32 {
             ht.elt_mut(index).assign(transmute(datum), key);
             ht.elt_mut(index + nsize).assign(transmute(datum), value);
         }
-       
 
-      
+        if ht.datum().used < hash_busy_threshold(nsize) {
+            return 0;
+        }
+
+        if ht.datum().live < hash_dense_threshold(nsize) {
+            return nsize;
+        }
+
         return lookup_hashtable_size(nsize);
     } else {
         panic!("put_eq_hashtable: table overflow: {}", key)
@@ -563,8 +569,8 @@ pub(crate) fn inplace_rehash_weak_hashtable(ht: Value) {
     let datum = ht.cast_as::<WeakHashtable>().datum;
 
     let nelts = unsafe { (*datum).capacity };
-    
-    let datum_size = size_of::<WeakHashTableRec>() + size_of::<Value>() * ((nelts as usize ) - 1);
+
+    let datum_size = size_of::<WeakHashTableRec>() + size_of::<Value>() * ((nelts as usize) - 1);
     let save_datum = mmtk::memory_manager::malloc(datum_size).to_mut_ptr::<u8>();
     unsafe {
         save_datum.copy_from_nonoverlapping(datum as *const u8, datum_size);
@@ -576,19 +582,14 @@ pub(crate) fn inplace_rehash_weak_hashtable(ht: Value) {
                 continue;
             }
 
-            if elt
-                .is_undefined()
-            {
+            if elt.is_undefined() {
                 continue;
             }
             assert!(elt.type_of() == TypeId::WeakMapping);
             if !elt.cast_as::<ScmWeakMapping>().key.is_object() {
                 continue;
             }
-            put_weak_hashtable(
-                h,
-                elt
-            );
+            put_weak_hashtable(h, elt);
         }
 
         mmtk::memory_manager::free(Address::from_mut_ptr(save_datum));
@@ -605,7 +606,6 @@ pub(crate) fn clear_volatile_hashtable(ht: &mut ScmHashTable) {
     }
 }
 
-
 pub(crate) fn clear_volatile_weak_hashtable(ht: &mut WeakHashtable) {
     unsafe {
         let n = (*ht.datum).capacity;
@@ -613,12 +613,15 @@ pub(crate) fn clear_volatile_weak_hashtable(ht: &mut WeakHashtable) {
         (*ht.datum).used = 0;
 
         for i in 0..n {
-            (*ht.datum).elts.as_mut_ptr().add(i as _).write(Value::encode_empty_value());
+            (*ht.datum)
+                .elts
+                .as_mut_ptr()
+                .add(i as _)
+                .write(Value::encode_empty_value());
         }
     }
 }
 pub fn rehash_hashtable(thread: &mut Thread, mut ht: Value, nsize: u32) -> Value {
-    
     let nelts = ht.cast_as::<ScmHashTable>().datum().capacity;
 
     let ht2 = {
@@ -626,7 +629,7 @@ pub fn rehash_hashtable(thread: &mut Thread, mut ht: Value, nsize: u32) -> Value
         let ht2 = gc_protect!(thread => ht => thread.make_hashtable(nsize, ht.cast_as::<ScmHashTable>().typ));
         ht2
     };
-    
+
     ht2.cast_as::<ScmHashTable>().lock.lock(true);
     let h = ht.cast_as::<ScmHashTable>();
     for i in 0..nelts {
@@ -659,7 +662,11 @@ pub fn rehash_weak_hashtable(thread: &mut Thread, mut ht: Value, nsize: u32) -> 
         ht2.cast_as::<WeakHashtable>().lock.lock(true);
 
         for i in 0..nelts {
-            let elt = (*ht.cast_as::<WeakHashtable>().datum).elts.as_ptr().add(i as _).read();
+            let elt = (*ht.cast_as::<WeakHashtable>().datum)
+                .elts
+                .as_ptr()
+                .add(i as _)
+                .read();
             if elt.is_empty() {
                 continue;
             }
@@ -672,14 +679,14 @@ pub fn rehash_weak_hashtable(thread: &mut Thread, mut ht: Value, nsize: u32) -> 
             if !elt.cast_as::<ScmWeakMapping>().key.is_object() {
                 continue;
             }
-            put_weak_hashtable(
-                ht2,
-                elt
-            );
+            put_weak_hashtable(ht2, elt);
         }
 
         ht2.cast_as::<WeakHashtable>().lock.unlock();
-        std::mem::swap(&mut (*ht.cast_as::<WeakHashtable>().datum), &mut (*ht2.cast_as::<WeakHashtable>().datum));
+        std::mem::swap(
+            &mut (*ht.cast_as::<WeakHashtable>().datum),
+            &mut (*ht2.cast_as::<WeakHashtable>().datum),
+        );
         ht
     }
 }
@@ -729,11 +736,15 @@ pub fn lookup_weak_hashtable(ht: Value, key: Value) -> Value {
             if entry.is_empty() {
                 return Value::encode_undefined_value();
             }
-            
+
             if entry != Value::encode_undefined_value() {
                 let wmap = entry.cast_as::<ScmWeakMapping>();
                 if wmap.key.is_false() {
-                    datum.elts.as_mut_ptr().add(index as _).write(Value::encode_undefined_value());
+                    datum
+                        .elts
+                        .as_mut_ptr()
+                        .add(index as _)
+                        .write(Value::encode_undefined_value());
                     datum.live -= 1;
                 } else {
                     if wmap.key == key {
@@ -757,7 +768,7 @@ pub fn put_weak_hashtable(ht: Value, wmap: Value) -> u32 {
     assert!(wmap.type_of() == TypeId::WeakMapping);
     let key = wmap.cast_as::<ScmWeakMapping>().key;
     unsafe {
-        let datum = &mut*ht.cast_as::<WeakHashtable>().datum;
+        let datum = &mut *ht.cast_as::<WeakHashtable>().datum;
         let nsize = datum.capacity;
         let hash1 = u64_hash1(key.get_raw() as _, nsize as _);
         let hash2 = u64_hash2(key.get_raw() as _, nsize as _);
@@ -787,7 +798,6 @@ pub fn put_weak_hashtable(ht: Value, wmap: Value) -> u32 {
         };
 
         if found {
-           
             datum.elts.as_mut_ptr().add(index as _).write(wmap);
             if datum.used < hash_busy_threshold(nsize) {
                 return 0;
@@ -806,12 +816,11 @@ pub fn put_weak_hashtable(ht: Value, wmap: Value) -> u32 {
             panic!("put_weak_hashtable: table overflow")
         }
     }
-
 }
 
 pub fn remove_weak_hashtable(ht: Value, key: Value) -> u32 {
     unsafe {
-        let datum = &mut*ht.cast_as::<WeakHashtable>().datum;
+        let datum = &mut *ht.cast_as::<WeakHashtable>().datum;
         let nsize = datum.capacity;
         let hash1 = u64_hash1(key.get_raw() as _, nsize as _);
         let hash2 = u64_hash2(key.get_raw() as _, nsize as _);
@@ -826,10 +835,18 @@ pub fn remove_weak_hashtable(ht: Value, key: Value) -> u32 {
             if !entry.is_undefined() {
                 let wmap = entry.cast_as::<ScmWeakMapping>();
                 if !wmap.key.is_object() {
-                    datum.elts.as_mut_ptr().add(index as _).write(Value::encode_undefined_value());
+                    datum
+                        .elts
+                        .as_mut_ptr()
+                        .add(index as _)
+                        .write(Value::encode_undefined_value());
                     datum.live -= 1;
                 } else {
-                    datum.elts.as_mut_ptr().add(index as _).write(Value::encode_undefined_value());
+                    datum
+                        .elts
+                        .as_mut_ptr()
+                        .add(index as _)
+                        .write(Value::encode_undefined_value());
                     datum.live -= 1;
                     if datum.live < hash_sparse_threshold(nsize) {
                         return lookup_hashtable_size(hash_mutable_size(datum.live));

@@ -5,7 +5,7 @@ use mmtk::{util::ObjectReference, AllocationSemantics, MutatorContext};
 
 use crate::compiler::tree_il::IForm;
 use crate::runtime::control::Winder;
-use crate::runtime::hashtable::{WeakHashTableRec, WeakHashtable};
+use crate::runtime::hashtable::{WeakHashTableRec, WeakHashtable, lookup_hashtable_size};
 use crate::runtime::object::ScmWeakMapping;
 use crate::runtime::synrules::{PVRef, SyntaxPattern, SyntaxRuleBranch, SyntaxRules};
 use crate::{
@@ -348,6 +348,7 @@ impl Thread {
     }
 
     pub fn make_hashtable(&mut self, n: u32, typ: HashTableType) -> Value {
+        let n = lookup_hashtable_size(n);
         let size = round_up(size_of::<ScmHashTable>(), 8, 0);
         let datum_size = size_of::<HashTableRec>() + size_of::<Value>() * ((n + n) as usize - 1);
 
@@ -618,9 +619,9 @@ impl Thread {
             let reference = transmute::<_, ObjectReference>(mem);
             mutator.post_alloc(reference, size, semantics);
             let mut env = Value::encode_object_value(ScmCellRef(transmute(reference)));
-            let ht = gc_protect!(self => env => self.make_hashtable(128, HashTableType::Eq));
+            let ht = gc_protect!(self => env => self.make_hashtable(113, HashTableType::Eq));
             env.cast_as::<ScmEnvironment>().ht.assign(env, ht);
-            let synenv = gc_protect!(self => env => self.make_hashtable(128, HashTableType::Eq));
+            let synenv = gc_protect!(self => env => self.make_hashtable(113, HashTableType::Eq));
             env.cast_as::<ScmEnvironment>().synenv.assign(env, synenv);
             env
         }
