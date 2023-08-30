@@ -233,7 +233,7 @@ pub fn lookup_hashtable_size(n: u32) -> u32 {
     ];
 
     for i in 0..PRIMES.len() {
-        if PRIMES[i] >= n {
+        if PRIMES[i] > n {
             return PRIMES[i];
         }
     }

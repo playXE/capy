@@ -827,7 +827,7 @@ pub fn pass2(mut iform: P<IForm>, recover_loops: bool) -> Result<P<IForm>, Strin
         iform = resolve_primitives(iform.clone());
         if recover_loops {
             ctx.changed = false;
-            ctx.inline = true;
+            ctx.inline = !true;
             ctx.lambda_lift = false;
             iform = pass2_rec(iform.clone(), &mut Vec::with_capacity(4), true, &mut ctx)?;
             // TODO: recover loops here
@@ -839,7 +839,7 @@ pub fn pass2(mut iform: P<IForm>, recover_loops: bool) -> Result<P<IForm>, Strin
         } else {
             // can perform lambda lifting and inlining at the same time if we don't need to recover loops
             ctx.changed = false;
-            ctx.inline = true;
+            ctx.inline = !true;
             ctx.lambda_lift = !true;
             iform = pass2_rec(iform.clone(), &mut Vec::with_capacity(4), true, &mut ctx)?;
         }

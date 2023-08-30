@@ -8,11 +8,11 @@ use crate::bytecode::opcodes::OpCons;
 use crate::bytecode::opcodes::OpEq;
 use crate::bytecode::opcodes::OpEqual;
 use crate::bytecode::opcodes::OpEqv;
-use crate::bytecode::opcodes::CAPY_BYTECODE_MAGIC;
-use crate::bytecode::opcodes::OP_NOP;
 use crate::bytecode::opcodes::OpVectorLength;
 use crate::bytecode::opcodes::OpVectorRef;
 use crate::bytecode::opcodes::OpVectorSet;
+use crate::bytecode::opcodes::CAPY_BYTECODE_MAGIC;
+use crate::bytecode::opcodes::OP_NOP;
 use crate::bytecode::u24::u24;
 use crate::bytecodeassembler::fasl::FASLPrinter;
 use crate::bytecodeassembler::*;
@@ -74,6 +74,19 @@ pub fn scan<const RESET_CALL: bool>(
                 });
             }
             scan::<RESET_CALL>(&var.body, fs, bs, toplevel, labels);
+        }
+
+        IForm::Fix(fix) => {
+            for lhs in fix.lhs.iter() {
+                bs.insert(lhs.clone());
+            }
+
+            for rhs in fix.rhs.iter() {
+                let lam = P(IForm::Lambda(rhs.clone()));
+                scan::<RESET_CALL>(&lam, fs, bs, toplevel, labels);
+            }
+
+            scan::<RESET_CALL>(&fix.body, fs, bs, toplevel, labels);
         }
 
         IForm::Call(_) => {
@@ -145,7 +158,8 @@ pub fn scan_toplevel<const RESET_CALL: bool>(iform: P<IForm>) -> Vec<P<IForm>> {
     scan::<RESET_CALL>(&iform, &mut fs, &mut bs, true, &mut labels);
     assert!(
         fs.len() == 0,
-        "there should be no free variables in toplevel expressions"
+        "there should be no free variables in toplevel expressions: {:?}",
+        fs
     );
     labels
 }
@@ -167,7 +181,8 @@ fn compute_frame_size(lam: P<Lambda>) -> usize {
             IForm::LSet(lset) => 1 + visit(&lset.value),
 
             IForm::Call(call) => {
-                1 + call.args.iter().map(|arg| visit(arg)).sum::<usize>() + 3 /* call frame size */
+                visit(&call.proc) + call.args.iter().map(|arg| visit(arg)).sum::<usize>() + 3
+                /* call frame size */
             }
 
             IForm::PrimCall(_, _, args) => 3 + args.iter().map(|arg| visit(arg)).sum::<usize>(),
@@ -185,6 +200,10 @@ fn compute_frame_size(lam: P<Lambda>) -> usize {
                 let inits = visit_args(&var.inits);
                 let body = visit(&var.body) + var.inits.len();
                 inits.max(body)
+            }
+
+            IForm::Fix(fix) => {
+                fix.lhs.len() + visit(&fix.body)
             }
 
             IForm::Label(label) => visit(&label.body),
@@ -381,6 +400,47 @@ pub fn compile_closure(
         stack_height_under_local(env.next_local, state.frame_size)
     }
 
+    fn visit_fix(
+        asm: &mut Assembler,
+        lhs: &[P<LVar>],
+        rhs: &[P<Lambda>],
+        body: &P<IForm>,
+        env: &P<Env>,
+        ctx: Context,
+        state: &mut State,
+    ) -> Option<P<Env>> {
+        let closures = rhs
+            .iter()
+            .map(|x| {
+                (
+                    x.clone(),
+                    state
+                        .closures
+                        .iter()
+                        .find(|(l, _)| l.as_ptr() == x.as_ptr())
+                        .unwrap()
+                        .1,
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut env = env.clone();
+        for (lvar, (lam, clos)) in lhs.iter().zip(closures.iter()) {
+            env = push_local(lvar.name.clone(), lvar.clone(), env);
+            if lam.free_lvars.len() != 0 {
+                asm.emit_make_program(env.idx as _, lam.free_lvars.len() as _, *clos as _);
+            } else {
+                asm.emit_static_program(u24::new(env.idx as _), *clos as _);
+            }
+        }
+
+        for (lvar, (lam, _)) in lhs.iter().zip(closures.iter()) {
+            let idx = lookup_lexical(lvar.clone(), &env).idx;
+            init_free_vars(asm, idx, &lam.free_lvars, &env, 0, state);
+        }
+
+        for_context(asm, ctx, body, &env, state)
+    }
+
     fn visit_let(
         var: &Let,
         asm: &mut Assembler,
@@ -479,6 +539,17 @@ pub fn compile_closure(
 
             IForm::Let(var) => {
                 visit_let(var, asm, env, Context::ValuesAt(height), state);
+            }
+            IForm::Fix(fix) => {
+                visit_fix(
+                    asm,
+                    &fix.lhs,
+                    &fix.rhs,
+                    &fix.body,
+                    env,
+                    Context::ValuesAt(height),
+                    state,
+                );
             }
             IForm::If(cond) => visit_if(cond, asm, env, Context::ValuesAt(height), state),
             IForm::LetValues(letv) => {
@@ -596,6 +667,17 @@ pub fn compile_closure(
             IForm::Let(var) => {
                 visit_let(var, asm, env, Context::ValueAt(dst), state);
             }
+            IForm::Fix(fix) => {
+                visit_fix(
+                    asm,
+                    &fix.lhs,
+                    &fix.rhs,
+                    &fix.body,
+                    env,
+                    Context::ValueAt(dst),
+                    state,
+                );
+            }
             IForm::LetValues(letv) => {
                 visit_let_values(letv, asm, env, state, Context::ValueAt(dst));
             }
@@ -607,6 +689,7 @@ pub fn compile_closure(
             IForm::Call(call) => {
                 asm.maybe_source(call.src);
                 let env = push_frame(env.clone());
+
                 let mut tmp = for_push(asm, &call.proc, &env, state);
                 for arg in call.args.iter() {
                     tmp = for_push(asm, arg, &tmp, state);
@@ -663,6 +746,7 @@ pub fn compile_closure(
                             let init = for_value(asm, &args[1], env, state);
                             asm.emit_vector_fill(0, init.idx as _);
                         }
+                        asm.emit_mov(dst as _, 0);
                     }
 
                     _ => {
@@ -842,6 +926,18 @@ pub fn compile_closure(
                 None
             }
             IForm::Let(var) => visit_let(var, asm, env, Context::Effect, state),
+            IForm::Fix(fix) => {
+                visit_fix(
+                    asm,
+                    &fix.lhs,
+                    &fix.rhs,
+                    &fix.body,
+                    &env,
+                    Context::Effect,
+                    state,
+                );
+                None
+            }
             IForm::Const(_) | IForm::Lambda(_) | IForm::It | IForm::LRef(_) => None,
             IForm::Call(call) => {
                 asm.maybe_source(call.src);
@@ -967,6 +1063,17 @@ pub fn compile_closure(
             IForm::Seq(seq) => visit_seq(seq, asm, env, Context::Tail, state),
             IForm::Let(var) => {
                 visit_let(var, asm, env, Context::Tail, state);
+            }
+            IForm::Fix(fix) => {
+                visit_fix(
+                    asm,
+                    &fix.lhs,
+                    &fix.rhs,
+                    &fix.body,
+                    env,
+                    Context::Tail,
+                    state,
+                );
             }
             IForm::Call(call) => {
                 asm.maybe_source(call.src);
@@ -1312,6 +1419,10 @@ static PRIMITIVES: Lazy<HashMap<&'static str, Primitive>> = Lazy::new(|| {
 
         ("undefined?", 1, true, true, asm, args => {
             asm.emit_is_undefined(args[0] as _, args[1] as _);
+        })
+
+        ("undefined", 1, false, true, asm, args => {
+            asm.emit_make_immediate(args[0] as _, Value::encode_undefined_value().get_raw() as _);
         })
 
         ("char?", 1, true, true, asm, args => {

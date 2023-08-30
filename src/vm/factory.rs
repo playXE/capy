@@ -99,7 +99,7 @@ impl Thread {
 
             let reference = transmute::<_, ObjectReference>(mem);
             mutator.post_alloc(reference, size, semantics);
-
+            
             Value::encode_object_value(ScmCellRef(transmute(reference)))
         }
     }

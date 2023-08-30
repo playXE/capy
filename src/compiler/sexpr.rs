@@ -3,7 +3,7 @@ use std::{collections::HashMap, hash::Hash};
 use crate::{
     gc_protect,
     runtime::{
-        object::{scm_set_car, scm_set_cdr, scm_symbol_str, scm_vector_set},
+        object::{scm_set_car, scm_set_cdr, scm_symbol_str, scm_vector_set, scm_string_str, scm_car, scm_cdr, scm_vector_length, scm_vector_ref},
         symbol::scm_intern,
         value::Value,
     },
@@ -903,10 +903,13 @@ pub fn sexpr_to_value(thread: &mut Thread, sexpr: &Sexpr) -> Value {
         Sexpr::Null => Value::encode_null_value(),
         Sexpr::Undefined => Value::encode_undefined_value(),
         Sexpr::Bytevector(bv) => thread.make_bytevector_from_slice::<false>(bv),
-
         Sexpr::Symbol(x) => *x,
         Sexpr::String(x) => thread.make_string::<false>(x),
-        _ => todo!(),
+        Sexpr::Identifier(id) => {
+            let sym = unwrap_identifier(id.clone());
+            sym
+        }
+        _ => todo!("{}", sexpr),
     }
 }
 
@@ -918,3 +921,39 @@ pub struct SourceLoc {
 }
 
 pub type SourceInfo = HashMap<EqSexpr, SourceLoc>;
+
+
+pub fn value_to_sexpr(val: Value) -> Option<Sexpr> {
+    Some(if val.is_int32() {
+        Sexpr::Fixnum(val.get_int32())
+    } else if val.is_double() {
+        Sexpr::Flonum(val.get_double())
+    } else if val.is_null() {
+        Sexpr::Null
+    } else if val.is_undefined() {
+        Sexpr::Undefined
+    } else if val.is_boolean() {
+        Sexpr::Boolean(val.get_bool())
+    } else if val.is_char() {
+        Sexpr::Char(val.get_char())
+    } else if val.is_string() {
+        Sexpr::String(P(scm_string_str(val).to_string()))
+    } else if val.is_symbol() {
+        Sexpr::Symbol(val)
+    } else if val.is_pair() {
+        let car = value_to_sexpr(scm_car(val))?;
+        let cdr = value_to_sexpr(scm_cdr(val))?;
+
+        Sexpr::Pair(P((car, cdr)))
+    } else if val.is_vector() {
+        let mut vec = vec![Sexpr::Null; scm_vector_length(val) as usize];
+        
+        for i in 0..vec.len() {
+            vec[i] = value_to_sexpr(scm_vector_ref(val, i as _))?;
+        }
+
+        Sexpr::Vector(P(vec))
+    } else {
+        todo!()
+    })
+}

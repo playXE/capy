@@ -32,6 +32,7 @@ fn main() {
     let mut interner = NoIntern;
 
     let mut toplevel_seq = vec![];
+    let env = define_syntax();
     let mut source_info = HashMap::new();
     for filename in args.iter() {
         let src = match std::fs::read_to_string(filename) {
@@ -41,9 +42,9 @@ fn main() {
                 std::process::exit(1);
             }
         };
-
+        println!("Compiling {}...", filename);
         let mut parser = Parser::new(&mut interner, &src, false);
-        let env = define_syntax();
+        
         loop {
             if parser.finished() {
                 break;
@@ -99,7 +100,9 @@ fn main() {
     let lam = P(IForm::Lambda(toplevel_lambda));
     
     let mut bcode = vec![];
-
+    let mut out = termcolor::StandardStream::stderr(termcolor::ColorChoice::Never);
+    lam.pretty_print::<true>(&mut out).unwrap();
+    println!();
     compile_bytecode(lam, &mut bcode);
 
     match std::fs::write("boot.capy", bcode) {

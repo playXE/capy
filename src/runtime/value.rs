@@ -1,12 +1,15 @@
 use std::{hash::Hash, mem::transmute};
 
 use mmtk::{
-    memory_manager::object_reference_write,
     util::Address,
     vm::{edge_shape::SimpleEdge, EdgeVisitor},
 };
 
-use crate::{runtime::object::*, vm::thread::Thread, compiler::{tree_il::LVar, P}};
+use crate::{
+    compiler::{tree_il::LVar, P},
+    runtime::object::*,
+    vm::thread::Thread,
+};
 
 use super::{
     object::TypeId,
@@ -366,8 +369,7 @@ impl Value {
         unsafe {
             debug_assert!(src.is_object());
             if other.is_object() {
-                object_reference_write(
-                    thr.mutator(),
+                thr.reference_write(
                     transmute(src),
                     transmute::<_, SimpleEdge>(self),
                     transmute(other),
@@ -467,8 +469,15 @@ impl std::fmt::Display for Value {
             write!(f, "#<box {}>", self.cast_as::<ScmBox>().value)
         } else if self.is_program() {
             write!(f, "#<program at {:p}>", self.cast_as::<ScmProgram>().vcode)
+        } else if self.is_empty() {
+            write!(f, "#<empty>")
         } else {
-            write!(f, "#<unknown {:x}:{:?}>", self.get_raw(), self.get_object().header().type_id())
+            write!(
+                f,
+                "#<unknown {:x}:{:?}>",
+                self.get_raw(),
+                self.get_object().header().type_id()
+            )
         }
     }
 }

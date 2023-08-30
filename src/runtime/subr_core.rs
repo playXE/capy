@@ -1,4 +1,6 @@
-use crate::{raise_exn, vm::thread::Thread};
+use std::collections::HashMap;
+
+use crate::{raise_exn, vm::{thread::Thread, scm_virtual_machine}, compiler::{sexpr::{value_to_sexpr, Sexpr}, expand, Cenv, tree_il::il_to_core_form}, runtime::environment::ScmEnvironment};
 
 use super::{
     arith::scm_to_u32,
@@ -432,8 +434,30 @@ extern "C-unwind" fn string_ge(_thread: &mut Thread, rest: &mut Value) -> Value 
     Value::encode_bool_value(true)
 }
 
-extern "C-unwind" fn raw_raise(thread: &mut Thread, val: &mut Value) -> Value {
+extern "C-unwind" fn raw_raise(_thread: &mut Thread, val: &mut Value) -> Value {
     std::panic::resume_unwind(Box::new(*val))
+}
+
+extern "C-unwind" fn core_preprocess(thread: &mut Thread, code: &mut Value) -> Value {
+    let Some(sexpr) = value_to_sexpr(*code) else {
+        raise_exn!(Fail, &[], "%core-preprocess: invalid source code")
+    };
+    let synenv = scm_virtual_machine().interaction_environment.cast_as::<ScmEnvironment>().syntactic_environment.lock(true);
+
+    let cenv = Cenv {
+        frames: Sexpr::Null, 
+        source_loc: &HashMap::new(),
+        syntax_env: synenv.clone()
+    };
+    let il = match expand::pass1(&sexpr, &cenv) {
+        Ok(il) => il,
+        Err(err) => {
+            drop(synenv);
+            raise_exn!(Fail, &[], "failed to expand source code: {}", err)
+        }
+    };
+
+    il_to_core_form(thread, &il)
 }
 
 pub(crate) fn init() {
@@ -457,6 +481,7 @@ pub(crate) fn init() {
     scm_define_subr("string<=?", 0, 0, 1, Subr::F1(string_le));
     scm_define_subr("string>=?", 0, 0, 1, Subr::F1(string_ge));
     scm_define_subr("%raise", 1, 0, 0, Subr::F1(raw_raise));
+    scm_define_subr("%core-preprocess", 1, 0, 0, Subr::F1(core_preprocess));
 
     super::subr_hash::init();
     super::struct_::init();

@@ -12,7 +12,7 @@ pub mod pass3;
 pub mod primitives;
 pub mod synrules;
 pub mod tree_il;
-pub mod expandv2;
+pub mod fix_letrec;
 
 use std::collections::HashMap;
 
@@ -293,14 +293,15 @@ pub fn compile(
     opt: bool,
 ) -> Result<P<IForm>, String> {
     let expanded = expand::pass1(sexpr, cenv)?;
-
-    let immut = assignment_elimination::assignment_elimination(expanded);
+    let fixed = fix_letrec::pass_fix_letrec(expanded);
+    let immut = assignment_elimination::assignment_elimination(fixed);
     let immut = resolve_primitives(immut);
-    if  opt {
+    /*if  opt {
         let opt = pass2::pass2(immut, recover_loops)?;
 
         Ok(opt)
     } else {
         Ok(immut)
-    }
+    }*/
+    Ok(immut)
 }

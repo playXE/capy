@@ -84,6 +84,16 @@ fn assignment_elimination_rec(mut tree: P<IForm>) -> P<IForm> {
             tree
         }
 
+        IForm::Fix(fix) => {
+            // fix forms do not have mutable variables
+            for rhs in &mut fix.rhs {
+                rhs.body = assignment_elimination_rec(rhs.body.clone());
+            }
+
+            fix.body = assignment_elimination_rec(fix.body.clone());
+            tree
+        }
+
         IForm::Call(call) => {
             for arg in &mut call.args {
                 *arg = assignment_elimination_rec(arg.clone());
@@ -243,6 +253,14 @@ fn assignment_elimination_substitute(
     substitute: &HashMap<P<LVar>, P<LVar>>,
 ) -> P<IForm> {
     match &mut *tree {
+        IForm::Fix(fix) => {
+            for rhs in &mut fix.rhs {
+                rhs.body = assignment_elimination_substitute(rhs.body.clone(), substitute);
+            }
+
+            fix.body = assignment_elimination_substitute(fix.body.clone(), substitute);
+            tree
+        }
         IForm::LRef(lref) => {
             if let Some(new_lvar) = substitute.get(&lref.lvar) {
                 lref.lvar = new_lvar.clone();

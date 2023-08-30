@@ -26,12 +26,8 @@
 //!
 
 use crate::{
-    compiler::expandv2::er_compare,
-    gc::objstorage::ObjHandle,
-    gc_protect,
-    runtime::object::scm_cadr,
-    scm_append1,
-    vm::{scm_virtual_machine, thread::Thread},
+    gc::objstorage::ObjHandle, gc_protect, runtime::object::scm_cadr, scm_append1,
+    vm::thread::Thread,
 };
 
 use super::{
@@ -185,12 +181,13 @@ impl PatternContext {
         if self.ellipsis.get().is_false() {
             return false; // inside (... template)
         } else if self.ellipsis.get().is_true() {
-            return er_compare(
+            /*return er_compare(
                 scm_virtual_machine().inherent_symbol(crate::vm::InherentSymbols::Ellipsis),
                 val,
                 self.synenv.get(),
                 self.env.get()
-            );
+            );*/
+            true
         } else {
             self.ellipsis.get() == val
         }

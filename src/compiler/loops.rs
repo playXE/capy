@@ -310,7 +310,9 @@ pub fn recover_loops_rec(
 
             iform
         }
-
+        IForm::Fix(fix) => {
+            todo!()
+        }
         IForm::LetValues(lvals) => {
             lvals.init = recover_loops_rec(lvals.init.clone(), penv, false, changed);
             lvals.body = recover_loops_rec(lvals.body.clone(), penv, tail, changed);

@@ -1,6 +1,17 @@
 use std::{collections::HashSet, hash::Hash};
 
-use super::{p::Weak, primitives::TRANSPARENT_PRIMITIVE_NAMES, sexpr::{Sexpr, SourceLoc}, P};
+use crate::{
+    gc_protect,
+    runtime::{object::scm_vector_set, symbol::scm_intern, value::Value},
+    vm::thread::Thread,
+};
+
+use super::{
+    p::Weak,
+    primitives::TRANSPARENT_PRIMITIVE_NAMES,
+    sexpr::{sexpr_to_value, Sexpr, SourceLoc},
+    P,
+};
 
 pub enum IForm {
     Const(Sexpr),
@@ -19,6 +30,7 @@ pub enum IForm {
     PrimRef(&'static str),
     Let(Let),
     LetValues(LetValues),
+    Fix(Fix),
     Goto(Weak<IForm>),
 }
 
@@ -140,6 +152,20 @@ impl IForm {
                 c.alternative.count_refs();
             }
 
+            Self::Fix(fix) => {
+                for lvar in fix.lhs.iter_mut() {
+                    // Reset counts
+                    lvar.ref_count = 0;
+                    lvar.set_count = 0;
+                }
+
+                for rhs in fix.rhs.iter_mut() {
+                    rhs.body.count_refs();
+                }
+
+                fix.body.count_refs();
+            }
+
             Self::Let(var) => {
                 for lvar in var.lvars.iter_mut() {
                     // Reset counts
@@ -248,7 +274,6 @@ pub struct LRef {
     pub lvar: P<LVar>,
 }
 
-
 pub struct LSet {
     pub lvar: P<LVar>,
     pub value: P<IForm>,
@@ -343,6 +368,13 @@ pub enum LetType {
     RecStar,
 }
 
+pub struct Fix {
+    pub src: Option<SourceLoc>,
+    pub lhs: Vec<P<LVar>>,
+    pub rhs: Vec<P<Lambda>>,
+    pub body: P<IForm>,
+}
+
 pub struct Let {
     pub src: Option<SourceLoc>,
     pub typ: LetType,
@@ -378,6 +410,47 @@ impl IForm {
         D::Doc: Clone,
     {
         match self {
+            IForm::Fix(fix) => {
+                // (fix ([l0 (lambda ...)] [l1 (lambda ...)] ...) <body>)
+
+                let vars_pret = allocator.intersperse(
+                    fix.lhs.iter().zip(fix.rhs.iter()).map(|(lvar, lambda)| {
+                        let lvar_pret = lvar.name.pretty(allocator);
+                        let lvar_pret = if REF {
+                            lvar_pret
+                                .append(allocator.text("."))
+                                .append(allocator.text(format!("{:p}", lvar.as_ptr())))
+                        } else {
+                            lvar_pret
+                        };
+
+                        let lambda_pret =
+                            P(IForm::Lambda(lambda.clone())).pretty::<REF, D>(allocator);
+                        allocator
+                            .text("[")
+                            .append(lvar_pret)
+                            .append(allocator.text(" "))
+                            .append(lambda_pret)
+                            .append(allocator.text("]"))
+                            .group()
+                            .parens()
+                    }),
+                    allocator.line(),
+                );
+
+                let body_pret = fix.body.pretty::<REF, _>(allocator);
+
+                allocator
+                    .text("fix")
+                    .append(allocator.space())
+                    .nest(1)
+                    .append(vars_pret)
+                    .append(allocator.line())
+                    .append(body_pret)
+                    .nest(1)
+                    .group()
+                    .parens()
+            }
             IForm::PrimCall(_, name, args) => {
                 let args_pret = allocator.intersperse(
                     args.iter().map(|arg| arg.pretty::<REF, _>(allocator)),
@@ -499,7 +572,9 @@ impl IForm {
             IForm::LetValues(vals) => {
                 let lvars_pret = allocator
                     .intersperse(
-                        vals.lvars.iter().map(|lvar| allocator.text(format!("{}.{:p}", lvar.name, lvar.as_ptr()))),
+                        vals.lvars.iter().map(|lvar| {
+                            allocator.text(format!("{}.{:p}", lvar.name, lvar.as_ptr()))
+                        }),
                         allocator.space(),
                     )
                     .group()
@@ -650,5 +725,132 @@ impl std::fmt::Debug for IForm {
         let mut writer = termcolor::Buffer::no_color();
         self.pretty_print::<false>(&mut writer).unwrap();
         write!(f, "{}", String::from_utf8_lossy(writer.as_slice()))
+    }
+}
+
+/// Converts Tree IL to core-form. Core form is used to interpret
+/// Scheme code when compiling to bytecode is not an option (REPL or `eval` for example).
+///
+/// - non recursive `Let` nodes are converted to `((lambda (<var> ...) <body>) <init> ...)`
+/// - recusive `Let` nodes are converted to `((lambda (<var> ...) (set! <var> <init>) ... <body>) (const <undefined>) ...)`
+pub fn il_to_core_form(thread: &mut Thread, iform: &IForm) -> Value {
+    match iform {
+        IForm::Const(x) => {
+            let mut val = sexpr_to_value(thread, x);
+            let vec = gc_protect!(thread => val => thread.make_vector::<false>(2, Value::encode_null_value()));
+            scm_vector_set(vec, thread, 0, scm_intern("$const"));
+            scm_vector_set(vec, thread, 1, val);
+            vec
+        }
+        IForm::Call(call) => {
+            let mut vec =
+                thread.make_vector::<false>(call.args.len() + 2, Value::encode_null_value());
+            scm_vector_set(vec, thread, 0, scm_intern("$call"));
+            let proc = gc_protect!(thread => vec => il_to_core_form(thread, &*call.proc));
+            scm_vector_set(vec, thread, 1, proc);
+            for (i, arg) in call.args.iter().enumerate() {
+                let arg = gc_protect!(thread => vec => il_to_core_form(thread, &*arg));
+                scm_vector_set(vec, thread, i as u32 + 2, arg);
+            }
+
+            vec
+        }
+
+        IForm::Define(def) => {
+            // conver it to $gset <name> <value>
+            let mut vec = thread.make_vector::<false>(3, Value::encode_null_value());
+            scm_vector_set(vec, thread, 0, scm_intern("$gset"));
+            let name = gc_protect!(thread => vec => sexpr_to_value(thread, &def.name));
+            scm_vector_set(vec, thread, 1, name);
+            let value = gc_protect!(thread => vec => il_to_core_form(thread, &*def.value));
+            scm_vector_set(vec, thread, 2, value);
+            vec
+        }
+
+        IForm::GSet(gset) => {
+            let mut vec = thread.make_vector::<false>(3, Value::encode_null_value());
+            scm_vector_set(vec, thread, 0, scm_intern("$gset"));
+            let name = gc_protect!(thread => vec => sexpr_to_value(thread, &gset.name));
+            scm_vector_set(vec, thread, 1, name);
+            let value = gc_protect!(thread => vec => il_to_core_form(thread, &*gset.value));
+            scm_vector_set(vec, thread, 2, value);
+            vec
+        }
+
+        IForm::GRef(gref) => {
+            let mut vec = thread.make_vector::<false>(2, Value::encode_null_value());
+            scm_vector_set(vec, thread, 0, scm_intern("$gref"));
+            let name = gc_protect!(thread => vec => sexpr_to_value(thread, &gref.name));
+            scm_vector_set(vec, thread, 1, name);
+            vec
+        }
+
+        IForm::LRef(lref) => {
+            let name = sexpr_to_value(thread, &lref.lvar.name);
+            let vec = thread.make_vector::<false>(2, Value::encode_null_value());
+            scm_vector_set(vec, thread, 0, scm_intern("$lref"));
+            scm_vector_set(vec, thread, 1, name);
+            vec
+        }
+
+        IForm::LSet(lset) => {
+            let mut vec = thread.make_vector::<false>(3, Value::encode_null_value());
+            scm_vector_set(vec, thread, 0, scm_intern("$lset"));
+            let name = sexpr_to_value(thread, &lset.lvar.name);
+            scm_vector_set(vec, thread, 1, name);
+            let value = gc_protect!(thread => vec => il_to_core_form(thread, &*lset.value));
+            scm_vector_set(vec, thread, 2, value);
+            vec
+        }
+
+        IForm::If(x) => {
+            let mut vec = thread.make_vector::<false>(4, Value::encode_null_value());
+            scm_vector_set(vec, thread, 0, scm_intern("$if"));
+            let cond = gc_protect!(thread => vec => il_to_core_form(thread, &*x.cond));
+            scm_vector_set(vec, thread, 1, cond);
+            let consequent = gc_protect!(thread => vec => il_to_core_form(thread, &*x.consequent));
+            scm_vector_set(vec, thread, 2, consequent);
+            let alternative =
+                gc_protect!(thread => vec => il_to_core_form(thread, &*x.alternative));
+            scm_vector_set(vec, thread, 3, alternative);
+            vec
+        }
+
+        IForm::Seq(seq) => {
+            let mut vec =
+                thread.make_vector::<false>(seq.forms.len() + 1, Value::encode_null_value());
+            scm_vector_set(vec, thread, 0, scm_intern("$seq"));
+            for (i, form) in seq.forms.iter().enumerate() {
+                let form = gc_protect!(thread => vec => il_to_core_form(thread, &*form));
+                scm_vector_set(vec, thread, i as u32 + 1, form);
+            }
+
+            vec
+        }
+
+        IForm::It => {
+            let vec = thread.make_vector::<false>(1, Value::encode_null_value());
+            scm_vector_set(vec, thread, 0, scm_intern("$it"));
+            vec
+        }
+
+        IForm::Lambda(lam) => {
+            let mut vec = thread.make_vector::<false>(4, Value::encode_null_value());
+            let mut args = gc_protect!(thread => vec => thread.make_vector::<false>(lam.lvars.len(), Value::encode_null_value()));
+
+            for (i, lvar) in lam.lvars.iter().enumerate() {
+                let name = gc_protect!(thread => vec, args => sexpr_to_value(thread, &lvar.name));
+                scm_vector_set(args, thread, i as u32, name);
+            }
+
+            let body = gc_protect!(thread => vec, args => il_to_core_form(thread, &*lam.body));
+            scm_vector_set(vec, thread, 0, scm_intern("$lambda"));
+            scm_vector_set(vec, thread, 1, args);
+            scm_vector_set(vec, thread, 2, Value::encode_bool_value(lam.optarg));
+            scm_vector_set(vec, thread, 3, body);
+            vec
+        }
+
+        _ => todo!(),
     }
 }

@@ -80,6 +80,7 @@ pub const INTERESTING_PRIMTIIVE_NAMES: &[&str] = &[
     "number?",
     "char?",
     "undefined?",
+    "undefined",
     "eof-object?",
     "bytevector?",
     "symbol->string",
@@ -274,6 +275,14 @@ pub fn resolve_primitives(mut exp: P<IForm>) -> P<IForm> {
 
         IForm::Lambda(lam) => {
             lam.body = resolve_primitives(lam.body.clone());
+            exp
+        }
+
+        IForm::Fix(fix) => {
+            for rhs in fix.rhs.iter_mut() {
+                rhs.body = resolve_primitives(rhs.body.clone());
+            }
+            fix.body = resolve_primitives(fix.body.clone());
             exp
         }
 

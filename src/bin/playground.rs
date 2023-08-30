@@ -1,4 +1,4 @@
-use capy::vm::{options::VMOptions, scm_init};
+use capy::{vm::{options::VMOptions, scm_init}, compiler::fix_letrec::{Graph, tarjan}};
 
 fn main() {
     let opts = match VMOptions::parse() {
@@ -21,4 +21,24 @@ fn main() {
     mmtk.set_option("threads", "4");
 
     let _vm = scm_init(mmtk.build(), opts.gc_plan);
+
+    let mut graph = Graph::new();
+
+    let a = graph.add_empty_vertex();
+    let b = graph.add_empty_vertex();
+    let c = graph.add_empty_vertex();
+    let d = graph.add_empty_vertex();
+    let e = graph.add_empty_vertex();
+
+    graph.add_edge(b, a);
+    graph.add_edge(a, c);
+    graph.add_edge(c, b);
+    graph.add_edge(a, d);
+    graph.add_edge(d, e);
+
+    let sccs = graph.tarjan_sccs();
+
+    for scc in sccs {
+        println!("SCC: {:?}", scc);
+    }
 }

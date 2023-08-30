@@ -2,13 +2,13 @@ use crate::{
     compiler::{Denotation, SyntaxEnv, P},
      gc_protect,
     runtime::hashtable::rehash_hashtable,
-    vm::{scm_virtual_machine, sync::mutex::Mutex, thread::Thread},
+    vm::{scm_virtual_machine, sync::mutex::Mutex, thread::Thread}, raise_exn,
 };
 
 use super::{
     hashtable::{get_hashtable, hashtable_lock, hashtable_unlock, put_hashtable},
     object::*,
-    value::Value, gsubr::{scm_make_subr, Subr}, symbol::scm_intern,
+    value::Value, gsubr::{scm_make_subr, Subr, scm_define_subr}, symbol::scm_intern,
 };
 
 
@@ -142,7 +142,7 @@ extern "C-unwind" fn interaction_environment_subr(_thread: &mut Thread, val: &mu
             scm_virtual_machine().interaction_environment = *val;
             Value::encode_undefined_value()
         } else {
-            todo!("error");
+            raise_exn!(Fail, &[], "interaction-environment: expected environment, but got {}", val)
         }
     }
 }
@@ -153,10 +153,58 @@ extern "C-unwind" fn environment_p(_thread: &mut Thread, val: &mut Value) -> Val
 
 extern "C-unwind" fn environment_name_subr(_thread: &mut Thread, val: &mut Value) -> Value {
     if !val.is_environment() {
-        todo!("error");
+        raise_exn!(Fail, &[], "environment-name: expected environment, but got {}", val);
     }
     environment_name(*val)
 }
+
+extern "C-unwind" fn environment_get_cell_proc(_: &mut Thread, env: &mut Value, key: &mut Value) -> Value {
+    if !env.is_environment() {
+        raise_exn!(Fail, &[], "environment-get-cell: expected environment, but got {}", env);
+    }
+
+    if !key.is_symbol() {
+        raise_exn!(Fail, &[], "environment-get-cell: expected symbol, but got {}", key);
+    }
+
+    let cell = environment_get_cell(*env, *key);
+    match cell {
+        Ok(cell) => cell,
+        Err(err) => match err {
+            EnvironmentError::Undefined => raise_exn!(Fail, &[], "environment-get-cell: undefined variable {}", key),
+            EnvironmentError::DenotesMacro => raise_exn!(Fail, &[], "environment-get-cell: denotes macro {}", key),
+            EnvironmentError::ImmutableEnv => raise_exn!(Fail, &[], "environment-get-cell: immutable environment {}", env),
+        },
+    }
+}
+
+extern "C-unwind" fn variable_ref_p(_: &mut Thread, val: &mut Value) -> Value {
+    Value::encode_bool_value(val.is_gloc())
+}
+
+extern "C-unwind" fn variable_ref_name(_: &mut Thread, val: &mut Value) -> Value {
+    if !val.is_gloc() {
+        raise_exn!(Fail, &[], "variable-ref-name: expected variable reference, but got {}", val);
+    }
+    val.cast_as::<ScmGloc>().name
+}
+
+extern "C-unwind" fn variable_ref_value(_: &mut Thread, val: &mut Value) -> Value {
+    if !val.is_gloc() {
+        raise_exn!(Fail, &[], "variable-ref-value: expected variable reference, but got {}", val);
+    }
+    val.cast_as::<ScmGloc>().value
+}
+
+extern "C-unwind" fn variable_ref_set_value(_: &mut Thread, val: &mut Value, new_value: &mut Value) -> Value {
+    if !val.is_gloc() {
+        raise_exn!(Fail, &[], "variable-ref-set-value: expected variable reference, but got {}", val);
+    }
+    val.cast_as::<ScmGloc>().value.assign(*val, *new_value);
+    Value::encode_undefined_value()
+}
+
+
 
 pub(crate) fn init_env() {
     let vm = scm_virtual_machine();
@@ -171,6 +219,12 @@ pub(crate) fn init_env() {
     scm_define(scm_intern("environment?"), subr);
     let subr = scm_make_subr("environment-name", 1, 0, 0, Subr::F1(environment_name_subr));
     scm_define(scm_intern("environment-name"), subr);
+    let subr = scm_make_subr("environment-get-cell", 2, 0, 0, Subr::F2(environment_get_cell_proc));
+    scm_define(scm_intern("environment-get-cell"), subr);
+    scm_define_subr("variable-ref?", 1, 0, 0, Subr::F1(variable_ref_p));
+    scm_define_subr("variable-ref-name", 1, 0, 0, Subr::F1(variable_ref_name));
+    scm_define_subr("variable-ref-value", 1, 0, 0, Subr::F1(variable_ref_value));
+    scm_define_subr("variable-ref-set-value!", 2, 0, 0, Subr::F2(variable_ref_set_value));
 
     
 }

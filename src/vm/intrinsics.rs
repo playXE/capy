@@ -31,7 +31,7 @@ pub unsafe extern "C-unwind" fn get_callee_vcode(thread: &mut Thread) -> *const 
 
     thread.interpreter().ip = frame_virtual_return_address(thread.interpreter().fp);
 
-    raise_exn!(Fail, &[], "not a procedure: {}", proc);
+    raise_exn!(Fail, &[], "not a procedure: {:?}", proc);
     //todo!("throw error: {} at {:p}<>{:p}", proc, thread.interpreter().ip, ip);
 }
 

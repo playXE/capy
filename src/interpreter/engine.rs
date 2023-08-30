@@ -4,8 +4,6 @@ use std::mem::{size_of, transmute};
 use std::ptr::null;
 
 use mmtk::memory_manager::object_reference_write;
-use mmtk::vm::edge_shape::MemorySlice;
-
 use crate::bytecode::encode::Decode;
 use crate::raise_exn;
 use crate::runtime::equality::{equal, eqv, scm_compare};
@@ -690,7 +688,7 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 let vector = sp_ref!(vector_set.dst());
                 if !vector.is_vector() {
                     sync_ip!();
-                    raise_exn!(Exn, &[], "vector-set!: expected vector, got {}", vector);
+                    raise_exn!(Exn, &[], "vector-set!: expected vector, got {:?}", vector);
                 }
                 let idx = sp_ref!(vector_set.idx());
                 if !idx.is_int32() {
@@ -817,6 +815,7 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                         sp_set!(div.dst(), Value::encode_int32(result));
                         continue;
                     }
+                    // TODO: Load `ratnum.scm` file and invoke 
                 } else {
                     todo!("slow div")
                 }
