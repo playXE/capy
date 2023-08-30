@@ -175,6 +175,15 @@ pub fn pass2_rec(
             Ok(pass2_shrink_let_frame(iform.clone(), &lvars, obody, ctx))
         }
 
+        IForm::Fix(fix) => {
+            for rhs in fix.rhs.iter_mut() {
+                rhs.body = pass2_rec(rhs.body.clone(), penv, false, ctx)?;
+            }
+
+            fix.body = pass2_rec(fix.body.clone(), penv, tail, ctx)?;
+            Ok(iform)
+        }
+
         IForm::LetValues(let_values) => {
             let_values.init = pass2_rec(let_values.init.clone(), penv, false, ctx)?;
             let_values.body = pass2_rec(let_values.body.clone(), penv, tail, ctx)?;
@@ -825,7 +834,7 @@ pub fn pass2(mut iform: P<IForm>, recover_loops: bool) -> Result<P<IForm>, Strin
         iform.count_refs();
         scan_toplevel::<true>(iform.clone()); // compute bound and free variables in each lambda
         iform = resolve_primitives(iform.clone());
-        if recover_loops {
+        if false && recover_loops {
             ctx.changed = false;
             ctx.inline = !true;
             ctx.lambda_lift = false;

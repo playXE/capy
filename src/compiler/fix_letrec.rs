@@ -3,7 +3,7 @@
 //! Oscar Waddell, Dipanwita Sarkar, and R. Kent Dybvig, as well as
 //! "Fixing Letrec (reloaded)", by Abdulaziz Ghuloum and R. Kent Dybvig.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 
 use crate::compiler::P;
 
@@ -683,10 +683,14 @@ pub fn pass_fix_letrec(mut x: P<IForm>) -> P<IForm> {
 
             IForm::Let(let_) => match let_.typ {
                 LetType::Rec => {
-                    fixing_letrec(pass, false, &let_.lvars, &let_.inits, let_.body.clone())
+                    let res = fixing_letrec(pass, false, &let_.lvars, &let_.inits, let_.body.clone());
+                    assert!(matches!(*res, IForm::Fix(_)));
+                    post_order(res, pass)
                 }
                 LetType::RecStar => {
-                    fixing_letrec(pass, true, &let_.lvars, &let_.inits, let_.body.clone())
+                    let res = fixing_letrec(pass, true, &let_.lvars, &let_.inits, let_.body.clone());
+                    assert!(matches!(*res, IForm::Fix(_)));
+                    post_order(res, pass)
                 }
 
                 LetType::Let => {
@@ -710,7 +714,12 @@ pub fn pass_fix_letrec(mut x: P<IForm>) -> P<IForm> {
                 }
                 x
             }
-            IForm::Const(_) | IForm::It | IForm::GRef(_) | IForm::Goto(_) | IForm::LRef(_) | IForm::PrimRef(_) => x,
+            IForm::Const(_)
+            | IForm::It
+            | IForm::GRef(_)
+            | IForm::Goto(_)
+            | IForm::LRef(_)
+            | IForm::PrimRef(_) => x,
         }
     }
 

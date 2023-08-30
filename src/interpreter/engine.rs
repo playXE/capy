@@ -564,7 +564,7 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 let pair = cell.cast_as::<ScmPair>();
                 pair.car = sp_ref!(cons.car());
                 pair.cdr = sp_ref!(cons.cdr());
-
+              
                 sp_set!(cons.dst(), cell);
             }
 
@@ -725,6 +725,7 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
 
                 let program = sp_ref!(program_ref_imm.src().value());
                 let var = scm_program_free_variable(program, program_ref_imm.idx());
+                //println!("{:p}: get {} at {} from {} to {}", ip, var, program_ref_imm.idx(), program_ref_imm.src(), program_ref_imm.dst());
                 sp_set!(program_ref_imm.dst(), var);
             }
 
@@ -734,6 +735,7 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
 
                 let program = sp_ref!(program_set_imm.dst().value());
                 let var = sp_ref!(program_set_imm.src());
+                //println!("{:p}: set {} at {} from {}", ip, var, program_set_imm.idx(), program_set_imm.src());
                 scm_program_set_free_variable(program, thread, program_set_imm.idx(), var);
             }
 
@@ -766,7 +768,8 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                         todo!("ovf");
                     }
                 } else {
-                    todo!("slow add {}, {}", a, b);
+                    raise_exn!(Fail, &[], "NYI: Slow add: {}, {}", a,b);
+                    //todo!("slow add {}, {}", a, b);
                 }
             }
 

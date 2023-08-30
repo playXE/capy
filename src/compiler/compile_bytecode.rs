@@ -340,9 +340,11 @@ pub fn compile_closure(
 
         let mut free_vars = frame_base;
         for (i, var) in free_lvars.iter().enumerate() {
+           
             free_vars = push_free_var(var.clone(), i as _, free_vars);
         }
 
+   
         let closure = push_closure(free_vars);
 
         let mut env = closure;
@@ -366,7 +368,7 @@ pub fn compile_closure(
         for var in free_vars.iter() {
             let loc = lookup_lexical(var.clone(), env);
             let idx = loc.idx;
-
+            
             if loc.closure {
                 asm.emit_load_free_variable(tmp0 as _, u24::new(state.frame_size - 1), idx);
                 asm.emit_store_free_variable(u24::new(dst), tmp0 as _, free_idx);
@@ -652,8 +654,9 @@ pub fn compile_closure(
                     asm.emit_static_program(u24::new(dst), label as _);
                 } else {
                     asm.emit_make_program(0, lam.free_lvars.len() as _, label as _);
+                    
+                    init_free_vars(asm, 0, &lam.free_lvars, env, 1, state);
                     asm.emit_mov(dst as _, 0);
-                    init_free_vars(asm, dst, &lam.free_lvars, env, 0, state);
                 }
             }
 
@@ -1154,6 +1157,7 @@ pub fn compile_closure(
     let size = compute_frame_size(lam.clone());
     asm.emit_prelude(lam.reqargs + 1, lam.optarg, size);
     let env = create_initial_env(&lam.lvars, &lam.free_lvars, size as _);
+
     let mut state = State {
         data_start,
         labels: HashMap::new(),
@@ -1421,7 +1425,7 @@ static PRIMITIVES: Lazy<HashMap<&'static str, Primitive>> = Lazy::new(|| {
             asm.emit_is_undefined(args[0] as _, args[1] as _);
         })
 
-        ("undefined", 1, false, true, asm, args => {
+        ("undefined", 0, false, true, asm, args => {
             asm.emit_make_immediate(args[0] as _, Value::encode_undefined_value().get_raw() as _);
         })
 

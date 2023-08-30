@@ -5,12 +5,13 @@
 ; quite expensive to compile code to bytecode and then
 ; load it into the VM. 
 
+(define eval-core #f)
 (let ()
     (define (interpret/preprocess expr env find-global)
         (let ([node (vector-ref expr 0)])
             (cond 
                 [(eq? node '$gref) (interpret/global (vector-ref expr 1) find-global)]
-                [(eq? node '$gset) \
+                [(eq? node '$gset) 
                     (interpret/set-global 
                         (vector-ref expr 1) 
                         (interpret/preprocess (vector-ref expr 2) env find-global) 
@@ -36,16 +37,84 @@
                         (interpret/preprocess (vector-ref expr 2) env find-global)
                         (interpret/preprocess (vector-ref expr 3) env find-global))]
                 [(eq? node '$const)
+                    
                     (let ([v (vector-ref expr 1)])
                         (lambda (renv) v))]
                 [(eq? node '$it)
                     (lambda (renv) (undefined))]
                 [(eq? node '$lambda)
                     (interpret/make-proc expr env find-global)]
+                [(eq? node '$call)
+                    (interpret/invoke expr env find-global)]
+                [(eq? node '$let)
+                    (interpret/let expr env find-global)]
                 [else #f])))
+
+    (define (interpret/let expr env find-global)
+        (let ([bindings (vector-ref expr 1)] [lens (vector-length (vector-ref expr 1))])
+             
+            (let loop ([names '()] [inits '()] [i 0])
+                (if (< i lens)
+                    (loop (cons (vector-ref (vector-ref bindings i) 0) names) 
+                        (cons (cons (vector-ref (vector-ref bindings i) 0) (vector-ref (vector-ref bindings i) 1)) inits) 
+                        (+ i 1))
+                (begin 
+                    (let ([nenv (interpret/extend-env env names)]) (let (
+                        [init-seq (map (lambda (binding)
+                            (let ([assignment 
+                                (interpret/preprocess (vector '$lset (car binding) (cdr binding)) nenv find-global)])
+                                assignment)) inits)])
+                        (let ([body (interpret/preprocess (vector-ref expr 2) nenv find-global)])
+                            (lambda (renv)
+                                (let ([renv (cons (make-vector (+ 1 lens) (undefined)) renv)])
+                                (let loop ([init init-seq])
+                                    (if (null? init)
+                                        (body renv)
+                                        (begin 
+                                            ((car init) renv)
+                                            (loop (cdr init))))))))))
+                )))))
+
+    (define (interpret/invoke expr env find-global)
+        (let (
+            [rands (vector-ref expr 2)] 
+            [rator (interpret/preprocess (vector-ref expr 1) env find-global)] 
+            [len (vector-length (vector-ref expr 2))])
+            (let loop ([i 0])
+                (if (< i len)
+                    (begin 
+                        (vector-set! rands i (interpret/preprocess (vector-ref rands i) env find-global))
+                        (loop (+ i 1)))))
+
+            (cond 
+                [(eq? len 0)
+                    (lambda (renv)
+                        ((rator renv)))]
+                [(eq? len 1)
+                    (lambda (renv)
+                        ((rator renv) ((vector-ref rands 0) renv)))]
+                [(eq? len 2)
+                    (lambda (renv)
+                        ((rator renv) ((vector-ref rands 0) renv) ((vector-ref rands 1) renv)))]
+                [(eq? len 3)
+                    (lambda (renv)
+                        ((rator renv) ((vector-ref rands 0) renv) ((vector-ref rands 1) renv) ((vector-ref rands 2) renv)))]
+                [(eq? len 4)
+                    (lambda (renv)
+                        ((rator renv) ((vector-ref rands 0) renv) ((vector-ref rands 1) renv) ((vector-ref rands 2) renv) ((vector-ref rands 3) renv)))]
+                [else 
+                    (lambda (renv)
+                        ; evaluate arguments
+                        (let loop ([i 0] [proc (rator renv)])
+                            (if (< i len)
+                                (begin 
+                                    (vector-set! rands i ((vector-ref rands i) renv))
+                                    (loop (+ i 1) proc)))
+                            (apply (proc renv) (vector->list rands))))])))
     (define (interpret/var-address name env)
-        (print env)
+       
         (let r-loop ([env env] [i 0])
+        
             (if (null? env)
                 #f 
                 (let a-loop ([rib (car env)] [j 1])
@@ -55,6 +124,7 @@
                         [else 
                             (a-loop (cdr rib) (+ j 1))])))))
     (define (interpret/extend-env env names)
+        
         (cons names env))
 
     (define (interpret/global name find-global)
@@ -100,6 +170,7 @@
             [else (interpret/lexical-n rib offset)]))
     (define (interpret/set-lexical rib offset expr)
         (lambda (env0)
+           
             (let loop ([rib rib] [env env0])
                 (if (= rib 0)
                     (vector-set! (car env) offset (expr env0))
@@ -177,7 +248,7 @@
             [args (vector-ref expr 1)]
             [optarg (vector-ref expr 2)]
             [body (interpret/preprocess (vector-ref expr 3) (interpret/extend-env env (vector->list (vector-ref expr 1))) find-global)])
-                (print expr)
+               
                 (if optarg 
                     (interpret/lambda-dot (vector-length args) body)
                     (cond 
@@ -188,10 +259,16 @@
                         [(= (vector-length args) 4) (interpret/lambda4 body)]
                         [else (interpret/lambda-n (vector-length args) body)]))))
 
+    (define default-find-global (lambda (name)
+        (environment-get-cell (interaction-environment) name)))
 
+    ; (eval-core expr #:optional env)
+    (set! eval-core (lambda (x . rest)
+        (let ([env (if (null? rest) (interaction-environment) (car rest))])
 
-    (let ([tree-il (%core-preprocess '(lambda (x y) y))])
-        (print interpret/preprocess)
-        (let ([closure (interpret/preprocess tree-il '() (lambda (name) #f))])
-            (print ((closure '()) 1 2))))
-)
+            (let ([clos (interpret/preprocess (%core-preprocess x) '() (lambda (name) (environment-get-cell env name)))])
+                (clos '()))))))
+
+(eval-core '(let ([x 42]) (print "hello and" x)))
+(garbage-collect)
+(eval-core '(let ([x 42]) (print "hello and" x)))

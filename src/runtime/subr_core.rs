@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::{raise_exn, vm::{thread::Thread, scm_virtual_machine}, compiler::{sexpr::{value_to_sexpr, Sexpr}, expand, Cenv, tree_il::il_to_core_form}, runtime::environment::ScmEnvironment};
+use crate::{raise_exn, vm::{thread::Thread, scm_virtual_machine}, compiler::{sexpr::{value_to_sexpr, Sexpr}, expand, Cenv, tree_il::il_to_core_form, fix_letrec}, runtime::environment::ScmEnvironment};
 
 use super::{
     arith::scm_to_u32,
@@ -456,8 +456,9 @@ extern "C-unwind" fn core_preprocess(thread: &mut Thread, code: &mut Value) -> V
             raise_exn!(Fail, &[], "failed to expand source code: {}", err)
         }
     };
-
-    il_to_core_form(thread, &il)
+    let fixed = fix_letrec::pass_fix_letrec(il);
+  
+    il_to_core_form(thread, &fixed)
 }
 
 pub(crate) fn init() {

@@ -296,12 +296,12 @@ pub fn compile(
     let fixed = fix_letrec::pass_fix_letrec(expanded);
     let immut = assignment_elimination::assignment_elimination(fixed);
     let immut = resolve_primitives(immut);
-    /*if  opt {
+    if  opt {
         let opt = pass2::pass2(immut, recover_loops)?;
 
         Ok(opt)
     } else {
         Ok(immut)
-    }*/
-    Ok(immut)
+    }
+    
 }

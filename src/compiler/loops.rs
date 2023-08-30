@@ -113,23 +113,19 @@ fn is_captured(x: &IForm, in_lambda: bool, lvar: P<LVar>) -> bool {
     }
 }
 
-/// The binding must contain a single procedure and the body must be
-/// a call to that procedure. The name of the procedure must furthermore not be misused. None of the
-/// formals of the proccase can be captured in the lambda body..
-fn is_optimizeable_loop(binding: &Let) -> bool {
-    if binding.typ != LetType::Rec {
-        return false;
-    }
+/// The fix must contain a single procedure and the body must be
+/// a call to one of the proccases in that procedure. The name of
+/// the procedure must furthermore not be misused. None of the
+/// formals of the proccase can be captured in the proccase.
 
-    if binding.lvars.len() != 1 {
-        return false;
-    }
+fn is_optimizeable_loop(lhs: &[P<LVar>], rhs: &[P<Lambda>], body: P<IForm>) -> bool {
+   if lhs.len() != 1 {
+    return false;
+   }
 
-    let lvar = binding.lvars[0].clone();
+    let lvar = lhs[0].clone();
+    let init = rhs[0].clone();
 
-    let init = lvar.initval.clone().unwrap();
-
-    let body = binding.body.clone();
 
     let body = match &*body {
         IForm::Seq(seq) if seq.forms.len() == 1 => seq.forms[0].clone(),
@@ -138,7 +134,7 @@ fn is_optimizeable_loop(binding: &Let) -> bool {
     };
 
     match (&*init, &*body) {
-        (IForm::Lambda(lam), IForm::Call(call)) => {
+        (lam, IForm::Call(call)) => {
             let proc_is_loop_ref =
                 call.proc.is_lref() && call.proc.lref_lvar().unwrap().as_ptr() == lvar.as_ptr();
             let var_is_immutable = lvar.is_immutable() && !lvar.boxed;
@@ -259,7 +255,7 @@ pub fn recover_loops_rec(
         }
         IForm::PrimRef(_) => iform,
         IForm::Let(var) => {
-            let iter = var.lvars.iter().zip(var.inits.iter());
+            /*let iter = var.lvars.iter().zip(var.inits.iter());
 
             let mut lvars = vec![];
             let mut inits = vec![];
@@ -308,10 +304,34 @@ pub fn recover_loops_rec(
             var.body = obody;
             var.inits = inits;
 
+            iform*/
+            for init in var.inits.iter_mut() {
+                *init = recover_loops_rec(init.clone(), penv, false, changed);
+            }
+            var.body = recover_loops_rec(var.body.clone(), penv, tail, changed);
+
             iform
         }
         IForm::Fix(fix) => {
-            todo!()
+            for rhs in fix.rhs.iter_mut() {
+                rhs.body = recover_loops_rec(rhs.body.clone(), penv, false, changed);
+            }
+            if is_optimizeable_loop(&fix.lhs, &fix.rhs, fix.body.clone()) {
+                let body = match &*fix.body {
+                    IForm::Seq(seq) if seq.forms.len() == 1 => seq.forms[0].clone(),
+                    IForm::Call(_) => fix.body.clone(),
+                    _ => unreachable!(),
+                };
+
+                let args = match &*body {
+                    IForm::Call(call) => call.args.clone(),
+                    _ => unreachable!(),
+                };
+                optimize_loop(fix.lhs[0].clone(), fix.rhs[0].clone(), args)
+            } else {
+                fix.body = recover_loops_rec(fix.body.clone(), penv, tail, changed);
+                iform
+            }
         }
         IForm::LetValues(lvals) => {
             lvals.init = recover_loops_rec(lvals.init.clone(), penv, false, changed);
@@ -323,7 +343,6 @@ pub fn recover_loops_rec(
 }
 
 fn optimize_loop(
-    _binding: P<IForm>,
     lvar: P<LVar>,
     lambda: P<Lambda>,
     init: Vec<P<IForm>>,

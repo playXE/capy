@@ -361,7 +361,7 @@ pub enum CallFlag {
     Jump,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum LetType {
     Let,
     Rec,
@@ -744,14 +744,17 @@ pub fn il_to_core_form(thread: &mut Thread, iform: &IForm) -> Value {
         }
         IForm::Call(call) => {
             let mut vec =
-                thread.make_vector::<false>(call.args.len() + 2, Value::encode_null_value());
+                thread.make_vector::<false>(3, Value::encode_null_value());
             scm_vector_set(vec, thread, 0, scm_intern("$call"));
             let proc = gc_protect!(thread => vec => il_to_core_form(thread, &*call.proc));
             scm_vector_set(vec, thread, 1, proc);
+            let mut rands = gc_protect!(thread => vec => thread.make_vector::<false>(call.args.len(), Value::encode_null_value()));
             for (i, arg) in call.args.iter().enumerate() {
-                let arg = gc_protect!(thread => vec => il_to_core_form(thread, &*arg));
-                scm_vector_set(vec, thread, i as u32 + 2, arg);
+                let arg = gc_protect!(thread => vec, rands => il_to_core_form(thread, &*arg));
+                scm_vector_set(rands, thread, i as u32, arg);
             }
+
+            scm_vector_set(vec, thread, 2, rands);
 
             vec
         }
@@ -848,6 +851,54 @@ pub fn il_to_core_form(thread: &mut Thread, iform: &IForm) -> Value {
             scm_vector_set(vec, thread, 1, args);
             scm_vector_set(vec, thread, 2, Value::encode_bool_value(lam.optarg));
             scm_vector_set(vec, thread, 3, body);
+            vec
+        }
+
+        IForm::Let(var) => {
+            assert_eq!(var.typ, LetType::Let, "all recursive lets should be converted to <fix>");
+
+            let mut vec = thread.make_vector::<false>(3, Value::encode_null_value());
+            let mut args = gc_protect!(thread => vec => thread.make_vector::<false>(var.lvars.len(), Value::encode_null_value()));
+            
+            for (i, (lvar, init)) in var.lvars.iter().zip(var.inits.iter()).enumerate() {
+                let mut binding = gc_protect!(thread => vec, args => thread.make_vector::<false>(2, Value::encode_null_value()));
+                let name = gc_protect!(thread => vec, args, binding => sexpr_to_value(thread, &lvar.name));
+                let init = gc_protect!(thread => vec, args, binding => il_to_core_form(thread, &*init));
+                scm_vector_set(binding, thread, 0, name);
+                scm_vector_set(binding, thread, 1, init);
+                scm_vector_set(args, thread, i as u32, binding);
+            }
+
+            let body = gc_protect!(thread => vec, args => il_to_core_form(thread, &*var.body));
+            scm_vector_set(vec, thread, 0, scm_intern("$let"));
+            scm_vector_set(vec, thread, 1, args);
+            scm_vector_set(vec, thread, 2, body);
+
+            vec
+        }
+
+        IForm::Fix(fix) => {
+            // (fix ([l0 (lambda ...)] [l1 (lambda ...)] ...) <body>)
+            // =>
+            // #(fix ([l0 (lambda ...)] [l1 (lambda ...)] ...) <body>)
+            
+            let mut vec = thread.make_vector::<false>(3, Value::encode_null_value());
+            let mut args = gc_protect!(thread => vec => thread.make_vector::<false>(fix.lhs.len(), Value::encode_null_value()));
+
+            for (i, (lhs, rhs)) in fix.lhs.iter().zip(fix.rhs.iter()).enumerate() {
+                let mut binding = gc_protect!(thread => vec, args => thread.make_vector::<false>(2, Value::encode_null_value()));
+                let name = gc_protect!(thread => vec, args, binding => sexpr_to_value(thread, &lhs.name));
+                let lambda = gc_protect!(thread => vec, args, binding => il_to_core_form(thread, &IForm::Lambda(rhs.clone())));
+                scm_vector_set(binding, thread, 0, name);
+                scm_vector_set(binding, thread, 1, lambda);
+                scm_vector_set(args, thread, i as u32, binding);
+            }
+
+            let body = gc_protect!(thread => vec, args => il_to_core_form(thread, &*fix.body));
+            scm_vector_set(vec, thread, 0, scm_intern("$fix"));
+            scm_vector_set(vec, thread, 1, args);
+            scm_vector_set(vec, thread, 2, body);
+
             vec
         }
 

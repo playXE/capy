@@ -150,6 +150,8 @@
         list2
         (cons (car list1) (append2 (cdr list1) list2))))
 
+(define (cdr x) (cdr x))
+(define (car x) (car x))
 (define (caar x) (car (car x)))
 (define (cadr x) (car (cdr x)))
 (define (cdar x) (cdr (car x)))
@@ -178,6 +180,16 @@
 (define (cddadr x) (cdr (cdr (car (cdr x)))))
 (define (cdddar x) (cdr (cdr (cdr (car x)))))
 (define (cddddr x) (cdr (cdr (cdr (cdr x)))))
+
+(define (pair? x) (pair? x))
+(define (null? x) (null? x))
+(define (vector? x) (vector? x))
+(define (string? x) (string? x))
+(define (number? x) (number? x))
+(define (boolean? x) (boolean? x))
+(define (symbol? x) (symbol? x))
+(define (char? x) (char? x))
+
 
 (define (+ . args)
     (let loop ([args args] [acc 0])
@@ -223,14 +235,6 @@
 (define <= (make-nary-comparison '<= (lambda (a b) (<= a b))))
 (define >= (make-nary-comparison '>= (lambda (a b) (>= a b))))
 
-(define (pair? x) (pair? x))
-(define (null? x) (null? x))
-(define (vector? x) (vector? x))
-(define (string? x) (string? x))
-(define (number? x) (number? x))
-(define (boolean? x) (boolean? x))
-(define (symbol? x) (symbol? x))
-(define (char? x) (char? x))
 
 (define (list->vector list)
     (let ([len (length list)])
@@ -253,3 +257,23 @@
         (if (null? list)
             len
             (loop (cdr list) (+ len 1)))))
+
+(define (map proc list)
+    (let loop ([list list] [acc '()])
+        (if (null? list)
+            (reverse acc)
+            (loop (cdr list) (cons (proc (car list)) acc)))))
+
+(define (call-with-values producer consumer)
+    ; use call-with-values call that is recognized by 
+    ; compielr as a `let-values` form. This is a hack
+    ; to define call-with-values in Scheme instead of
+    ; in the VM using raw bytecode. Output Tree IL is like this:
+    ;
+    ; (let-values ((results (producer))
+    ;           (apply consumer results))) 
+    
+    (call-with-values 
+        (lambda () (producer))
+        (lambda results
+            (apply consumer results))))

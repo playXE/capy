@@ -69,6 +69,18 @@ pub fn scan<const RESET_CALL: bool>(
             scan::<RESET_CALL>(&var.body, fs, bs, toplevel, labels);
         }
 
+        IForm::Fix(fix) => {
+            for lhs in fix.lhs.iter() {
+                bs.insert(lhs.clone());
+            }
+            for rhs in fix.rhs.iter() {
+                let lam = IForm::Lambda(rhs.clone());
+                scan::<RESET_CALL>(&P(lam), fs, bs, toplevel, labels);
+            }
+            scan::<RESET_CALL>(&fix.body, fs, bs, toplevel, labels);
+            
+        }
+
         IForm::Call(_) => {
             let mut iform = iform.clone();
             let IForm::Call(ref mut call) = &mut *iform else {
@@ -126,6 +138,7 @@ pub fn scan<const RESET_CALL: bool>(
             scan::<RESET_CALL>(&vals.body, fs, bs, toplevel, labels);
         }
 
+       
         _ => (),
     }
 }
@@ -207,6 +220,13 @@ pub fn pass2_substitute(mut iform: P<IForm>, map: &HashMap<P<LVar>, P<LVar>>) {
         IForm::LetValues(vals) => {
             pass2_substitute(vals.init.clone(), map);
             pass2_substitute(vals.body.clone(), map);
+        }
+
+        IForm::Fix(fix) => {
+            for rhs in fix.rhs.iter_mut() {
+                pass2_substitute(rhs.body.clone(), map);
+            }
+            pass2_substitute(fix.body.clone(), map);
         }
         _ => (),
     }
