@@ -5,7 +5,7 @@ use self::stackframe::{
 use crate::{
     gc::virtual_memory::{PlatformVirtualMemory, VirtualMemory, VirtualMemoryImpl},
     runtime::{
-        control::{restore_cont_jump, ScmContinuation, Winder},
+        control::{restore_cont_jump, ScmContinuation},
         value::Value,
     },
     vm::{
@@ -18,11 +18,11 @@ use mmtk::{
     util::Address,
     vm::{edge_shape::SimpleEdge, RootsWorkFactory},
 };
-use rsetjmp::{JumpBuf, setjmp};
+use rsetjmp::{setjmp, JumpBuf};
 use std::{
     mem::size_of,
     panic::AssertUnwindSafe,
-    ptr::{null, null_mut, NonNull},
+    ptr::{null, null_mut},
     sync::atomic::AtomicU64,
 };
 pub mod engine;
@@ -52,7 +52,6 @@ pub struct InterpreterState {
     pub mra_after_abort: *const u8,
     pub stack_memory: VirtualMemory,
     pub registers: *mut JumpBuf,
-    pub winders: Option<NonNull<Winder>>,
     pub engines: [unsafe extern "C-unwind" fn(&mut Thread) -> Value; 1],
 }
 
@@ -83,7 +82,6 @@ impl InterpreterState {
             mra_after_abort: null(),
             engines: [engine::rust_engine],
             stack_memory: VirtualMemory::null(),
-            winders: None,
         };
         unsafe {
             this.prepare_stack();
@@ -121,10 +119,6 @@ impl InterpreterState {
         }
 
         self.return_unused_stack_to_os();
-        if let Some(ref mut winders) = self.winders {
-            let edge = SimpleEdge::from_address(Address::from_ptr(winders));
-            edges.push(edge);
-        }
         factory.create_process_edge_roots_work(edges);
     }
 
@@ -200,7 +194,6 @@ impl InterpreterState {
             self.sp = new_sp;
         }
     }
-
 }
 
 fn allocate_stack(mut size: usize) -> VirtualMemory {
@@ -257,7 +250,6 @@ pub fn scm_call_n(thread: &mut Thread, proc: Value, args: &[Value]) -> Result<Va
             let mut registers = JumpBuf::new();
             let resume = setjmp(&mut registers);
             let call = AssertUnwindSafe(|| {
-                
                 if resume == 0 {
                     thread.interpreter().ip = get_callee_vcode(thread);
                 } else {

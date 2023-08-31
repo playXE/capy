@@ -1,4 +1,7 @@
-use capy::{vm::{options::VMOptions, scm_init}, compiler::fix_letrec::{Graph, tarjan}};
+use capy::{
+    compiler::fix_letrec::Graph,
+    vm::{options::VMOptions, scm_init},
+};
 
 fn main() {
     let opts = match VMOptions::parse() {

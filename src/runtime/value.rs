@@ -6,7 +6,6 @@ use mmtk::{
 };
 
 use crate::{
-    compiler::{tree_il::LVar, P},
     runtime::object::*,
     vm::thread::Thread,
 };
@@ -386,22 +385,6 @@ impl Value {
 
     pub fn syntax_expander<'a>(self) -> &'a mut ScmSyntaxExpander {
         self.cast_as()
-    }
-
-    pub fn is_identifier(self) -> bool {
-        self.type_of() == TypeId::Identifier
-    }
-
-    pub fn identifier<'a>(self) -> &'a mut ScmIdentifier {
-        self.cast_as()
-    }
-
-    pub fn is_lvar(self) -> bool {
-        self.type_of() == TypeId::LVar
-    }
-
-    pub fn lvar(self) -> P<LVar> {
-        self.cast_as::<ScmLVar>().lvar.clone()
     }
 }
 

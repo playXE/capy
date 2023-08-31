@@ -834,7 +834,7 @@ pub fn pass2(mut iform: P<IForm>, recover_loops: bool) -> Result<P<IForm>, Strin
         iform.count_refs();
         scan_toplevel::<true>(iform.clone()); // compute bound and free variables in each lambda
         iform = resolve_primitives(iform.clone());
-        if false && recover_loops {
+        if recover_loops {
             ctx.changed = false;
             ctx.inline = !true;
             ctx.lambda_lift = false;

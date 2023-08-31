@@ -7,10 +7,7 @@ use mmtk::{
 };
 
 use crate::{
-    compiler::{
-        tree_il::{IForm, LVar},
-        P,
-    },
+    compiler::{tree_il::IForm, P},
     runtime::value::Value,
     utils::bitfield::BitField,
     vm::thread::Thread,
@@ -33,12 +30,13 @@ pub enum TypeId {
     // heap obj start
     Pair,
     Vector,
+    Tuple,
+    Struct,
     String,
     Symbol,
     Program,
     Box,
     GLOC,
-    Tuple,
     Bytevector,
     Port,
     Subroutine,
@@ -51,20 +49,9 @@ pub enum TypeId {
     WeakHashTable,
     WeakHashTableRec,
     WeakMapping,
-    Module,
-    IForm,
-    LVar,
-    ILambda,
-    ICLambda,
-    SyntaxRules,
-    SyntaxPattern,
     SyntaxExpander,
-    PVRef,
-    Identifier,
-    Winder,
     VMCont,
     Continuation,
-    Struct,
 }
 
 pub const HASH_STATE_UNHASHED: u8 = 0;
@@ -359,20 +346,69 @@ pub fn scm_vector_set(vector: Value, thread: &mut Thread, index: u32, value: Val
     let vec = v.cast_as::<ScmVector>();
 
     if value.is_object() {
-        /*unsafe {
-            object_reference_write(
-                thread.mutator(),
+        unsafe {
+            thread.reference_write(
                 transmute(vector),
                 transmute(vec.values.as_mut_ptr().add(index as usize)),
                 transmute(value),
             );
-        }*/ 
-        unsafe {
-            thread.reference_write(transmute(vector), transmute(vec.values.as_mut_ptr().add(index as usize)), transmute(value));
         }
     } else {
         unsafe {
             vec.values.as_mut_ptr().add(index as usize).write(value);
+        }
+    }
+}
+
+pub fn scm_tuple_ref(tuple: Value, index: u32) -> Value {
+    debug_assert!(tuple.is_tuple());
+    unsafe {
+        debug_assert!(
+            index < tuple.get_object().cast_as::<ScmTuple>().length as u32,
+            "index out of bounds: {} >= {}",
+            index,
+            tuple.get_object().cast_as::<ScmTuple>().length as u32
+        );
+        tuple
+            .get_object()
+            .cast_as::<ScmTuple>()
+            .values
+            .as_ptr()
+            .add(index as usize)
+            .read()
+    }
+}
+
+pub fn scm_tuple_ref_mut<'a>(tuple: Value, index: u32) -> &'a mut Value {
+    debug_assert!(tuple.is_tuple());
+    unsafe {
+        debug_assert!(index < tuple.get_object().cast_as::<ScmTuple>().length as u32);
+        &mut *tuple
+            .get_object()
+            .cast_as::<ScmTuple>()
+            .values
+            .as_mut_ptr()
+            .add(index as usize)
+    }
+}
+
+pub fn scm_tuple_set(tuple: Value, thread: &mut Thread, index: u32, value: Value) {
+    debug_assert!(tuple.is_tuple());
+    debug_assert!(index < tuple.get_object().cast_as::<ScmTuple>().length as u32);
+    let mut tup = tuple.get_object();
+    let tup = tup.cast_as::<ScmTuple>();
+
+    if value.is_object() {
+        unsafe {
+            thread.reference_write(
+                transmute(tuple),
+                transmute(tup.values.as_mut_ptr().add(index as usize)),
+                transmute(value),
+            );
+        }
+    } else {
+        unsafe {
+            tup.values.as_mut_ptr().add(index as usize).write(value);
         }
     }
 }
@@ -492,8 +528,7 @@ pub fn scm_program_set_free_variable(
 
     if value.is_object() {
         unsafe {
-            object_reference_write(
-                thread.mutator(),
+            thread.reference_write(
                 transmute(program),
                 transmute(prog.free.as_mut_ptr().add(index as usize)),
                 transmute(value),
@@ -665,6 +700,13 @@ pub struct ScmVector {
 }
 
 #[repr(C)]
+pub struct ScmTuple {
+    pub header: ScmCellHeader,
+    pub length: usize,
+    pub values: [Value; 0],
+}
+
+#[repr(C)]
 pub struct ScmSymbol {
     pub header: ScmCellHeader,
     pub length: u32,
@@ -720,25 +762,11 @@ pub struct ScmSubroutine {
     pub env: [Value; 0],
 }
 
-#[repr(C)]
-pub struct ScmIdentifier {
-    pub header: ScmCellHeader,
-    pub name: Value,
-    pub frames: Value,
-    pub env: Value,
-}
-
 /// Syntax expander expands Scheme into Tree IL.
 #[repr(C)]
 pub struct ScmSyntaxExpander {
     pub header: ScmCellHeader,
     pub callback: fn(Value, Value) -> P<IForm>,
-}
-
-#[repr(C)]
-pub struct ScmLVar {
-    pub(crate) header: ScmCellHeader,
-    pub(crate) lvar: P<LVar>,
 }
 
 pub enum CleanerType {

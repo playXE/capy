@@ -100,11 +100,54 @@
               pair
               (loop (cdr alist)))))))
 
-(define (list-ref list i)
-    (let loop ((list list) (i i))
+
+(define (list-ref ls i)
+    (let loop ((ls ls) (i i))
         (if (= i 0)
-            (car list)
-            (loop (cdr list) (- i 1)))))
+            (car ls)
+            (loop (cdr ls) (- i 1)))))
+
+(define (list-head ls n)
+    (if (= n 0)
+        '()
+        (cons (car ls) (list-head (cdr ls) (- n 1)))))
+
+(define (list-tail ls n)
+    (if (= n 0)
+        ls
+        (list-tail (cdr ls) (- n 1))))
+
+(define (split-at ls n)
+    (values (list-head ls n) (list-tail ls n)))
+
+
+
+(define any1
+  (lambda (pred lst)
+    (and (not (null? lst))
+         (or (pred (car lst)) (any1 pred (cdr lst))))))
+
+(define any2
+  (lambda (pred lst1 lst2)
+    (and (not (null? lst1))
+         (not (null? lst2))
+         (or (pred (car lst1) (car lst2))
+             (any2 pred (cdr lst1) (cdr lst2))))))
+
+(define filter
+  (lambda (pred lst)
+    (let loop ((lst lst))
+      (cond ((null? lst) '())
+            ((pred (car lst)) (cons (car lst) (loop (cdr lst))))
+            (else (loop (cdr lst)))))))
+
+(define partition
+  (lambda (pred lst)
+    (let loop ((lst lst) (acc1 '()) (acc2 '()))
+      (cond ((null? lst) (values (reverse acc1) (reverse acc2)))
+            ((pred (car lst)) (loop (cdr lst) (cons (car lst) acc1) acc2))
+            (else (loop (cdr lst) acc1 (cons (car lst) acc2)))))))
+
 
 (define (zero? x)
     (= x 0))
@@ -197,12 +240,11 @@
             acc
             (loop (cdr args) (+ (car args) acc)))))
 
-(define (- . args)
-    (let loop ([args args] [acc 0])
+(define (- arg . args)
+    (let loop ([diff arg] [args args])
         (if (null? args)
-            acc
-            (loop (cdr args) (- acc (car args))))))
-
+            diff
+            (loop (- diff (car args)) (cdr args)))))
 (define (* . args)
     (let loop ([args args] [acc 1])
         (if (null? args)
@@ -217,7 +259,6 @@
 
 (define (make-nary-comparison name binop)
     (lambda (a b . rest)
-        (print a b rest)
         (if (null? rest)
             (binop a b)
             (if (binop a b)

@@ -21,15 +21,15 @@ use mmtk::{
 use crate::{
     interpreter::stackframe::StackElement,
     runtime::{
-        control::{ScmContinuation, VMCont, Winder},
+        control::{ScmContinuation, VMCont},
         environment::ScmEnvironment,
         hashtable::{
             inplace_rehash_weak_hashtable, HashTableRec, ScmHashTable, WeakHashTableRec,
             WeakHashtable,
         },
-        module::ScmModule,
         object::*,
-        value::Value, synrules::{SyntaxRules, SyntaxRuleBranch, SyntaxPattern, PVRef}, struct_::ScmStruct,
+        struct_::ScmStruct,
+        value::Value,
     },
     utils::round_up,
     vm::{
@@ -140,6 +140,10 @@ impl ObjectModel<CapyVM> for ScmObjectModel {
                     scm_vector_length(reference.into()) as usize * size_of::<Value>()
                         + size_of::<ScmVector>()
                 }
+
+                TypeId::Tuple => {
+                    reference.cast_as::<ScmTuple>().length * size_of::<Value>() + size_of::<ScmTuple>()
+                }
                 TypeId::String => {
                     let len = scm_string_str(reference.into()).len() + 1;
                     let size = size_of::<ScmString>();
@@ -181,12 +185,8 @@ impl ObjectModel<CapyVM> for ScmObjectModel {
                 },
 
                 TypeId::WeakHashTable => size_of::<WeakHashtable>(),
-
-                TypeId::Module => size_of::<ScmModule>(),
-                TypeId::Identifier => size_of::<ScmIdentifier>(),
                 TypeId::SyntaxExpander => size_of::<ScmSyntaxExpander>(),
                 TypeId::Environment => size_of::<ScmEnvironment>(),
-                TypeId::Winder => size_of::<Winder>(),
                 TypeId::VMCont => {
                     let base = size_of::<VMCont>();
 
@@ -194,14 +194,7 @@ impl ObjectModel<CapyVM> for ScmObjectModel {
                 }
                 TypeId::Continuation => size_of::<ScmContinuation>(),
                 TypeId::WeakMapping => size_of::<ScmWeakMapping>(),
-                TypeId::SyntaxRules => {
-                    let synrules = reference.cast_as::<SyntaxRules>();
 
-                    size_of::<SyntaxRules>() + synrules.num_rules as usize * size_of::<SyntaxRuleBranch>()
-                }
-
-                TypeId::SyntaxPattern => size_of::<SyntaxPattern>(),
-                TypeId::PVRef => size_of::<PVRef>(),
                 TypeId::Struct => {
                     let s = reference.cast_as::<ScmStruct>();
                     let sz = s.vtable.cast_as::<ScmStruct>().vtable_size() as usize;
@@ -479,6 +472,16 @@ impl Scanning<CapyVM> for ScmScanning {
                 }
             }
 
+            TypeId::Tuple => {
+                let tuple = reference.cast_as::<ScmTuple>();
+                for i in 0..tuple.length {
+                    unsafe {
+                        let value = &mut*tuple.values.as_mut_ptr().add(i as _);
+                        value.visit_edge(edge_visitor);
+                    }
+                }
+            }
+
             TypeId::HashTableRec => unsafe {
                 let datum = reference.to_address().to_mut_ptr::<HashTableRec>();
                 let n = (*datum).capacity;
@@ -503,28 +506,11 @@ impl Scanning<CapyVM> for ScmScanning {
                 hash_table.rehash = true;
             }
 
-            TypeId::Module => {
-                reference.cast_as::<ScmModule>().visit_edges(edge_visitor);
-            }
-
-            TypeId::Identifier => {
-                let id = reference.cast_as::<ScmIdentifier>();
-                id.env.visit_edge(edge_visitor);
-                id.name.visit_edge(edge_visitor);
-                id.frames.visit_edge(edge_visitor);
-            }
-
             TypeId::Environment => {
                 let env = reference.cast_as::<ScmEnvironment>();
                 env.ht.visit_edge(edge_visitor);
                 env.name.visit_edge(edge_visitor);
             }
-
-            TypeId::Winder => {
-                let winder = reference.cast_as::<Winder>();
-                winder.visit_edges(edge_visitor);
-            }
-
             TypeId::VMCont => {
                 let cont = reference.cast_as::<VMCont>();
                 unsafe {
@@ -583,23 +569,6 @@ impl Scanning<CapyVM> for ScmScanning {
                     .push(object);
             }
 
-            TypeId::SyntaxPattern => {
-                let synpat = reference.cast_as::<SyntaxPattern>();
-
-                synpat.vars.visit_edge(edge_visitor);
-            }
-
-            TypeId::SyntaxRules => {
-                let synrules = reference.cast_as::<SyntaxRules>();
-
-                synrules.name.visit_edge(edge_visitor);
-                synrules.env.visit_edge(edge_visitor);
-                synrules.syntax_env.visit_edge(edge_visitor);
-                for branch in synrules.iter_mut() {
-                    branch.pattern.visit_edge(edge_visitor);
-                    branch.template.visit_edge(edge_visitor);
-                }
-            }
             TypeId::Struct => {
                 let s = reference.cast_as::<ScmStruct>();
                 s.visit_edges(edge_visitor);
@@ -695,7 +664,7 @@ impl Scanning<CapyVM> for ScmScanning {
             }
         });
 
-        // do not process finalization queue, we can resurrect objects from ephemerons
+        // do not process finalization queue yet, we can resurrect objects from ephemerons
         if enqueued {
             return true;
         }
@@ -719,7 +688,6 @@ impl Scanning<CapyVM> for ScmScanning {
             }
         }
 
-        
         let mut weakhashtabs = vm.weakhashtable_registry.lock(false);
 
         while let Some(ht) = weakhashtabs.pop() {

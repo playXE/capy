@@ -1,7 +1,7 @@
 use std::{
     hint::black_box,
     mem::{size_of, transmute},
-    ptr::{null, NonNull},
+    ptr::null,
 };
 
 use mmtk::{
@@ -18,10 +18,7 @@ use super::{
     value::Value,
 };
 use crate::runtime::gsubr::{scm_define_subr, Subr};
-use crate::runtime::object::{
-    scm_car, scm_cdr, scm_program_free_variable, scm_program_num_free_vars, scm_set_car,
-    scm_set_cdr,
-};
+use crate::runtime::object::{scm_program_free_variable, scm_program_num_free_vars};
 use crate::{
     bytecode::opcodes::{
         OP_ASSERT_NARGS_EE, OP_CAPTURE_CONTINUATION, OP_CONTINUATION_CALL, OP_MOV, OP_TAIL_CALL,
@@ -35,79 +32,6 @@ use crate::{
     vm::thread::Thread,
 };
 
-/// Winder
-///
-/// Represents `dynamic-wind` frame. Entries are linked in a list.
-#[repr(C)]
-pub struct Winder {
-    pub(crate) header: ScmCellHeader,
-    pub(crate) id: i32,
-    pub(crate) before: Value,
-    pub(crate) after: Value,
-    pub(crate) handlers: Option<Value>,
-    pub(crate) next: Option<NonNull<Winder>>,
-}
-
-impl Winder {
-    pub(crate) fn visit_edges<EV: EdgeVisitor<SimpleEdge>>(&mut self, visitor: &mut EV) {
-        self.before.visit_edge(visitor);
-        self.after.visit_edge(visitor);
-        if let Some(handlers) = self.handlers.as_mut() {
-            handlers.visit_edge(visitor);
-        }
-
-        if let Some(next) = self.next.as_mut() {
-            let edge = SimpleEdge::from_address(Address::from_mut_ptr(next));
-            visitor.visit_edge(edge);
-        }
-    }
-
-    pub fn len(&self) -> usize {
-        let mut ws = Some(self);
-        let mut n = 0;
-        while let Some(w) = ws {
-            n += 1;
-            unsafe {
-                ws = w.next.map(|p| p.as_ref());
-            }
-        }
-
-        n
-    }
-
-    pub fn common_prefix<'a>(this: &'a Self, other: &'a Self) -> Option<&'a Self> {
-        let mut that = Some(other);
-        let mut this = Some(this);
-
-        let this_len = this.as_ref().map(|w| w.len()).unwrap_or(0);
-        let that_len = that.as_ref().map(|w| w.len()).unwrap_or(0);
-
-        unsafe {
-            if this_len > that_len {
-                for _ in that_len..this_len {
-                    this = this.unwrap().next.map(|p| p.as_ref());
-                }
-            }
-
-            if that_len > this_len {
-                for _ in this_len..that_len {
-                    that = that.unwrap().next.map(|p| p.as_ref());
-                }
-            }
-
-            while let Some((this_winder, that_winder)) = this
-                .zip(that)
-                .filter(|(x, y)| *x as *const Winder != *y as *const Winder)
-            {
-                this = this_winder.next.map(|p| p.as_ref());
-                that = that_winder.next.map(|p| p.as_ref());
-            }
-
-            this
-        }
-    }
-}
-
 #[repr(C)]
 pub struct VMCont {
     pub header: ScmCellHeader,
@@ -118,7 +42,6 @@ pub struct VMCont {
     pub sp_offset: isize,
     pub stack_size: usize,
     pub stack_bottom: *mut StackElement,
-    pub winders: Option<NonNull<Winder>>,
 }
 
 impl VMCont {
@@ -140,10 +63,6 @@ impl VMCont {
 
             sp = frame_previous_sp(fp);
             fp = frame_dynamic_link(fp);
-        }
-        if let Some(winders) = self.winders.as_mut() {
-            let edge = SimpleEdge::from_address(Address::from_mut_ptr(winders));
-            visitor.visit_edge(edge);
         }
     }
 }
@@ -220,7 +139,6 @@ unsafe fn capture_stack(
             sp_offset: stack_top.offset_from(sp),
             stack_bottom: (mem + size_of::<VMCont>()).to_mut_ptr(),
             stack_size,
-            winders: thread.interpreter().winders,
         });
         let cont = &mut *vm_cont;
         std::ptr::copy_nonoverlapping(sp, cont.stack_bottom, stack_size);
@@ -354,187 +272,6 @@ pub(crate) unsafe fn capture_continuation(thread: &mut Thread) -> Value {
     thread.make_continuation_trampoline(cont)
 }
 
-extern "C-unwind" fn wind_down(thread: &mut Thread) -> Value {
-    let winder = thread.interpreter().winders;
-    if let Some(winder) = winder.map(|x| unsafe { x.as_ref() }) {
-        thread.interpreter().winders = winder.next;
-        let mut winder_val: Value = unsafe { transmute(winder) };
-        let cons = gc_protect!(thread => winder_val => thread.make_cons::<false>(Value::encode_null_value(), Value::encode_null_value()));
-
-        scm_set_car(cons, thread, winder_val.cast_as::<Winder>().before);
-        scm_set_cdr(cons, thread, winder_val.cast_as::<Winder>().after);
-
-        cons
-    } else {
-        Value::encode_null_value()
-    }
-}
-
-fn current_handlers(thread: &mut Thread) -> Option<Value> {
-    let mut winders = thread.interpreter().winders;
-
-    while let Some(winder) = winders {
-        if let Some(handler) = unsafe { winder.as_ref().handlers } {
-            return Some(handler);
-        }
-        winders = unsafe { winder.as_ref().next };
-    }
-
-    None
-}
-
-extern "C-unwind" fn wind_up(
-    thread: &mut Thread,
-    before: &mut Value,
-    after: &mut Value,
-    handlers: &mut Value,
-) -> Value {
-    let mut handlers = if handlers.is_undefined() {
-        None
-    } else {
-        Some(*handlers)
-    };
-
-    if let Some(ref mut handlers) = handlers {
-        let mut cur = current_handlers(thread).unwrap_or(Value::encode_null_value());
-
-        let mut h = *handlers;
-        let pair = gc_protect!(thread => h, cur => thread.make_cons::<false>(Value::encode_null_value(), Value::encode_null_value()));
-
-        scm_set_car(pair, thread, h);
-        scm_set_cdr(pair, thread, cur);
-        *handlers = pair;
-    }
-    let mut handlers = handlers.unwrap_or(Value::encode_null_value());
-    let winder = gc_protect!(thread => handlers => thread.make_winder());
-    winder.cast_as::<Winder>().after = *after;
-    winder.cast_as::<Winder>().before = *before;
-    winder.cast_as::<Winder>().handlers = if handlers.is_null() {
-        None
-    } else {
-        Some(handlers)
-    };
-    winder.cast_as::<Winder>().next = thread.interpreter().winders.take();
-    thread.interpreter().winders =
-        Some(unsafe { NonNull::new_unchecked(winder.cast_as::<Winder>()) });
-    Value::encode_undefined_value()
-}
-
-extern "C-unwind" fn wind_up_raise(
-    thread: &mut Thread,
-    before: &mut Value,
-    after: &mut Value,
-) -> Value {
-    match current_handlers(thread) {
-        Some(val) if val.is_pair() => {
-            wind_up(
-                thread,
-                before,
-                after,
-                &mut scm_cdr(val), /* will be rooted inside the wind_up */
-            );
-            println!("val {}", val);
-            scm_car(val)
-        }
-
-        _ => Value::encode_bool_value(false),
-    }
-}
-
-extern "C-unwind" fn dynamic_wind_base(thread: &mut Thread, cont: &mut Value) -> Value {
-    if !cont.is_program() {
-        return Value::encode_bool_value(false);
-    }
-
-    if scm_program_num_free_vars(*cont) != 1 {
-        return Value::encode_bool_value(false);
-    }
-
-    let cont = scm_program_free_variable(*cont, 0);
-    if cont.type_of() != TypeId::Continuation {
-        return Value::encode_bool_value(false);
-    }
-
-    
-
-    let base = thread
-        .interpreter()
-        .winders
-        .zip(
-            cont.cast_as::<ScmContinuation>()
-                .vm_cont
-                .cast_as::<VMCont>()
-                .winders,
-        )
-        .and_then(|(x, y)| unsafe { Winder::common_prefix(x.as_ref(), y.as_ref()) });
-    Value::encode_int32(base.map(|x| x.id).unwrap_or(0) as _)
-}
-
-extern "C-unwind" fn dynamic_wind_current(thread: &mut Thread) -> Value {
-    Value::encode_int32(
-        thread
-            .interpreter()
-            .winders
-            .map(|x| unsafe { x.as_ref().id })
-            .unwrap_or(0) as _,
-    )
-}
-
-extern "C-unwind" fn dynamic_winders(thread: &mut Thread, cont: &mut Value) -> Value {
-    if !cont.is_program() {
-        return Value::encode_bool_value(false);
-    }
-
-    if scm_program_num_free_vars(*cont) != 1 {
-        return Value::encode_bool_value(false);
-    }
-
-    let cont = scm_program_free_variable(*cont, 0);
-    if cont.type_of() != TypeId::Continuation {
-        return Value::encode_bool_value(false);
-    }
-
-    let mut base = thread
-        .interpreter()
-        .winders
-        .map(|x| Value::encode_object_value(unsafe { transmute(x) }))
-        .unwrap_or(Value::encode_null_value());
-    let mut res = Value::encode_null_value();
-    let mut next = cont
-        .cast_as::<ScmContinuation>()
-        .vm_cont
-        .cast_as::<VMCont>()
-        .winders
-        .map(|x| Value::encode_object_value(unsafe { transmute(x) }))
-        .unwrap_or(Value::encode_null_value());
-
-    loop {
-        
-        // if let Some(winder) = next.filter(|&x| base.is_none() || x != base.unwrap()) {
-        if next != base && !(next.is_null() || base.is_null()) {
-           
-            let mut cons = gc_protect!(thread => base, next, res => thread.make_cons::<false>(Value::encode_null_value(), Value::encode_null_value()));
-            scm_set_car(cons, thread, next.cast_as::<Winder>().before);
-            scm_set_cdr(cons, thread, next.cast_as::<Winder>().after);
-
-            let cons2 = gc_protect!(thread => cons, base, next, res => thread.make_cons::<false>(Value::encode_null_value(), Value::encode_null_value()));
-
-            scm_set_car(cons2, thread, cons);
-            scm_set_cdr(cons2, thread, res);
-
-            next = next
-                .cast_as::<Winder>()
-                .next
-                .map(|x| Value::encode_object_value(unsafe { transmute(x) }))
-                .unwrap_or(Value::encode_null_value());
-        } else {
-            break;
-        }
-    }
-
-    res
-}
-
 extern "C-unwind" fn continuation_p(_thread: &mut Thread, cont: &mut Value) -> Value {
     if !cont.is_program() {
         return Value::encode_bool_value(false);
@@ -561,12 +298,6 @@ pub(crate) fn init() {
     let unsafe_call_cc =
         Thread::current().make_program::<true>(CALL_WITH_CURRENT_CONTINUATION_CODE.as_ptr(), 0);
     scm_define(scm_intern("%call/cc"), unsafe_call_cc);
-    scm_define_subr("%wind-down", 0, 0, 0, Subr::F0(wind_down));
-    scm_define_subr("%wind-up", 2, 1, 0, Subr::F3(wind_up));
-    scm_define_subr("%wind-up-raise", 2, 0, 0, Subr::F2(wind_up_raise));
-    scm_define_subr("%dynamic-wind-base", 1, 0, 0, Subr::F1(dynamic_wind_base));
-    scm_define_subr("%dynamic-wind-current", 0, 0, 0, Subr::F0(dynamic_wind_current));
-    scm_define_subr("%dynamic-winders", 1, 0, 0, Subr::F1(dynamic_winders));
     scm_define_subr("continuation?", 1, 0, 0, Subr::F1(continuation_p));
     scm_define_subr("error", 0, 0, 1, Subr::F1(error));
 }

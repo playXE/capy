@@ -735,7 +735,6 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
 
                 let program = sp_ref!(program_set_imm.dst().value());
                 let var = sp_ref!(program_set_imm.src());
-                //println!("{:p}: set {} at {} from {}", ip, var, program_set_imm.idx(), program_set_imm.src());
                 scm_program_set_free_variable(program, thread, program_set_imm.idx(), var);
             }
 
@@ -746,7 +745,7 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 let nfree = make_program.nfree();
                 let offset = make_program.offset();
                 let label = ip.offset(offset as isize);
-
+                // allocate program object with `nfree` slots for captured variables
                 let program = thread.make_program::<false>(label, nfree);
                 program.cast_as::<ScmProgram>().constants =
                     current_program!().cast_as::<ScmProgram>().constants;

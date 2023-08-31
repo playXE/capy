@@ -1,22 +1,15 @@
 use std::mem::{size_of, transmute};
-use std::sync::atomic::{Ordering, AtomicI32};
-
 use mmtk::{util::ObjectReference, AllocationSemantics, MutatorContext};
 
 use crate::compiler::tree_il::IForm;
-use crate::runtime::control::Winder;
-use crate::runtime::hashtable::{WeakHashTableRec, WeakHashtable, lookup_hashtable_size};
-use crate::runtime::object::ScmWeakMapping;
-use crate::runtime::synrules::{PVRef, SyntaxPattern, SyntaxRuleBranch, SyntaxRules};
+use crate::runtime::hashtable::{lookup_hashtable_size, WeakHashTableRec, WeakHashtable};
+use crate::runtime::object::{ScmWeakMapping, ScmTuple};
 use crate::{
-    compiler::{expand::define_syntax, tree_il::LVar, P},
+    compiler::{expand::define_syntax, P},
     gc_protect,
     runtime::{
         environment::ScmEnvironment,
-        object::{
-            CleanerType, Header, ScmCellHeader, ScmCellRef, ScmIdentifier, ScmLVar,
-            ScmSyntaxExpander, TypeId,
-        },
+        object::{Header, ScmCellHeader, ScmCellRef, ScmSyntaxExpander, TypeId},
     },
     runtime::{
         hashtable::{
@@ -99,7 +92,45 @@ impl Thread {
 
             let reference = transmute::<_, ObjectReference>(mem);
             mutator.post_alloc(reference, size, semantics);
-            
+
+            Value::encode_object_value(ScmCellRef(transmute(reference)))
+        }
+    }
+
+    pub fn make_tuple<const IMMORTAL: bool>(&mut self, len: usize, fill: Value) -> Value {
+        let size = round_up(size_of::<ScmTuple>() + len * size_of::<Value>(), 8, 0);
+
+        unsafe {
+            let semantics = if IMMORTAL {
+                AllocationSemantics::Immortal
+            } else {
+                AllocationSemantics::Default
+            };
+            let mutator = self.mutator();
+            let mem = mutator.alloc(size, size_of::<usize>(), 0, semantics);
+
+            mem.store(ScmTuple {
+                header: ScmCellHeader {
+                    as_header: Header {
+                        type_id: TypeId::Tuple,
+                        pad: [0; 4],
+                        flags: 0,
+                    },
+                },
+                length: len,
+                values: [],
+            });
+            let mut cursor = (*mem.to_mut_ptr::<ScmTuple>()).values.as_mut_ptr();
+            let end = cursor.add(len);
+
+            while cursor < end {
+                cursor.write(fill);
+                cursor = cursor.add(1);
+            }
+
+            let reference = transmute::<_, ObjectReference>(mem);
+            mutator.post_alloc(reference, size, semantics);
+
             Value::encode_object_value(ScmCellRef(transmute(reference)))
         }
     }
@@ -522,75 +553,6 @@ impl Thread {
         }
     }
 
-    pub fn make_identifier<const IMMORTAL: bool>(&mut self) -> Value {
-        let size = size_of::<ScmIdentifier>();
-
-        let mutator = self.mutator();
-        let semantics = if IMMORTAL {
-            AllocationSemantics::Immortal
-        } else {
-            AllocationSemantics::Default
-        };
-        let mem = mutator.alloc(size, size_of::<usize>(), 0, semantics);
-
-        unsafe {
-            mem.store(ScmIdentifier {
-                header: ScmCellHeader {
-                    as_header: Header {
-                        type_id: TypeId::SyntaxExpander,
-                        pad: [0; 4],
-                        flags: 0,
-                    },
-                },
-                name: Value::encode_undefined_value(),
-                frames: Value::encode_null_value(),
-                env: Value::encode_null_value(),
-            });
-
-            let reference = transmute::<_, ObjectReference>(mem);
-            mutator.post_alloc(reference, size, semantics);
-
-            Value::encode_object_value(ScmCellRef(transmute(reference)))
-        }
-    }
-
-    pub fn make_lvar(&mut self, lvar: P<LVar>) -> Value {
-        let size = size_of::<ScmIdentifier>();
-
-        let mutator = self.mutator();
-        let semantics = AllocationSemantics::Default;
-        let mem = mutator.alloc(size, size_of::<usize>(), 0, semantics);
-
-        unsafe {
-            mem.store(ScmLVar {
-                header: ScmCellHeader {
-                    as_header: Header {
-                        type_id: TypeId::LVar,
-                        pad: [0; 4],
-                        flags: 0,
-                    },
-                },
-                lvar,
-            });
-
-            let reference = transmute::<_, ObjectReference>(mem);
-            mutator.post_alloc(reference, size, semantics);
-            self.register_cleaner(
-                reference,
-                CleanerType::Drop({
-                    fn drop_lvar(reference: *mut ()) {
-                        let lvar = unsafe { transmute::<_, *mut ScmLVar>(reference) };
-                        unsafe {
-                            core::ptr::drop_in_place(lvar);
-                        }
-                    }
-
-                    drop_lvar
-                }),
-            );
-            Value::encode_object_value(ScmCellRef(transmute(reference)))
-        }
-    }
 
     pub fn make_environment(&mut self, name: Value) -> Value {
         let size = round_up(size_of::<ScmEnvironment>(), 8, 0);
@@ -627,31 +589,6 @@ impl Thread {
         }
     }
 
-    pub fn make_winder(&mut self) -> Value {
-        static ID: AtomicI32 = AtomicI32::new(i32::MIN);
-        let size = round_up(size_of::<Winder>(), 8, 0);
-
-        let mem = self
-            .mutator()
-            .alloc(size, 8, 0, AllocationSemantics::Default);
-
-        unsafe {
-            mem.store(Winder {
-                id: ID.fetch_add(1, Ordering::AcqRel)+1,
-                after: Value::encode_null_value(),
-                before: Value::encode_null_value(),
-                handlers: None,
-                next: None,
-                header: ScmCellHeader::new(TypeId::Winder),
-            });
-            let reference = ObjectReference::from_raw_address(mem);
-            self.mutator()
-                .post_alloc(reference, size, AllocationSemantics::Default);
-
-            Value::encode_object_value(transmute(reference))
-        }
-    }
-
     pub fn make_weakmapping(&mut self) -> Value {
         let size = round_up(size_of::<ScmWeakMapping>(), 8, 0);
 
@@ -665,98 +602,6 @@ impl Thread {
                 value: Value::encode_bool_value(false),
                 header: ScmCellHeader::new(TypeId::WeakMapping),
             });
-
-            let reference = ObjectReference::from_raw_address(mem);
-            self.mutator()
-                .post_alloc(reference, size, AllocationSemantics::Default);
-
-            Value::encode_object_value(transmute(reference))
-        }
-    }
-
-    pub fn make_pvref(&mut self, level: i16, count: i16) -> Value {
-        let pvref_size = round_up(size_of::<PVRef>(), 8, 0);
-
-        unsafe {
-            let mem = self
-                .mutator()
-                .alloc(pvref_size, 8, 0, AllocationSemantics::Default);
-            mem.store(PVRef {
-                header: ScmCellHeader::new(TypeId::PVRef),
-                level,
-                count,
-            });
-
-            let reference = ObjectReference::from_raw_address(mem);
-            self.mutator()
-                .post_alloc(reference, pvref_size, AllocationSemantics::Default);
-
-            Value::encode_object_value(transmute(reference))
-        }
-    }
-
-    pub fn make_syntax_pattern(
-        &mut self,
-        mut pattern: Value,
-        mut vars: Value,
-        level: i16,
-        num_following_items: i16,
-    ) -> Value {
-        let size = round_up(size_of::<SyntaxPattern>(), 8, 0);
-        unsafe {
-            let mem = gc_protect!(self => pattern, vars => self.mutator().alloc(size, 8, 0, AllocationSemantics::Default));
-            mem.store(SyntaxPattern {
-                header: ScmCellHeader::new(TypeId::SyntaxPattern),
-                vars,
-                pattern,
-                level,
-                num_following_items,
-            });
-
-            let reference = ObjectReference::from_raw_address(mem);
-            self.mutator()
-                .post_alloc(reference, size, AllocationSemantics::Default);
-
-            Value::encode_object_value(transmute(reference))
-        }
-    }
-
-    pub fn make_syntax_rules(
-        &mut self,
-        mut name: Value,
-        mut env: Value,
-        mut synenv: Value,
-        num_rules: u32,
-    ) -> Value {
-        let size = round_up(
-            size_of::<SyntaxRules>() + num_rules as usize * size_of::<SyntaxRuleBranch>(),
-            8,
-            0,
-        );
-
-        unsafe {
-            let mem = gc_protect!(self => name, env, synenv => self.mutator().alloc(size, 8, 0, AllocationSemantics::Default));
-            mem.store(SyntaxRules {
-                header: ScmCellHeader::new(TypeId::SyntaxRules),
-                name,
-                max_num_pvars: 0,
-                env,
-                syntax_env: synenv,
-                num_rules,
-                rules: [],
-            });
-
-            let rules_addr = (*mem.to_mut_ptr::<SyntaxRules>()).rules.as_mut_ptr();
-
-            for i in 0..num_rules {
-                let rule = rules_addr.add(i as usize);
-                rule.write(SyntaxRuleBranch {
-                    pattern: Value::encode_undefined_value(),
-                    template: Value::encode_undefined_value(),
-                    num_pvars: 0,
-                    max_level: 0,
-                })
-            }
 
             let reference = ObjectReference::from_raw_address(mem);
             self.mutator()

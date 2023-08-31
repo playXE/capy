@@ -255,56 +255,6 @@ pub fn recover_loops_rec(
         }
         IForm::PrimRef(_) => iform,
         IForm::Let(var) => {
-            /*let iter = var.lvars.iter().zip(var.inits.iter());
-
-            let mut lvars = vec![];
-            let mut inits = vec![];
-
-            for (lvar, init) in iter {
-                lvars.push(lvar.clone());
-                inits.push(recover_loops_rec(init.clone(), penv, false, changed));
-            }
-
-            lvars
-                .iter_mut()
-                .zip(inits.iter_mut())
-                .for_each(|(lvar, init)| {
-                    lvar.initval = Some(init.clone());
-                });
-
-            let obody = recover_loops_rec(var.body.clone(), penv, tail, changed);
-
-            var.lvars = lvars;
-
-            if is_optimizeable_loop(var) {
-                let IForm::Lambda(lambda) = &*var.inits[0] else {
-                    unreachable!()
-                };
-
-                let body = var.body.clone();
-
-                let body = match &*body {
-                    IForm::Seq(seq) if seq.forms.len() == 1 => seq.forms[0].clone(),
-                    IForm::Call(_) => body,
-                    _ => unreachable!(),
-                };
-
-                let args = match &*body {
-                    IForm::Call(call) => call.args.clone(),
-                    _ => unreachable!(),
-                };
-                return optimize_loop(
-                    oform,
-                    var.lvars.first().cloned().unwrap(),
-                    lambda.clone(),
-                    args,
-                );
-            }
-
-            var.body = obody;
-            var.inits = inits;
-
-            iform*/
             for init in var.inits.iter_mut() {
                 *init = recover_loops_rec(init.clone(), penv, false, changed);
             }
@@ -496,3 +446,4 @@ fn optimize_loop(
 
     binding
 }
+

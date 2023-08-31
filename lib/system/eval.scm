@@ -48,6 +48,11 @@
                     (interpret/invoke expr env find-global)]
                 [(eq? node '$let)
                     (interpret/let expr env find-global)]
+                [(eq? node '$seq)
+                    (let loop ([i 1] [len (vector-length expr)] [exprs '()])
+                        (if (< i len)
+                            (loop (+ i 1) len (cons (interpret/preprocess (vector-ref expr i) env find-global) exprs))
+                            (interpret/sequence (reverse exprs))))]
                 [else #f])))
 
     (define (interpret/let expr env find-global)
@@ -94,6 +99,7 @@
                     (lambda (renv)
                         ((rator renv) ((vector-ref rands 0) renv)))]
                 [(eq? len 2)
+                    
                     (lambda (renv)
                         ((rator renv) ((vector-ref rands 0) renv) ((vector-ref rands 1) renv)))]
                 [(eq? len 3)
@@ -269,6 +275,10 @@
             (let ([clos (interpret/preprocess (%core-preprocess x) '() (lambda (name) (environment-get-cell env name)))])
                 (clos '()))))))
 
-(eval-core '(let ([x 42]) (print "hello and" x)))
-(garbage-collect)
-(eval-core '(let ([x 42]) (print "hello and" x)))
+(eval-core 
+    '(define (fac x)
+        (if (< x 2)
+            1
+            (* x (fac (- x 1))))))
+
+(print (condition-message (make-message-condition "hello!")))
