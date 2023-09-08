@@ -27,11 +27,12 @@ use std::mem::size_of;
 use mmtk::{
     memory_manager::object_reference_write,
     util::{Address, ObjectReference},
-    vm::{edge_shape::SimpleEdge, EdgeVisitor, RootsWorkFactory},
+    vm::{EdgeVisitor, RootsWorkFactory},
     AllocationSemantics, MutatorContext,
 };
 
 use crate::{
+    gc::ObjEdge,
     raise_exn,
     runtime::object::{scm_symbol_str, ScmCellRef},
     vm::{scm_virtual_machine, thread::Thread},
@@ -132,7 +133,8 @@ impl ScmStruct {
     pub fn slot_set(&mut self, thread: &mut Thread, index: usize, val: Value) {
         unsafe {
             if val.is_object() {
-                let slot = SimpleEdge::from_address(Address::from_mut_ptr(self.slots().add(index)));
+                let slot =
+                    ObjEdge::from_address_unchecked(Address::from_mut_ptr(self.slots().add(index)));
                 object_reference_write(
                     thread.mutator(),
                     ObjectReference::from_raw_address(Address::from_ptr(self)),
@@ -224,14 +226,14 @@ impl ScmStruct {
 
         unsafe {
             let fields = self.vtable_unboxed_fields();
-          
+
             let slot = fields.add(field >> 5).read();
             let bit = slot & (1 << (field & 31));
             bit != 0
         }
     }
 
-    pub(crate) fn visit_edges<EV: EdgeVisitor<SimpleEdge>>(&mut self, visitor: &mut EV) {
+    pub(crate) fn visit_edges<EV: EdgeVisitor<ObjEdge>>(&mut self, visitor: &mut EV) {
         let vt = self.vtable.cast_as::<ScmStruct>();
         self.vtable.visit_edge(visitor);
         for field in 0..vt.vtable_size() as usize {
@@ -294,7 +296,6 @@ pub fn make_struct_layout(layout: &str) -> Value {
     let len = layout.len();
 
     if len % 2 != 0 {
-    
         raise_exn!(Fail, &[], "odd length specification: {}", layout);
     }
 
@@ -371,7 +372,7 @@ fn set_vtable_access_fields(vtable: Value) {
         vtable
             .cast_as::<ScmStruct>()
             .set_vtable_unboxed_fields(unboxed_fields);
-      
+
         Thread::current().register_cleaner(
             vtable.get_object().object_reference(),
             crate::runtime::object::CleanerType::Drop(free_unboxed_fields),
@@ -780,29 +781,28 @@ impl Default for StructGlobals {
 }
 
 impl StructGlobals {
-    pub(crate) fn scan_roots(&mut self, factory: &mut impl RootsWorkFactory<SimpleEdge>) {
+    pub(crate) fn scan_roots(&mut self, factory: &mut impl RootsWorkFactory<ObjEdge>) {
         let mut edges = vec![];
 
         if self.standard_vtable.is_object() {
-            let edge = SimpleEdge::from_address(Address::from_mut_ptr(&mut self.standard_vtable));
+            let edge = ObjEdge::from_address(Address::from_mut_ptr(&mut self.standard_vtable));
             edges.push(edge);
         }
 
         if self.required_vtable_fields.is_object() {
             let edge =
-                SimpleEdge::from_address(Address::from_mut_ptr(&mut self.required_vtable_fields));
+                ObjEdge::from_address(Address::from_mut_ptr(&mut self.required_vtable_fields));
             edges.push(edge);
         }
 
         if self.required_applicable_fields.is_object() {
-            let edge = SimpleEdge::from_address(Address::from_mut_ptr(
-                &mut self.required_applicable_fields,
-            ));
+            let edge =
+                ObjEdge::from_address(Address::from_mut_ptr(&mut self.required_applicable_fields));
             edges.push(edge);
         }
 
         if self.required_applicable_with_setter_fields.is_object() {
-            let edge = SimpleEdge::from_address(Address::from_mut_ptr(
+            let edge = ObjEdge::from_address(Address::from_mut_ptr(
                 &mut self.required_applicable_with_setter_fields,
             ));
             edges.push(edge);
@@ -810,19 +810,19 @@ impl StructGlobals {
 
         if self.standard_vtable_vtable.is_object() {
             let edge =
-                SimpleEdge::from_address(Address::from_mut_ptr(&mut self.standard_vtable_vtable));
+                ObjEdge::from_address(Address::from_mut_ptr(&mut self.standard_vtable_vtable));
             edges.push(edge);
         }
 
         if self.applicable_struct_vtable_vtable.is_object() {
-            let edge = SimpleEdge::from_address(Address::from_mut_ptr(
+            let edge = ObjEdge::from_address(Address::from_mut_ptr(
                 &mut self.applicable_struct_vtable_vtable,
             ));
             edges.push(edge);
         }
 
         if self.applicable_struct_with_setter_vtable_vtable.is_object() {
-            let edge = SimpleEdge::from_address(Address::from_mut_ptr(
+            let edge = ObjEdge::from_address(Address::from_mut_ptr(
                 &mut self.applicable_struct_with_setter_vtable_vtable,
             ));
             edges.push(edge);

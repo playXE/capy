@@ -1,3 +1,4 @@
+#![allow(unused_variables)]
 use std::{
     hint::black_box,
     mem::{size_of, transmute},
@@ -6,30 +7,36 @@ use std::{
 
 use mmtk::{
     util::{Address, ObjectReference},
-    vm::{edge_shape::SimpleEdge, EdgeVisitor},
+    vm::EdgeVisitor,
     AllocationSemantics, MutatorContext,
 };
 use rsetjmp::longjmp;
 
 use super::{
-    environment::scm_define,
+    environment::{environment_get, scm_define},
     object::{scm_program_set_free_variable, Header, ScmCellHeader, TypeId},
     symbol::scm_intern,
     value::Value,
 };
-use crate::runtime::gsubr::{scm_define_subr, Subr};
-use crate::runtime::object::{scm_program_free_variable, scm_program_num_free_vars};
 use crate::{
     bytecode::opcodes::{
         OP_ASSERT_NARGS_EE, OP_CAPTURE_CONTINUATION, OP_CONTINUATION_CALL, OP_MOV, OP_TAIL_CALL,
     },
     gc::stack::{approximate_stack_pointer, StackBounds},
     gc_protect,
-    interpreter::stackframe::{
+    interpreter::{stackframe::{
         frame_dynamic_link, frame_previous_sp, frame_virtual_return_address, StackElement,
-    },
+    }, scm_call_n},
     utils::round_up,
     vm::thread::Thread,
+};
+use crate::{
+    gc::ObjEdge,
+    runtime::gsubr::{scm_define_subr, Subr},
+};
+use crate::{
+    runtime::object::{scm_program_free_variable, scm_program_num_free_vars},
+    vm::scm_virtual_machine,
 };
 
 #[repr(C)]
@@ -45,7 +52,7 @@ pub struct VMCont {
 }
 
 impl VMCont {
-    pub(crate) unsafe fn visit_edges<EV: EdgeVisitor<SimpleEdge>>(&mut self, visitor: &mut EV) {
+    pub(crate) unsafe fn visit_edges<EV: EdgeVisitor<ObjEdge>>(&mut self, visitor: &mut EV) {
         let stack_top = self.stack_bottom.add(self.stack_size);
         let mut fp = stack_top.offset(-self.fp_offset);
         let mut sp = stack_top.offset(-self.sp_offset);
@@ -54,7 +61,7 @@ impl VMCont {
                 let value = sp.cast::<Value>();
 
                 if (*value).is_object() {
-                    let edge = SimpleEdge::from_address(Address::from_ptr(value));
+                    let edge = ObjEdge::from_address(Address::from_ptr(value));
                     visitor.visit_edge(edge);
                 }
 
@@ -98,7 +105,7 @@ pub struct ScmContinuation {
 }
 
 impl ScmContinuation {
-    pub(crate) fn visit_edges<EV: EdgeVisitor<SimpleEdge>>(&mut self, visitor: &mut EV) {
+    pub(crate) fn visit_edges<EV: EdgeVisitor<ObjEdge>>(&mut self, visitor: &mut EV) {
         self.vm_cont.visit_edge(visitor);
     }
 }
@@ -292,6 +299,58 @@ extern "C-unwind" fn continuation_p(_thread: &mut Thread, cont: &mut Value) -> V
 extern "C-unwind" fn error(_thread: &mut Thread, val: &mut Value) -> Value {
     eprintln!("error: {}", val);
     std::process::abort();
+}
+
+pub fn raise_assertion_violation(
+    thread: &mut Thread,
+    who: Value,
+    message: Value,
+    irritant: Option<Value>,
+) -> ! {
+    let proc = environment_get(
+        scm_virtual_machine().interaction_environment,
+        scm_intern("assertion-violation"),
+    );
+    match proc {
+        Ok(proc) => {
+            let _ = match irritant {
+                Some(irritant) => scm_call_n(thread, proc, &[who, message, irritant]),
+                None => scm_call_n(thread, proc, &[who, message]),
+            };
+            unsafe {
+                std::hint::unreachable_unchecked();
+            }
+        } 
+
+        Err(_) => {
+            let message = match irritant {
+                Some(irritant) => format!("{}: {}: {}", who, message, irritant),
+                None => format!("{}: {}",who, message),
+            };
+            eprintln!("Pre-boot error: {}", message);
+            std::process::abort();
+        }
+    }
+}
+
+pub fn wrong_number_of_arguments_violation(thread: &mut Thread, proc: Value, required_min: i32, required_max: i32, argc: usize, argv: &[&mut Value]) -> ! { 
+    todo!()
+}
+
+pub fn wrong_type_argument_violation(thread: &mut Thread, who: &str, position: usize, expected: &str, got: Value, argc: usize, argv: &[&mut Value]) -> ! {
+    todo!()
+}
+
+pub fn invalid_argument_violation(thread: &mut Thread, who: &str, description: &str, value: Value, pos: usize, argc: usize, argv: &[&mut Value]) -> ! {
+    todo!()
+}
+
+pub fn raise_error(thread: &mut Thread, who: &str, description: &str, code: i32) -> ! {
+    todo!()
+}
+
+pub fn raise_error_argv(thread: &mut Thread, who: &str, description: &str, code: i32, argc: usize, argv: &[Value]) -> ! {
+    todo!()
 }
 
 pub(crate) fn init() {

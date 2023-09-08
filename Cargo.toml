@@ -19,6 +19,7 @@ alloca = "0.4"
 num-traits = "0.2"
 env_logger = "*"
 pico-args = "0.5"
+chrono = "0.4"
 r7rs-parser = { git = "https://github.com/playxe/r7rs-parser" }
 pretty = { version = "0.12", features = ["termcolor"]}
 termcolor = "1.1"
@@ -43,8 +44,9 @@ llint = []
 [profile.release]
 lto = "fat"
 codegen-units = 1
-opt-level = "s"
+opt-level = 2
 
+[lib]
 
 [[bin]]
 name = "capy-boot"

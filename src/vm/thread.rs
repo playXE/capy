@@ -7,10 +7,9 @@ use std::{mem::MaybeUninit, panic::AssertUnwindSafe};
 use mmtk::memory_manager::bind_mutator;
 use mmtk::util::metadata::side_metadata::GLOBAL_SIDE_METADATA_VM_BASE_ADDRESS;
 use mmtk::util::ObjectReference;
-use mmtk::vm::edge_shape::SimpleEdge;
 use mmtk::{Mutator, MutatorContext};
 
-use crate::gc::CapyVM;
+use crate::gc::{CapyVM, ObjEdge};
 
 // gc_state = 1 means the thread is doing GC or is waiting for the GC to
 //              finish.
@@ -241,7 +240,7 @@ impl Thread {
     pub fn reference_write(
         &mut self,
         src: ObjectReference,
-        slot: SimpleEdge,
+        slot: ObjEdge,
         target: ObjectReference,
     ) {
         unsafe {

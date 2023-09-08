@@ -2,12 +2,18 @@ use std::mem::{size_of, transmute};
 
 use mmtk::{
     memory_manager::object_reference_write,
-    util::{Address, ObjectReference},
+    util::{
+        metadata::{
+            MetadataSpec, header_metadata::HeaderMetadataSpec,
+        },
+        Address, ObjectReference,
+    },
     vm::edge_shape::SimpleEdge,
 };
 
 use crate::{
     compiler::{tree_il::IForm, P},
+    gc::{ObjEdge, CapyVM},
     runtime::value::Value,
     utils::bitfield::BitField,
     vm::thread::Thread,
@@ -116,7 +122,7 @@ impl ScmCellRef {
         unsafe { transmute(self) }
     }
     pub fn object_reference(self) -> ObjectReference {
-        unsafe { transmute(self) }
+        ObjectReference::from_address::<CapyVM>(self.to_address())
     }
     #[inline]
     pub fn slot_ref(self, offset: usize) -> Value {
@@ -129,7 +135,7 @@ impl ScmCellRef {
     pub fn slot_set(self, thread: &mut Thread, offset: usize, value: Value) {
         unsafe {
             let slot = self.0 + (offset * size_of::<Value>());
-            let edge = transmute::<_, SimpleEdge>(slot); //SimpleEdge::from_address(slot);
+            let edge = ObjEdge::from_address(Address::from_usize(slot)); //ObjEdge::from_address(slot);
             debug_assert_ne!(self.0, 0);
             if value.is_object() {
                 debug_assert_ne!(value.get_object().0, 0);
@@ -164,7 +170,7 @@ impl ScmCellRef {
 
     #[inline]
     pub fn edge(self, offset: usize) -> SimpleEdge {
-        //SimpleEdge::from_address(self.0.to_raw_address().add(offset))
+        //ObjEdge::from_address(self.0.to_raw_address().add(offset))
         unsafe { transmute(self.0 + offset) }
     }
 
@@ -420,8 +426,7 @@ pub fn scm_bytevector_ref(bytevector: Value, index: u32) -> u8 {
         bytevector
             .get_object()
             .cast_as::<ScmBytevector>()
-            .data
-            .as_ptr()
+            .elems
             .add(index as usize)
             .read()
     }
@@ -433,7 +438,7 @@ pub fn scm_bytevector_set(bytevector: Value, index: u32, value: u8) {
         debug_assert!(index < bytevector.get_object().cast_as::<ScmBytevector>().length as u32);
         let mut bvec = bytevector.get_object();
         let bvec = bvec.cast_as::<ScmBytevector>();
-        bvec.data.as_mut_ptr().add(index as usize).write(value);
+        bvec.elems.add(index as usize).write(value);
     }
 }
 
@@ -442,7 +447,7 @@ pub fn scm_bytevector_as_slice<'a>(bytevector: Value) -> &'a [u8] {
         debug_assert!(bytevector.is_bytevector());
         let mut bvec = bytevector.get_object();
         let bvec = bvec.cast_as::<ScmBytevector>();
-        std::slice::from_raw_parts(bvec.data.as_ptr(), bvec.length)
+        std::slice::from_raw_parts(bvec.elems, bvec.length)
     }
 }
 
@@ -451,7 +456,7 @@ pub fn scm_bytevector_as_slice_mut<'a>(bytevector: Value) -> &'a mut [u8] {
         debug_assert!(bytevector.is_bytevector());
         let mut bvec = bytevector.get_object();
         let bvec = bvec.cast_as::<ScmBytevector>();
-        std::slice::from_raw_parts_mut(bvec.data.as_mut_ptr(), bvec.length)
+        std::slice::from_raw_parts_mut(bvec.elems, bvec.length)
     }
 }
 
@@ -614,7 +619,7 @@ pub fn scm_gloc_set(value: Value, thread: &mut Thread, new_value: Value) {
                 thread.mutator(),
                 transmute(value),
                 transmute(&mut gloc.value),
-                //SimpleEdge::from_address(Address::from_mut_ptr(&mut gloc.value)),
+                //ObjEdge::from_address(Address::from_mut_ptr(&mut gloc.value)),
                 transmute(new_value),
             );
         }
@@ -726,6 +731,10 @@ pub struct ScmString {
 pub struct ScmBytevector {
     pub header: ScmCellHeader,
     pub length: usize,
+    /// Pointer to the first element of the bytevector.
+    ///
+    /// Can point to `data` field or to some other address, basically to create mapping.
+    pub elems: *mut u8,
     pub data: [u8; 0],
 }
 
@@ -779,4 +788,43 @@ pub struct ScmWeakMapping {
     pub header: ScmCellHeader,
     pub key: Value,
     pub value: Value,
+}
+
+
+pub struct BytevectorMappingBitSpec(MetadataSpec);
+
+impl BytevectorMappingBitSpec {
+    pub const LOG_NUM_BITS: usize = 0;
+    pub const IS_GLOBAL: bool = false;
+
+    pub const fn in_header(bit_offset: isize) -> Self {
+        Self (MetadataSpec::InHeader(HeaderMetadataSpec {
+            bit_offset,
+            num_of_bits: 1
+        }))
+    }
+
+    pub const fn as_spec(&self) -> &MetadataSpec {
+        &self.0
+    }
+}
+
+pub const BYTEVECTOR_MAPPING_BIT_SPEC: BytevectorMappingBitSpec =
+    BytevectorMappingBitSpec::in_header(59);
+
+#[inline(never)]
+pub fn scm_bytevector_set_mapping(bvec: Value) {
+    let obj = bvec.get_object().object_reference();
+    let spec = BYTEVECTOR_MAPPING_BIT_SPEC.as_spec();
+    unsafe {
+        spec.store::<CapyVM, u8>(obj, 1, None);
+    }
+}
+#[inline(never)]
+pub fn scm_bytevector_is_mapping(bvec: Value) -> bool {
+    let obj = bvec.get_object().object_reference();
+    let spec = BYTEVECTOR_MAPPING_BIT_SPEC.as_spec();
+    unsafe {
+        spec.load::<CapyVM, u8>(obj, None) != 0
+    }
 }

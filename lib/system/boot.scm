@@ -50,28 +50,6 @@
 (define (vector-length v)
     (vector-length v))
 
-; 0: kind, 1: message, 2: stack-trace
-(define exn-vtable (make-vtable "phphph"))
-
-(define (exn? x)
-    (if (struct? x)
-        (eq? (struct-vtable x) exn-vtable)
-        #f))
-
-(define (exn-message exn)
-    (if (exn? exn)
-        (struct-ref exn 1)
-        #f))
-
-(define (exn-stack-trace exn)
-    (if (exn? exn)
-        (struct-ref exn 2)
-        #f))
-
-(define (exn-kind exn)
-    (if (exn? exn)
-        (struct-ref exn 0)
-        #f))
 
 (define (assq key alist)
   (let loop ((alist alist))
@@ -318,3 +296,11 @@
         (lambda () (producer))
         (lambda results
             (apply consumer results))))
+
+(define (for-each proc list)
+    (let loop ([list list])
+        (if (null? list)
+            #t
+            (begin
+                (proc (car list))
+                (loop (cdr list))))))

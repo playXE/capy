@@ -116,7 +116,8 @@ pub(crate) unsafe extern "C-unwind" fn reinstate_continuation_x(
     }
 
     thread.interpreter().ip = continuation.vm_cont.cast_as::<VMCont>().vra;
-
+    // we could instantly do longjmp here but then we won't execute the cleanup code
+    // so we need to unwind the stack to the point where we can longjmp
     std::panic::resume_unwind(Box::new(UnwindAndContinue(cont)))
 }
 

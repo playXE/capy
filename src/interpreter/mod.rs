@@ -3,7 +3,10 @@ use self::stackframe::{
     set_frame_machine_return_address, set_frame_virtual_return_address, StackElement,
 };
 use crate::{
-    gc::virtual_memory::{PlatformVirtualMemory, VirtualMemory, VirtualMemoryImpl},
+    gc::{
+        virtual_memory::{PlatformVirtualMemory, VirtualMemory, VirtualMemoryImpl},
+        ObjEdge, CapyVM,
+    },
     runtime::{
         control::{restore_cont_jump, ScmContinuation},
         value::Value,
@@ -14,10 +17,7 @@ use crate::{
         BOOT_CONTINUATION_CODE,
     },
 };
-use mmtk::{
-    util::Address,
-    vm::{edge_shape::SimpleEdge, RootsWorkFactory},
-};
+use mmtk::{util::{Address, ObjectReference}, vm::RootsWorkFactory};
 use rsetjmp::{setjmp, JumpBuf};
 use std::{
     mem::size_of,
@@ -99,21 +99,27 @@ impl InterpreterState {
         self.sp = sp;
     }
 
-    pub unsafe fn mark_stack_for_roots(&mut self, factory: &mut impl RootsWorkFactory<SimpleEdge>) {
+    pub unsafe fn mark_stack_for_roots(&mut self, factory: &mut impl RootsWorkFactory<ObjEdge>) {
         // walk slots between fp and sp, repeat until stack top
 
         let mut fp = self.fp;
         let mut sp = self.sp;
         let mut edges = vec![];
+
         while fp < self.stack_top {
             while sp < fp {
                 let value = sp.cast::<Value>();
                 if (*value).is_object() {
-                    let edge = SimpleEdge::from_address(Address::from_ptr(value));
-                    edges.push(edge);
+                    let addr = (*value).get_raw();
+                    if mmtk::memory_manager::is_in_mmtk_spaces::<CapyVM>(std::mem::transmute::<_, ObjectReference>(addr)) {
+                        let edge = ObjEdge::from_address(Address::from_ptr(value));
+                        edges.push(edge);
+                    }
                 }
+
                 sp = sp.add(1);
             }
+
             sp = frame_previous_sp(fp);
             fp = frame_dynamic_link(fp);
         }

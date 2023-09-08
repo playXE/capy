@@ -7,6 +7,12 @@ SRCS += lib/system/eval.scm
 SRCS += lib/system/records.scm
 SRCS += lib/system/condition.scm
 SRCS += lib/system/exception.scm
+SRCS += lib/system/sys.scm
+SRCS += lib/system/sysparam.scm
+SRCS += lib/system/iosys.scm
+SRCS += lib/system/fileio.scm
+SRCS += lib/system/ports.scm
+SRCS += lib/system/main.scm
 
 
 all:

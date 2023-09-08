@@ -1,14 +1,8 @@
 use std::{hash::Hash, mem::transmute};
 
-use mmtk::{
-    util::Address,
-    vm::{edge_shape::SimpleEdge, EdgeVisitor},
-};
+use mmtk::{util::Address, vm::EdgeVisitor};
 
-use crate::{
-    runtime::object::*,
-    vm::thread::Thread,
-};
+use crate::{gc::ObjEdge, runtime::object::*, vm::thread::Thread};
 
 use super::{
     object::TypeId,
@@ -325,10 +319,10 @@ impl Into<Value> for f64 {
 }
 
 impl Value {
-    pub fn visit_edge<EV: EdgeVisitor<SimpleEdge>>(&mut self, visitor: &mut EV) {
+    pub fn visit_edge<EV: EdgeVisitor<ObjEdge>>(&mut self, visitor: &mut EV) {
         if self.is_object() {
             // Pointers in Value are transparent, we can directly pass them as edge
-            visitor.visit_edge(SimpleEdge::from_address(Address::from_mut_ptr(self)));
+            visitor.visit_edge(ObjEdge::from_address(Address::from_mut_ptr(self)));
         }
     }
 
@@ -370,7 +364,7 @@ impl Value {
             if other.is_object() {
                 thr.reference_write(
                     transmute(src),
-                    transmute::<_, SimpleEdge>(self),
+                    ObjEdge::from_address_unchecked(Address::from_mut_ptr(self)),
                     transmute(other),
                 );
             } else {
@@ -429,16 +423,12 @@ impl std::fmt::Display for Value {
             let vec = *self;
 
             write!(f, "#(")?;
-            let mut i = 0;
-            loop {
+
+            for i in 0..scm_vector_length(vec) {
                 write!(f, "{}", scm_vector_ref(vec, i))?;
-
-                i += 1;
-                if i >= scm_vector_length(vec) {
-                    break;
+                if i != scm_vector_length(vec) - 1 {
+                    write!(f, " ")?;
                 }
-
-                write!(f, " ")?;
             }
 
             write!(f, ")")

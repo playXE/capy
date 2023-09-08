@@ -1,6 +1,14 @@
+use std::mem::transmute;
+
 use capy::{
-    compiler::fix_letrec::Graph,
+    runtime::{
+        object::{scm_bytevector_is_mapping, scm_bytevector_set_mapping, ScmCellHeader, TypeId},
+        value::Value,
+    },
     vm::{options::VMOptions, scm_init},
+};
+use mmtk::{
+    util::{Address, ObjectReference},
 };
 
 fn main() {
@@ -25,23 +33,13 @@ fn main() {
 
     let _vm = scm_init(mmtk.build(), opts.gc_plan);
 
-    let mut graph = Graph::new();
+    unsafe {
+        let mut obj = ScmCellHeader::new(TypeId::Bytevector);
 
-    let a = graph.add_empty_vertex();
-    let b = graph.add_empty_vertex();
-    let c = graph.add_empty_vertex();
-    let d = graph.add_empty_vertex();
-    let e = graph.add_empty_vertex();
-
-    graph.add_edge(b, a);
-    graph.add_edge(a, c);
-    graph.add_edge(c, b);
-    graph.add_edge(a, d);
-    graph.add_edge(d, e);
-
-    let sccs = graph.tarjan_sccs();
-
-    for scc in sccs {
-        println!("SCC: {:?}", scc);
+        let obj_ref = ObjectReference::from_raw_address(Address::from_mut_ptr(&mut obj));
+        scm_bytevector_set_mapping(Value::encode_object_value(transmute(obj_ref)));
+        assert!(scm_bytevector_is_mapping(Value::encode_object_value(
+            transmute(obj_ref)
+        )));
     }
 }

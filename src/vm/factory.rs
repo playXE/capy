@@ -1,9 +1,10 @@
-use std::mem::{size_of, transmute};
 use mmtk::{util::ObjectReference, AllocationSemantics, MutatorContext};
+use std::mem::{size_of, transmute};
+use std::ptr::null_mut;
 
 use crate::compiler::tree_il::IForm;
 use crate::runtime::hashtable::{lookup_hashtable_size, WeakHashTableRec, WeakHashtable};
-use crate::runtime::object::{ScmWeakMapping, ScmTuple};
+use crate::runtime::object::{ScmTuple, ScmWeakMapping, scm_bytevector_set_mapping};
 use crate::{
     compiler::{expand::define_syntax, P},
     gc_protect,
@@ -154,11 +155,13 @@ impl Thread {
                         flags: 0,
                     },
                 },
+                elems: null_mut(),
                 length: n,
                 data: [],
             });
 
             let data = (*mem.to_mut_ptr::<ScmBytevector>()).data.as_mut_ptr();
+            (*mem.to_mut_ptr::<ScmBytevector>()).elems = data;
             data.write_bytes(init, n);
             let reference = transmute::<_, ObjectReference>(mem);
             mutator.post_alloc(reference, size, semantics);
@@ -186,16 +189,62 @@ impl Thread {
                         flags: 0,
                     },
                 },
+                elems: null_mut(),
                 length: slice.len(),
                 data: [],
             });
 
+            let addr = mem.to_mut_ptr::<ScmBytevector>();
+
             let data = (*mem.to_mut_ptr::<ScmBytevector>()).data.as_mut_ptr();
+            (*addr).elems = data;
             data.copy_from_nonoverlapping(slice.as_ptr(), slice.len());
             let reference = transmute::<_, ObjectReference>(mem);
             mutator.post_alloc(reference, size, semantics);
 
             Value::encode_object_value(ScmCellRef(transmute(reference)))
+        }
+    }
+
+    pub fn make_bytevector_mapping<const IMMORTAL: bool>(
+        &mut self,
+        addr: *mut u8,
+        len: usize,
+    ) -> Value {
+        let size = round_up(size_of::<ScmBytevector>(), 8, 0);
+        let semantics = if IMMORTAL {
+            AllocationSemantics::Immortal
+        } else {
+            AllocationSemantics::Default
+        };
+        unsafe {
+            let mutator = self.mutator.assume_init_mut();
+            let mem = mutator.alloc(size, size_of::<usize>(), 0, semantics);
+
+            mem.store(ScmBytevector {
+                header: ScmCellHeader {
+                    as_header: Header {
+                        type_id: TypeId::Bytevector,
+                        pad: [0; 4],
+                        flags: 0,
+                    },
+                },
+                elems: addr,
+                length: len,
+                data: [],
+            });
+
+            let addr = mem.to_mut_ptr::<ScmBytevector>();
+
+            let data = (*mem.to_mut_ptr::<ScmBytevector>()).data.as_mut_ptr();
+            (*addr).elems = data;
+
+            let reference = transmute::<_, ObjectReference>(mem);
+            mutator.post_alloc(reference, size, semantics);
+
+            let val = Value::encode_object_value(ScmCellRef(transmute(reference)));
+            scm_bytevector_set_mapping(val);
+            val 
         }
     }
 
@@ -552,7 +601,6 @@ impl Thread {
             Value::encode_object_value(ScmCellRef(transmute(reference)))
         }
     }
-
 
     pub fn make_environment(&mut self, name: Value) -> Value {
         let size = round_up(size_of::<ScmEnvironment>(), 8, 0);

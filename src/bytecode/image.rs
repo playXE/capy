@@ -1,6 +1,9 @@
 #![allow(dead_code)]
 use crate::{
-    gc::virtual_memory::{PlatformVirtualMemory, VirtualMemory},
+    gc::{
+        virtual_memory::{PlatformVirtualMemory, VirtualMemory},
+        ObjEdge,
+    },
     runtime::{
         environment::environment_get_cell,
         fasl::FASLReader,
@@ -13,11 +16,7 @@ use crate::{
     },
     vm::{scm_virtual_machine, sync::mutex::RawMutex, thread::Thread},
 };
-use mmtk::{
-    memory_manager::object_reference_write,
-    util::Address,
-    vm::{edge_shape::SimpleEdge, RootsWorkFactory},
-};
+use mmtk::{memory_manager::object_reference_write, util::Address, vm::RootsWorkFactory};
 use std::{io::Cursor, mem::transmute, sync::Arc};
 
 use super::opcodes::{disassemble, CAPY_BYTECODE_MAGIC};
@@ -32,15 +31,22 @@ pub struct Image {
 }
 
 impl Image {
-    pub(crate) unsafe fn visit_roots(&self, factory: &mut impl RootsWorkFactory<SimpleEdge>) {
-        let edge = SimpleEdge::from_address(Address::from_ptr(&self.constants));
-        let data = SimpleEdge::from_address(Address::from_ptr(&self.data));
-        let entry = SimpleEdge::from_address(Address::from_ptr(&self.entry_program));
+    pub(crate) unsafe fn visit_roots(&self, factory: &mut impl RootsWorkFactory<ObjEdge>) {
+        debug_assert!(
+            self.constants.is_object()
+                && self.data.is_object()
+                && self.entry_program.is_object()
+                && self.programs.iter().all(|p| p.is_object())
+                && self.debug_offsets.is_object()
+        );
+        let edge = ObjEdge::from_address(Address::from_ptr(&self.constants));
+        let data = ObjEdge::from_address(Address::from_ptr(&self.data));
+        let entry = ObjEdge::from_address(Address::from_ptr(&self.entry_program));
         for program in self.programs.iter() {
-            let program = SimpleEdge::from_address(Address::from_ptr(program));
+            let program = ObjEdge::from_address(Address::from_ptr(program));
             factory.create_process_edge_roots_work(vec![program]);
         }
-        let debug = SimpleEdge::from_address(Address::from_ptr(&self.debug_offsets));
+        let debug = ObjEdge::from_address(Address::from_ptr(&self.debug_offsets));
         factory.create_process_edge_roots_work(vec![edge, data, entry, debug]);
     }
 
@@ -117,7 +123,7 @@ pub fn load_image_from_memory(
         let debug_offsets = scm_vector_ref(section, 3);
 
         for program in reader.programs.iter_mut() {
-            let edge = SimpleEdge::from_address(Address::from_mut_ptr(
+            let edge = ObjEdge::from_address_unchecked(Address::from_mut_ptr(
                 &mut program.cast_as::<ScmProgram>().constants,
             ));
 
@@ -206,7 +212,7 @@ impl ImageRegistry {
         }
     }
 
-    pub(crate) unsafe fn visit_roots(&self, mut factory: impl RootsWorkFactory<SimpleEdge>) {
+    pub(crate) unsafe fn visit_roots(&self, mut factory: impl RootsWorkFactory<ObjEdge>) {
         for image in self.images.iter() {
             image.visit_roots(&mut factory);
         }
@@ -236,12 +242,12 @@ impl ImageRegistry {
         let slice = scm_vector_as_slice(debug);
 
         let high = slice.partition_point(|data| scm_car(*data).get_int32() as u32 <= target_pc);
-      
+
         for data in slice[..high].iter().rev() {
             let offset = scm_car(*data);
             let vector = scm_cdr(*data);
             let pc = offset.get_int32() as u32;
-           
+
             if pc <= target_pc {
                 return Some((
                     scm_vector_ref(vector, 0),

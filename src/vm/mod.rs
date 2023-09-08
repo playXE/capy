@@ -2,29 +2,33 @@ use std::{collections::HashMap, mem::transmute};
 
 use mmtk::{
     util::{Address, ObjectReference},
-    vm::{edge_shape::SimpleEdge, RootsWorkFactory},
+    vm::RootsWorkFactory,
 };
 
 use crate::{
     bytecode::{image::ImageRegistry, opcodes::OP_HALT},
     gc::{
         objstorage::{ObjStorage, ParState},
-        CapyVM,
+        CapyVM, ObjEdge,
     },
     runtime::{
-        self,
+        self, control, equality,
         hashtable::HashTableType,
         object::{CleanerType, ScmCellRef},
-        value::Value, control, equality, subr_core, symbol::scm_intern, struct_::StructGlobals,
+        struct_::StructGlobals,
+        subr_core,
+        symbol::scm_intern,
+        value::Value,
     },
 };
 
 use self::{
+    options::GCPlan,
     sync::{
         monitor::Monitor,
         mutex::{Mutex, MutexGuard, RawMutex},
     },
-    thread::Thread, options::GCPlan,
+    thread::Thread,
 };
 
 pub mod factory;
@@ -57,15 +61,15 @@ pub struct VirtualMachine {
     pub interaction_environment: Value,
     pub(crate) globals: ObjStorage,
     pub struct_globals: StructGlobals,
-    pub symbols: [Value; InherentSymbols::Last as usize]
+    pub symbols: [Value; InherentSymbols::Last as usize],
 }
 
 impl VirtualMachine {
-    pub(crate) fn scan_roots(&mut self, factory: &mut impl RootsWorkFactory<SimpleEdge>) {
+    pub(crate) fn scan_roots(&mut self, factory: &mut impl RootsWorkFactory<ObjEdge>) {
         let mut edges = vec![];
         for (_, value) in self.symtable.iter() {
             let value: &ScmCellRef = unsafe { std::mem::transmute(value) };
-            let edge = SimpleEdge::from_address(Address::from_ptr(value));
+            let edge = ObjEdge::from_address(Address::from_ptr(value));
             edges.push(edge);
         }
         unsafe {
@@ -75,7 +79,7 @@ impl VirtualMachine {
 
             state.iterate(|slot| {
                 if (*slot).is_object() {
-                    let edge = SimpleEdge::from_address(transmute(slot));
+                    let edge = ObjEdge::from_address(transmute(slot));
                     if edges.len() > 128 {
                         factory.create_process_edge_roots_work(std::mem::take(&mut edges));
                     }
@@ -83,12 +87,11 @@ impl VirtualMachine {
                 }
             });
             if self.interaction_environment.is_object() {
-                let edge = SimpleEdge::from_address(Address::from_mut_ptr(
-                    &mut self.interaction_environment,
-                ));
+                let edge =
+                    ObjEdge::from_address(Address::from_mut_ptr(&mut self.interaction_environment));
                 edges.push(edge);
             }
-            let edge = SimpleEdge::from_address(Address::from_mut_ptr(&mut self.module_obarray));
+            let edge = ObjEdge::from_address(Address::from_mut_ptr(&mut self.module_obarray));
             edges.push(edge);
         }
         self.struct_globals.scan_roots(factory);
@@ -102,7 +105,7 @@ pub fn scm_init(mmtk: mmtk::MMTK<CapyVM>, plan: GCPlan) -> &'static mut VirtualM
         mmtk,
         needs_wb: match plan {
             GCPlan::GenCopy | GCPlan::GenImmix | GCPlan::StickyImmix => true,
-            _ => false 
+            _ => false,
         },
         gc_waiters_lock: Monitor::new(()),
         weakmapping_registry: Mutex::new(Vec::with_capacity(128)),
@@ -143,7 +146,7 @@ pub fn scm_init(mmtk: mmtk::MMTK<CapyVM>, plan: GCPlan) -> &'static mut VirtualM
         control::init();
         equality::init();
         subr_core::init();
-        
+
         this.initialized = true;
         this
     }

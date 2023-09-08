@@ -1,7 +1,10 @@
 #![allow(unused_variables)]
 use std::{
     mem::{size_of, transmute},
-    sync::{Arc, Barrier},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Barrier,
+    },
 };
 
 use mmtk::{
@@ -48,13 +51,65 @@ pub mod shadow_stack;
 pub mod stack;
 pub mod virtual_memory;
 
+#[derive(Hash, Clone, Copy, Eq, PartialEq, Debug)]
+#[repr(transparent)]
+pub struct ObjEdge {
+    pub simple: SimpleEdge,
+}
+
+impl mmtk::vm::edge_shape::Edge for ObjEdge {
+    #[inline]
+    fn load(&self) -> ObjectReference {
+        self.simple.load()
+    }
+    #[inline]
+    fn store(&self, object: ObjectReference) {
+        self.simple.store(object)
+    }
+    #[inline]
+    fn prefetch_load(&self) {
+        self.simple.prefetch_load()
+    }
+    #[inline]
+    fn prefetch_store(&self) {
+        self.simple.prefetch_store()
+    }
+}
+
+static GC_CYCLE: AtomicBool = AtomicBool::new(false);
+
+impl ObjEdge {
+    #[inline]
+    pub fn new(address: Address) -> Self {
+        Self {
+            simple: SimpleEdge::from_address(address),
+        }
+    }
+    #[inline]
+    pub fn from_address_unchecked(address: Address) -> Self {
+        Self {
+            simple: SimpleEdge::from_address(address),
+        }
+    }
+    #[inline]
+    pub fn from_address(address: Address) -> Self {
+        let value = unsafe { address.load::<Value>() };
+        /*if !value.is_object() || !mmtk::memory_manager::is_mmtk_object(unsafe { Address::from_usize(value.get_raw() as _) } ) {
+            panic!("non-object value {:?} in GC cycle", value);
+        }*/
+        Self {
+            simple: SimpleEdge::from_address(address),
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct CapyVM;
 
 pub struct ScmObjectModel;
 
 pub const FORWARDING_BITS_METADATA_SPEC: VMLocalForwardingBitsSpec =
-    VMLocalForwardingBitsSpec::in_header(56);
+    VMLocalForwardingBitsSpec::in_header(57);
 
 pub const LOGGING_SIDE_METADATA_SPEC: VMGlobalLogBitSpec = VMGlobalLogBitSpec::side_first();
 pub const FORWARDING_POINTER_METADATA_SPEC: VMLocalForwardingPointerSpec =
@@ -72,14 +127,15 @@ impl ObjectModel<CapyVM> for ScmObjectModel {
     const OBJECT_REF_OFFSET_LOWER_BOUND: isize = 0;
     const UNIFIED_OBJECT_REFERENCE_ADDRESS: bool = true;
 
+    #[inline(always)]
     fn address_to_ref(addr: mmtk::util::Address) -> mmtk::util::ObjectReference {
         ObjectReference::from_raw_address(addr)
     }
-
+    #[inline(always)]
     fn ref_to_address(object: ObjectReference) -> mmtk::util::Address {
         object.to_raw_address()
     }
-
+    #[inline(always)]
     fn copy(
         from: ObjectReference,
         semantics: CopySemantics,
@@ -96,7 +152,7 @@ impl ObjectModel<CapyVM> for ScmObjectModel {
         copy_context.post_copy(ObjectReference::from_raw_address(dst), size, semantics);
         ObjectReference::from_raw_address(dst)
     }
-
+    #[inline(always)]
     fn copy_to(
         from: ObjectReference,
         to: ObjectReference,
@@ -119,7 +175,7 @@ impl ObjectModel<CapyVM> for ScmObjectModel {
 
         start.add(bytes)
     }
-
+    #[inline(always)]
     fn get_reference_when_copied_to(
         _from: ObjectReference,
         to: mmtk::util::Address,
@@ -142,7 +198,8 @@ impl ObjectModel<CapyVM> for ScmObjectModel {
                 }
 
                 TypeId::Tuple => {
-                    reference.cast_as::<ScmTuple>().length * size_of::<Value>() + size_of::<ScmTuple>()
+                    reference.cast_as::<ScmTuple>().length * size_of::<Value>()
+                        + size_of::<ScmTuple>()
                 }
                 TypeId::String => {
                     let len = scm_string_str(reference.into()).len() + 1;
@@ -157,9 +214,13 @@ impl ObjectModel<CapyVM> for ScmObjectModel {
                 }
 
                 TypeId::Bytevector => {
-                    let len = scm_bytevector_length(reference.into()) as usize;
-                    let size = size_of::<ScmBytevector>();
-                    len + size
+                    if scm_bytevector_is_mapping(Value::encode_object_value(reference)) {
+                        size_of::<ScmBytevector>()
+                    } else {
+                        let len = scm_bytevector_length(reference.into()) as usize;
+                        let size = size_of::<ScmBytevector>();
+                        len + size
+                    }
                 }
 
                 TypeId::Program => {
@@ -210,11 +271,11 @@ impl ObjectModel<CapyVM> for ScmObjectModel {
     fn get_size_when_copied(object: ObjectReference) -> usize {
         Self::get_current_size(object)
     }
-
+    #[inline(always)]
     fn get_align_when_copied(_: ObjectReference) -> usize {
         std::mem::align_of::<ScmCellHeader>()
     }
-
+    #[inline(always)]
     fn get_align_offset_when_copied(_: ObjectReference) -> usize {
         0
     }
@@ -222,11 +283,11 @@ impl ObjectModel<CapyVM> for ScmObjectModel {
     fn get_type_descriptor(_: ObjectReference) -> &'static [i8] {
         &[]
     }
-
+    #[inline(always)]
     fn ref_to_object_start(object: ObjectReference) -> mmtk::util::Address {
         object.to_raw_address()
     }
-
+    #[inline(always)]
     fn ref_to_header(object: ObjectReference) -> mmtk::util::Address {
         object.to_raw_address()
     }
@@ -281,12 +342,11 @@ impl ActivePlan<CapyVM> for ScmActivePlan {
         _worker: &mut mmtk::scheduler::GCWorker<CapyVM>,
     ) -> ObjectReference {
         {
-            println!(
+            panic!(
                 "cannot trace object {:p}",
                 _object.to_raw_address().to_ptr::<u8>(),
             );
         }
-        _object
     }
 }
 
@@ -301,6 +361,7 @@ impl Collection<CapyVM> for ScmCollection {
     where
         F: FnMut(&'static mut mmtk::Mutator<CapyVM>),
     {
+        GC_CYCLE.store(true, Ordering::Relaxed);
         unsafe {
             // Sets safepoint page to `PROT_NONE` and waits for all threads to enter safepoint.
             // Some threads might enter without signal handler e.g when invoking `lock()` on Mutexes.
@@ -320,6 +381,7 @@ impl Collection<CapyVM> for ScmCollection {
     fn resume_mutators(_: mmtk::util::VMWorkerThread) {
         let vm = scm_virtual_machine();
         unsafe {
+            GC_CYCLE.store(false, Ordering::Relaxed);
             let mutators = scm_virtual_machine().safepoint_lock_data.take().unwrap();
             SafepointSynchronize::end(mutators);
 
@@ -476,7 +538,7 @@ impl Scanning<CapyVM> for ScmScanning {
                 let tuple = reference.cast_as::<ScmTuple>();
                 for i in 0..tuple.length {
                     unsafe {
-                        let value = &mut*tuple.values.as_mut_ptr().add(i as _);
+                        let value = &mut *(tuple.values.as_mut_ptr().add(i as _));
                         value.visit_edge(edge_visitor);
                     }
                 }
@@ -488,7 +550,7 @@ impl Scanning<CapyVM> for ScmScanning {
                 for i in 0..(n + n) {
                     let elt_ptr = (*datum).elts.as_mut_ptr().add(i as _);
                     if (*elt_ptr).is_object() {
-                        let edge = SimpleEdge::from_address(Address::from_mut_ptr(elt_ptr));
+                        let edge = ObjEdge::from_address(Address::from_mut_ptr(elt_ptr));
                         edge_visitor.visit_edge(edge);
                     }
                 }
@@ -498,7 +560,7 @@ impl Scanning<CapyVM> for ScmScanning {
                 let hash_table = reference.cast_as::<ScmHashTable>();
                 if !hash_table.datum.is_null() {
                     let datum_edge =
-                        SimpleEdge::from_address(Address::from_mut_ptr(&mut hash_table.datum));
+                        ObjEdge::from_address(Address::from_mut_ptr(&mut hash_table.datum));
 
                     edge_visitor.visit_edge(datum_edge);
                 }
@@ -546,7 +608,7 @@ impl Scanning<CapyVM> for ScmScanning {
                                 elt.write(Value::encode_undefined_value());
                                 datum.live -= 1;
                             } else {
-                                let edge = SimpleEdge::from_address(Address::from_mut_ptr(elt));
+                                let edge = ObjEdge::from_address(Address::from_mut_ptr(elt));
                                 edge_visitor.visit_edge(edge);
                             }
                         }
@@ -558,7 +620,7 @@ impl Scanning<CapyVM> for ScmScanning {
                 let weakhashtable = reference.cast_as::<WeakHashtable>();
                 if !weakhashtable.datum.is_null() {
                     let datum_edge =
-                        SimpleEdge::from_address(Address::from_mut_ptr(&mut weakhashtable.datum));
+                        ObjEdge::from_address(Address::from_mut_ptr(&mut weakhashtable.datum));
 
                     edge_visitor.visit_edge(datum_edge);
                 }
@@ -603,7 +665,7 @@ impl Scanning<CapyVM> for ScmScanning {
 
             let mut edges = vec![];
             for handle in tls.handles.assume_init_ref().iterate_for_gc() {
-                let edge = SimpleEdge::from_address(handle.location());
+                let edge = ObjEdge::from_address(handle.location());
                 edges.push(edge);
             }
             tls.interpreter().mark_stack_for_roots(&mut factory);
@@ -705,10 +767,10 @@ impl Scanning<CapyVM> for ScmScanning {
 
 impl VMBinding for CapyVM {
     type VMObjectModel = ScmObjectModel;
-    type VMEdge = SimpleEdge;
+    type VMEdge = ObjEdge;
     type VMActivePlan = ScmActivePlan;
     type VMCollection = ScmCollection;
-    type VMMemorySlice = UnimplementedMemorySlice;
+    type VMMemorySlice = UnimplementedMemorySlice<ObjEdge>;
     type VMReferenceGlue = ScmReferenceGlue;
     type VMScanning = ScmScanning;
     const USE_ALLOCATION_OFFSET: bool = false;

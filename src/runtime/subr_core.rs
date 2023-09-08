@@ -14,11 +14,12 @@ use crate::{
 
 use super::{
     arith::scm_to_u32,
+    control::{invalid_argument_violation, wrong_type_argument_violation},
     gsubr::{scm_define_subr, Subr},
     list::scm_length,
     object::{
-        scm_car, scm_cdr, scm_string_mut_str, scm_string_str, scm_symbol_str, ScmWeakMapping,
-        TypeId, scm_tuple_set, scm_tuple_ref, ScmTuple,
+        scm_car, scm_cdr, scm_program_code, scm_string_mut_str, scm_string_str, scm_symbol_str,
+        scm_tuple_ref, scm_tuple_set, ScmTuple, ScmWeakMapping, TypeId,
     },
     symbol::scm_intern,
     value::Value,
@@ -490,6 +491,27 @@ extern "C-unwind" fn tuple(thread: &mut Thread, args: &mut Value) -> Value {
     tuple
 }
 
+extern "C-unwind" fn make_tuple(thread: &mut Thread, len: &mut Value) -> Value {
+    if !len.is_int32() {
+        wrong_type_argument_violation(thread, "make-tuple", 0, "fixnum", *len, 1, &[len]);
+    }
+
+    let length = len.get_int32();
+    if length < 0 {
+        invalid_argument_violation(
+            thread,
+            "make-tuple",
+            "length must be non-negative",
+            *len,
+            0,
+            1,
+            &[len],
+        );
+    }
+
+    thread.make_tuple::<false>(length as _, Value::encode_bool_value(false))
+}
+
 extern "C-unwind" fn tuple_pred(_thread: &mut Thread, obj: &mut Value) -> Value {
     Value::encode_bool_value(obj.is_tuple())
 }
@@ -541,7 +563,7 @@ extern "C-unwind" fn tuple_set(
         );
     }
     scm_tuple_set(*obj, thread, index as _, *value);
-    *value 
+    *value
 }
 
 extern "C-unwind" fn tuple_length(_thread: &mut Thread, obj: &mut Value) -> Value {
@@ -554,6 +576,81 @@ extern "C-unwind" fn tuple_length(_thread: &mut Thread, obj: &mut Value) -> Valu
         );
     }
     Value::encode_int32(obj.cast_as::<ScmTuple>().length as _)
+}
+
+extern "C-unwind" fn current_millis(_thread: &mut Thread) -> Value {
+    Value::encode_int32(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as _,
+    )
+}
+
+extern "C-unwind" fn integer_to_char(thread: &mut Thread, val: &mut Value) -> Value {
+    if val.is_int32() {
+        let int = val.get_int32();
+        if let Some(ch) = char::from_u32(int as _) {
+            Value::encode_char(ch)
+        } else {
+            invalid_argument_violation(
+                thread,
+                "integer->char",
+                "not a valid UTF-8 character",
+                *val,
+                0,
+                1,
+                &[val],
+            );
+        }
+    } else {
+        wrong_type_argument_violation(thread, "integer->char", 0, "integer", *val, 1, &[val])
+    }
+}
+
+extern "C-unwind" fn char_to_integer(thread: &mut Thread, val: &mut Value) -> Value {
+    if val.is_char() {
+        let ch = val.get_char();
+        Value::encode_int32(ch as u32 as i32)
+    } else {
+        wrong_type_argument_violation(thread, "char->integer", 0, "character", *val, 1, &[val])
+    }
+}
+
+extern "C-unwind" fn procedure_p(_: &mut Thread, val: &mut Value) -> Value {
+    Value::encode_bool_value(val.is_program())
+}
+
+extern "C-unwind" fn procedure_eq_p(
+    thread: &mut Thread,
+    val: &mut Value,
+    val2: &mut Value,
+) -> Value {
+    if val.is_program() && val2.is_program() {
+        Value::encode_bool_value(scm_program_code(*val) == scm_program_code(*val2))
+    } else {
+        if !val.is_program() {
+            wrong_type_argument_violation(
+                thread,
+                "procedure=?",
+                0,
+                "procedure",
+                *val,
+                2,
+                &[val, val2],
+            )
+        } else {
+            wrong_type_argument_violation(
+                thread,
+                "procedure=?",
+                1,
+                "procedure",
+                *val2,
+                2,
+                &[val, val2],
+            )
+        }
+    }
 }
 
 pub(crate) fn init() {
@@ -578,13 +675,21 @@ pub(crate) fn init() {
     scm_define_subr("string>=?", 0, 0, 1, Subr::F1(string_ge));
     scm_define_subr("%raise", 1, 0, 0, Subr::F1(raw_raise));
     scm_define_subr("%core-preprocess", 1, 0, 0, Subr::F1(core_preprocess));
+    scm_define_subr("make-tuple", 1, 0, 0, Subr::F1(make_tuple));
     scm_define_subr("tuple", 0, 0, 1, Subr::F1(tuple));
     scm_define_subr("tuple?", 1, 0, 0, Subr::F1(tuple_pred));
     scm_define_subr("tuple-ref", 2, 0, 0, Subr::F2(tuple_ref));
     scm_define_subr("tuple-set!", 3, 0, 0, Subr::F3(tuple_set));
     scm_define_subr("tuple-length", 1, 0, 0, Subr::F1(tuple_length));
-
+    scm_define_subr("current-millis", 0, 0, 0, Subr::F0(current_millis));
+    scm_define_subr("integer->char", 1, 0, 0, Subr::F1(integer_to_char));
+    scm_define_subr("char->integer", 1, 0, 0, Subr::F1(char_to_integer));
+    scm_define_subr("procedure?", 1, 0, 0, Subr::F1(procedure_p));
+    scm_define_subr("procedure=?", 2, 0, 0, Subr::F2(procedure_eq_p));
+    super::subr_fixnum::init();
     super::subr_hash::init();
     super::struct_::init();
     super::list::init();
+    super::bytevector::init();
+    super::fileio::init();
 }

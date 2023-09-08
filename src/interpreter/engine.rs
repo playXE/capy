@@ -73,7 +73,9 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
 
     macro_rules! sp_set {
         ($i: expr, $val: expr) => {
-            std::hint::black_box(sp.offset($i as _).write(StackElement { as_value: $val }));
+            std::hint::black_box({
+                sp.offset($i as _).write(StackElement { as_value: $val })
+            });
         };
     }
 
@@ -81,6 +83,7 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
         ($n: expr) => {
             sp = thread.interpreter().fp.sub($n as _);
             if sp < thread.interpreter().stack_limit {
+                panic!("stack overflow")
                 // TODO: Expand stack
             } else {
                 thread.interpreter().sp = sp;
@@ -559,8 +562,10 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 ip = ip.add(size_of::<OpCons>());
                 sync_sp!();
                 sync_ip!();
+             
                 let cell = thread
                     .make_cons::<false>(Value::encode_null_value(), Value::encode_null_value());
+                
                 let pair = cell.cast_as::<ScmPair>();
                 pair.car = sp_ref!(cons.car());
                 pair.cdr = sp_ref!(cons.cdr());
@@ -573,12 +578,14 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 ip = ip.add(size_of::<OpMakeVectorImmediate>());
                 sync_sp!();
                 sync_ip!();
+               
                 let v = thread
                     .make_vector::<false>(make_vector.len() as _, Value::encode_bool_value(false));
                 sp_set!(make_vector.dst(), v);
             }
 
             OP_MAKE_VECTOR => {
+
                 let make_vector = OpMakeVector::read(ip);
                 ip = ip.add(size_of::<OpMakeVector>());
                 sync_sp!();
