@@ -4,11 +4,17 @@
 ; Snarfed from Lisp Pointers, V(4), October-December 1992, p45.
 ; Written by Jonathan Rees.
 ;
-; FIXME
+; FIXME #1
 ;
 ; This implementation works only with single thread. 
 ; Once we start worrying about actual threads, we'll need to
 ; update `*here*` to be thread-local parameter.
+;
+; FIXME #2
+;
+; Implement prompts. This will require modifying this file, we'll need
+; to add new type of handlers.
+; 
 
 (define *here* (list #f))
 (define (call-with-current-continuation proc)
@@ -46,14 +52,14 @@
             (set-car! *here* (cons after before))
             (set-cdr! *here* there)
             (set! *here* there)
-            (let ([result (thunk)])
-                (reroot! here)
-                result))))
-            ;(call-with-values 
-            ;    thunk 
-            ;    (lambda results
-            ;        (reroot! here)
-            ;        (apply values results))))))
+            ;(let ([result (thunk)])
+            ;    (reroot! here)
+            ;    result))))
+            (call-with-values 
+                thunk 
+                (lambda results
+                    (reroot! here)
+                    (apply values results))))))
 
 (define (unhandled-exception-error val)
     (%raise val)) ; raise value to Rust runtime and panic

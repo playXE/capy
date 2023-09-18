@@ -20,7 +20,7 @@
                     (let ([addr (interpret/var-address (vector-ref expr 1) env)])
                         (if addr 
                             (interpret/lexical (car addr) (cdr addr))
-                            (error "undefined variable" (vector-ref expr 1))))]
+                            (error 'interpret/preprocess "undefined variable" (vector-ref expr 1))))]
                 [(eq? node '$lset)
                     (let ([addr (interpret/var-address (vector-ref expr 1) env)])
                         (if addr 
@@ -30,14 +30,13 @@
                                 (interpret/preprocess 
                                     (vector-ref expr 2) 
                                     env find-global))
-                            (error "undefined variable" (vector-ref expr 1))))]
+                            (error 'interpret/preprocess "undefined variable" (vector-ref expr 1))))]
                 [(eq? node '$if)
                     (interpret/if 
                         (interpret/preprocess (vector-ref expr 1) env find-global)
                         (interpret/preprocess (vector-ref expr 2) env find-global)
                         (interpret/preprocess (vector-ref expr 3) env find-global))]
                 [(eq? node '$const)
-                    
                     (let ([v (vector-ref expr 1)])
                         (lambda (renv) v))]
                 [(eq? node '$it)
@@ -120,9 +119,7 @@
                                     (loop (+ i 1) proc)))
                             (apply (proc renv) (vector->list rands))))])))
     (define (interpret/var-address name env)
-       
         (let r-loop ([env env] [i 0])
-        
             (if (null? env)
                 #f 
                 (let a-loop ([rib (car env)] [j 1])
@@ -227,7 +224,7 @@
         (lambda (renv)
             (letrec ([self (lambda args
                 (if (< (length args) n)
-                    (error "too few arguments" n)
+                    (error 'interpret/lambda-n "too few arguments" n)
                     (body (cons (list->vector (cons self args)) env)))
             )])
             self)))
@@ -248,7 +245,7 @@
                                     [(pair? argtail)
                                         (vector-set! v argnum (car argtail))
                                         (loop (+ argnum 1) (cdr argtail))]
-                                    [else (error "too few arguments" n)]))))])
+                                    [else (error 'interpret/lambda-dot "too few arguments" n)]))))])
                 self)))
 
     (define (interpret/make-proc expr env find-global)
@@ -256,7 +253,6 @@
             [args (vector-ref expr 1)]
             [optarg (vector-ref expr 2)]
             [body (interpret/preprocess (vector-ref expr 3) (interpret/extend-env env (vector->list (vector-ref expr 1))) find-global)])
-               
                 (if optarg 
                     (interpret/lambda-dot (vector-length args) body)
                     (cond 
@@ -269,7 +265,7 @@
 
     (define default-find-global (lambda (name)
         (environment-get-cell (interaction-environment) name)))
-
+ 
     ; (eval-core expr #:optional env)
     (set! eval-core (lambda (x . rest)
         (let ([env (if (null? rest) (interaction-environment) (car rest))])

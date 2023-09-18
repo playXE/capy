@@ -13,7 +13,7 @@
     ((_ <name> <base-value> <terminating-value?>)
      (define (<name> proc list1 . lists)
        (define (length-error)
-         (error "Lists don't have the same length." (cons list1 lists)))
+         (error (quote <name>) "Lists don't have the same length." (cons list1 lists)))
        (if (null? list1)
            ;; Careful with recursion on for-all.
            (if (or (null? lists) (for-all null? lists))
@@ -70,10 +70,10 @@
               (loop (cdr alist)))))))
 
 (define (assoc key alist)
-  (let loop ((alist alist))
+  (let loop ([alist alist])
     (if (null? alist)
         #f
-        (let ((pair (car alist)))
+        (let ([pair (car alist)])
           (if (equal? key (car pair))
               pair
               (loop (cdr alist)))))))
@@ -170,6 +170,10 @@
     (if (null? list1)
         list2
         (cons (car list1) (append2 (cdr list1) list2))))
+
+; 'primitive' procedures definition. Compiler recognizes calls to `car`, `cdr`, `+` etc. as primitive calls
+; and is able to emit OP_CAR, OP_CDR, OP_PLUS and others. Originally these procedures are not defined
+; so we define them in boot library to allow users to use them as bindings basically in calls like `(map car ls)`.
 
 (define (cdr x) (cdr x))
 (define (car x) (car x))

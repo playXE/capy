@@ -340,12 +340,7 @@
                 (case state 
                     [(closed error eof)
                         (io/reset-buffer! p)
-                    ]
-                )
-            ]
-        )
-    )
-)
+                    ])])))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;
@@ -523,3 +518,85 @@
 (define errmode:ignore  0)
 (define errmode:replace 1)
 (define errmode:raise   2)
+
+(define default-transcoder 
+    (make-parameter 
+        codec:latin-1
+        (lambda (t)
+            (and (fixnum? t)    
+                (<= codec:latin-1 t transcoder-mask:codec)))))
+
+(define (io/make-transcoder codec eol-style handling-mode)
+    (define (local-error msg irritant)
+    (if (issue-deprecated-warnings?)
+        (let ((out (current-error-port)))
+          (display "Warning: " out)
+          (display msg out)
+          (display ": " out)
+          (write irritant out)
+          (newline out)
+          (display "Using Larceny-specific interpretation." out)
+          (newline out))))
+  (let ((bits:codec (case codec
+                     ((latin-1) codec:latin-1)
+                     ((utf-8)   codec:utf-8)
+                     ((utf-16)  codec:utf-16)
+                     (else (local-error "nonstandard codec" codec)
+                           codec:latin-1)))
+        (bits:eol (case eol-style
+                   ((none)  eolstyle:none)
+                   ((lf)    eolstyle:lf)
+                   ((nel)   eolstyle:nel)
+                   ((ls)    eolstyle:ls)
+                   ((cr)    eolstyle:cr)
+                   ((crlf)  eolstyle:crlf)
+                   ((crnel) eolstyle:crnel)
+                   (else (local-error "nonstandard eol style" eol-style)
+                         eolstyle:none)))
+        (bits:ehm (case handling-mode
+                   ((ignore)  errmode:ignore)
+                   ((replace) errmode:replace)
+                   ((raise)   errmode:raise)
+                   (else (local-error "nonstandard error handling mode"
+                                      handling-mode)
+                         errmode:replace))))
+    (+ bits:codec bits:eol bits:ehm)))
+
+
+; Programmers should never see a transcoder with binary codec.
+
+(define (io/transcoder-codec t)
+  (let ((codec (fxlogand t transcoder-mask:codec)))
+
+    (cond ((fx= codec codec:binary)  'binary)
+          ((fx= codec codec:latin-1) 'latin-1)
+          ((fx= codec codec:utf-8)   'utf-8)
+          ((fx= codec codec:utf-16)  'utf-16)
+          (else
+           (assertion-violation 'transcoder-codec
+                                "weird transcoder" t)))))
+
+
+(define (io/transcoder-eol-style t)
+  (let ((style (fxlogand t transcoder-mask:eolstyle)))
+    (cond ((fx= style eolstyle:none)  'none)
+          ((fx= style eolstyle:lf)    'lf)
+          ((fx= style eolstyle:nel)   'nel)
+          ((fx= style eolstyle:ls)    'ls)
+          ((fx= style eolstyle:cr)    'cr)
+          ((fx= style eolstyle:crlf)  'crlf)
+          ((fx= style eolstyle:crnel) 'crnel)
+          (else
+           (assertion-violation 'transcoder-eol-style
+                                "weird transcoder" t)))))
+
+(define (io/transcoder-error-handling-mode t)
+  (let ((mode (fxlogand t transcoder-mask:errmode)))
+    (cond ((fx= mode errmode:ignore)  'ignore)
+          ((fx= mode errmode:replace) 'replace)
+          ((fx= mode errmode:raise)   'raise)
+          (else
+           (assertion-violation 'transcoder-error-handling-mode
+                                "weird transcoder" t)))))
+
+; Like transcoded-port, but performs less error checking.

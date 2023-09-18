@@ -73,7 +73,6 @@
         [binary-mode (if (eq? tx-mode 'binary) unix:open-binary 0)]
         [create-mode (if (and (eq? io-mode 'output) (memq 'no-create optargs)) 0 unix:open-create)]
         [truncate-mode (if (and (eq? io-mode 'output) (memq 'no-truncate optargs)) 0 unix:open-trunc)])
-
         (cond 
             [(eq? io-mode 'input)
                 (unix-open fn (+ unix:open-read binary-mode) 0)]

@@ -1,7 +1,18 @@
-(define p (make-parameter "hello" 42))
+(eval-core 
+    '(define (interpreter-loop)
+        (let loop ([i 0])
+            (if (< i 10000000)
+                (loop (+ i 1))))))
 
-(print (p))
-(p 0)
-(print (p))
+(define (bytecode-loop)
+    (let loop ([i 0])
+        (if (< i 10000000)
+            (loop (+ i 1)))))
 
-(print (parameter? p))
+(let ([start (current-millis)])
+    (interpreter-loop)
+    (print (- (current-millis) start)))
+
+(let ([start (current-millis)])
+    (bytecode-loop)
+    (print (- (current-millis) start)))
