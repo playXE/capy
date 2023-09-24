@@ -600,3 +600,127 @@
                                 "weird transcoder" t)))))
 
 ; Like transcoded-port, but performs less error checking.
+(define (io/transcoded-port p t)
+  (if (io/output-port? p)
+    (io/flush p))
+  (if (not (memq (transcoder-codec t) '(latin-1 utf-8)))
+    (io/transcoded-port-random p t)
+    
+    
+    ; shallow copy
+    (let ([newport (io/clone-port p)])
+      (tuple-set! newport port.type (fxlogior type:textual (tuple-ref p port.type)))
+      (tuple-set! newport port.r7rstype (fxlogior type:textual (tuple-ref newport port.type)))
+      (tuple-set! newport port.transcoder t)
+      (tuple-set! newport port.state 'textual)
+      (tuple-set! newport port.readmode (default-read-mode))
+      ; io/transcode-port! expects a newly filled mainbuf,
+      ; so we have to fake it here.
+      ;
+      ; FIXME: Is the above really true?
+    
+      (let* ((mainbuf1 (tuple-ref p port.mainbuf))
+        (mainptr1 (tuple-ref p port.mainptr))
+        (mainlim1 (tuple-ref p port.mainlim))
+        (mainbuf2 (make-bytevector (bytevector-length mainbuf1)))
+        (mainlim2 (fx- mainlim1 mainptr1)))
+
+        (tuple-set! newport port.mainpos 0)
+        (bytevector-copy! mainbuf1 mainptr1 mainbuf2 0 mainlim2)
+        (tuple-set! newport port.mainbuf mainbuf2)
+        (tuple-set! newport port.mainptr 0)
+        (tuple-set! newport port.mainlim mainlim2))
+      ; close original port, destroying original mainbuf
+      (io/set-closed-state! p)
+      (cond 
+        [(and (io/input-port? newport) (io/output-port? newport))
+          #t]
+        [(io/input-port? newport)
+          (io/transocde-port! newport)])
+      newport)))
+
+(define (io/custom-transcoded-port p)
+  (let* ([t (make-transcoder (utf8-codec) 'none 'ignore)]
+         [newport (io/transocded-port p t)])
+      newport))
+
+(define (io/get-u8 p lookahead?)
+  (if (not (port? p))
+    (assertion-violation 'io/get-u8 "not a port" p))
+  (let (
+    [type (tuple-ref p port.type)]
+    [buf (tuple-ref p port.mainbuf)]
+    [ptr (tuple-ref p port.mainptr)]
+    [lim (tuple-ref p port.mainlim)])
+    (cond 
+      [(not (eq? type type:binary-input))
+        (if (eq? type type:binary-input/output)
+          (io/get-u8-input/output p lookahead?)
+          (assertion-violation 'io/get-u8 "not an open binary input port" p))]
+      [(< ptr lim)
+        (let ([byte (bytevector-ref buf ptr)])
+          (if (not lookahead?)
+            (tuple-set! p port.mainptr (+ ptr 1)))
+          byte)]
+      [(eq? (tuple-ref p port.state) 'eof)
+        (eof-object)]
+      [else 
+        (io/fill-buffer! p)
+        (io/get-u8 p lookahead?)])))
+
+(define (io/get-char p lookahead?)
+  (if (not (port? p))
+    (assertion-violation 'io/get-char "not a port" p))
+  
+  (let (
+    [type (tuple-ref p port.type)]
+    [buf (tuple-ref p port.mainbuf)]
+    [ptr (tuple-ref p port.mainptr)]
+    [lim (tuple-ref p port.mainlim)])
+    (cond 
+      [(not (eq? type type:textual-input))
+        (if (eq? type type:textual-input/output)
+          (io/get-char-input/output p lookahead?)
+          (assertion-violation 'io/get-char "not an open textual input port" p))]
+      [(< ptr lim)
+        (let ([unit (bytevector-ref buf ptr)])
+          (cond 
+            [(<= unit 127)
+              (cond 
+                [(> unit 13)
+                   ; not #\linefeed, #\return, #\nel, or #\x2028
+                   (if (not lookahead?)
+                      (tuple-set! p port.mainptr (+ ptr 1)))
+                   (integer->char unit)]
+                [(or (= unit 10) (= unit 13)) ; #\linefeed or #\return
+                  (if (not lookahead?)
+                    (tuple-set! p port.mainptr (+ ptr 1)))
+                  (io/return-eol p lookahead?unit)]
+                [else
+                  (if (not lookahead?)
+                    (tuple-set! p port.mainptr (+ ptr 1)))
+                  (integer->char unit)])]
+            [(and (= unit port.sentinel)
+                  (= ptr 0)
+                  (eq? (tuple-ref p port.state) 'auxstart))
+                  (io/get-char-auxstart p lookahead?)]
+            [else 
+              (let ([state (tuple-ref p port.state)])
+                (case state 
+                  [(eof) (eof-object)]
+                  [(error) (error 'get-char "permanent read error" p)]
+                  [(textual auxend)
+                    (let ([codec (fxlogand
+                                    transcoder-mask:codec
+                                    (tuple-ref p port.transcoder))])
+                                    
+                        (cond 
+                          [(= codec codec:latin-1)
+                            (if (not lookahead?)
+                              (tuple-set! p port.mainptr (+ ptr 1)))
+                            (if (= unit 133)
+                              (io/return-eol p lookahead? unit)
+                              (integer->char unit))]
+                          [(= codec codec:utf-8)
+                            (io/get-char-utf8 p lookahead? unit buf ptr lim)]
+                          [else (error 'io/get-char "unimplemented codec" codec p)]))]))]))])))

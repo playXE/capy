@@ -122,7 +122,7 @@
         (let r-loop ([env env] [i 0])
             (if (null? env)
                 #f 
-                (let a-loop ([rib (car env)] [j 1])
+                (let a-loop ([rib (car env)] [j 0])
                     (cond 
                         [(null? rib) (r-loop (cdr env) (+ i 1))]
                         [(eq? (car rib) name) (cons i j)]
@@ -197,27 +197,27 @@
     (define (interpret/lambda0 body)
         (lambda (renv)
             (letrec ([self (lambda () 
-                (body (cons (vector self) renv)))])
+                (body (cons (vector) renv)))])
                 self)))
     (define (interpret/lambda1 body)
         (lambda (renv)
             (letrec ([self (lambda (a0) 
-                (body (cons (vector self a0) renv)))])
+                (body (cons (vector a0) renv)))])
                 self)))
     (define (interpret/lambda2 body)
         (lambda (renv)
             (letrec ([self (lambda (a0 a1) 
-                (body (cons (vector self a0 a1) renv)))])
+                (body (cons (vector a0 a1) renv)))])
                 self)))
     (define (interpret/lambda3 body)
         (lambda (renv)
             (letrec ([self (lambda (a0 a1 a2) 
-                (body (cons (vector self a0 a1 a2) renv)))])
+                (body (cons (vector a0 a1 a2) renv)))])
                 self)))
     (define (interpret/lambda4 body)
         (lambda (renv)
             (letrec ([self (lambda (a0 a1 a2 a3) 
-                (body (cons (vector self a0 a1 a2 a3) renv)))])
+                (body (cons (vector a0 a1 a2 a3) renv)))])
                 self)))
 
     (define (interpret/lambda-n n body)
@@ -225,7 +225,7 @@
             (letrec ([self (lambda args
                 (if (< (length args) n)
                     (error 'interpret/lambda-n "too few arguments" n)
-                    (body (cons (list->vector (cons self args)) env)))
+                    (body (cons (list->vector (cons args)) env)))
             )])
             self)))
 
@@ -269,6 +269,5 @@
     ; (eval-core expr #:optional env)
     (set! eval-core (lambda (x . rest)
         (let ([env (if (null? rest) (interaction-environment) (car rest))])
-
             (let ([clos (interpret/preprocess (%core-preprocess x) '() (lambda (name) (environment-get-cell env name)))])
                 (clos '()))))))

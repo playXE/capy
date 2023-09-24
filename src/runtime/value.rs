@@ -24,6 +24,7 @@ impl Hash for Value {
 pub union EncodedValueDescriptor {
     pub as_int64: i64,
     pub ptr: usize,
+    pub cell_ref: ScmCellRef
 }
 
 impl PartialEq for Value {

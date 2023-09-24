@@ -1,1 +1,1 @@
-(print "hello, world!")
+(print #x7f)
