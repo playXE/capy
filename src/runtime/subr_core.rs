@@ -8,7 +8,7 @@ use crate::{
         Cenv,
     },
     raise_exn,
-    runtime::environment::ScmEnvironment,
+    runtime::{environment::ScmEnvironment, object::scm_bytevector_as_slice},
     vm::{scm_virtual_machine, thread::Thread},
 };
 
@@ -85,16 +85,96 @@ extern "C-unwind" fn symbol_to_string(thread: &mut Thread, symbol: &mut Value) -
     thread.make_string::<false>(scm_symbol_str(*symbol))
 }
 
-extern "C-unwind" fn string_to_symbol(_thread: &mut Thread, string: &mut Value) -> Value {
+extern "C-unwind" fn string_to_symbol(thread: &mut Thread, string: &mut Value) -> Value {
     if !string.is_string() {
-        raise_exn!(
-            FailContract,
-            &[],
-            "string->symbol: argument {} is not a string",
-            string
-        );
+        wrong_type_argument_violation(thread, "string->symbol", 0, "string", *string, 1, &[string])
     }
     scm_intern(scm_string_str(*string))
+}
+
+extern "C-unwind" fn string_to_bytevector(thread: &mut Thread, string: &mut Value) -> Value {
+    if !string.is_string() {
+        wrong_type_argument_violation(
+            thread,
+            "string->bytevector",
+            0,
+            "string",
+            *string,
+            1,
+            &[string],
+        );
+    }
+
+    let s = scm_string_str(*string);
+    thread.make_bytevector_from_slice::<false>(s.as_bytes())
+}
+
+extern "C-unwind" fn bytevector_to_string(thread: &mut Thread, bytevector: &mut Value) -> Value {
+    if !bytevector.is_bytevector() {
+        wrong_type_argument_violation(
+            thread,
+            "bytevector->string",
+            0,
+            "bytevector",
+            *bytevector,
+            1,
+            &[bytevector],
+        );
+    }
+
+    let bv = scm_bytevector_as_slice(*bytevector);
+    let s = match std::str::from_utf8(bv) {
+        Ok(s) => s.to_string(),
+        Err(_err) => {
+            invalid_argument_violation(
+                thread,
+                "bytevector->string",
+                "expected UTF-8 encoded bytevector",
+                *bytevector,
+                0,
+                1,
+                &[bytevector],
+            );
+        }
+    };
+    thread.make_string::<false>(&s)
+}
+
+extern "C-unwind" fn list_to_string(thread: &mut Thread, list: &mut Value) -> Value {
+    if let Some(_) = scm_length(*list) {
+        let mut chars = vec![];
+
+        let mut xs = *list;
+        while xs.is_pair() {
+            let x = scm_car(xs);
+            if !x.is_char() {
+                wrong_type_argument_violation(
+                    thread,
+                    "list->string",
+                    0,
+                    "list of characters",
+                    *list,
+                    1,
+                    &[list],
+                );
+            }
+            chars.push(x.get_char());
+            xs = scm_cdr(xs);
+        }
+
+        let s: String = chars.into_iter().collect();
+        thread.make_string::<false>(&s)
+    } else {
+        wrong_type_argument_violation(
+            thread,
+            "list->string",
+            0,
+            "list",
+            *list,
+            1,
+            &[list],
+        );
+    }
 }
 
 extern "C-unwind" fn string_p(_thread: &mut Thread, obj: &mut Value) -> Value {
@@ -102,7 +182,18 @@ extern "C-unwind" fn string_p(_thread: &mut Thread, obj: &mut Value) -> Value {
 }
 
 extern "C-unwind" fn string_length(_thread: &mut Thread, obj: &mut Value) -> Value {
-    Value::encode_int32(scm_symbol_str(*obj).len() as _)
+    if !obj.is_string() {
+        wrong_type_argument_violation(
+            _thread,
+            "string-length",
+            0,
+            "string",
+            *obj,
+            1,
+            &[obj],
+        )
+    }
+    Value::encode_int32(scm_string_str(*obj).len() as _)
 }
 
 extern "C-unwind" fn symbol_p(_thread: &mut Thread, obj: &mut Value) -> Value {
@@ -117,7 +208,7 @@ extern "C-unwind" fn make_string(thread: &mut Thread, n: &mut Value, char: &mut 
     } else {
         wrong_type_argument_violation(thread, "make-string", 1, "character", *char, 2, &[n, char])
     };
-    
+
     let _n = if n.is_int32() {
         n.get_int32()
     } else {
@@ -647,6 +738,34 @@ extern "C-unwind" fn char_to_integer(thread: &mut Thread, val: &mut Value) -> Va
     }
 }
 
+extern "C-unwind" fn char_eq_p(_thread: &mut Thread, val: &mut Value, val2: &mut Value) -> Value {
+    if val.is_char() && val2.is_char() {
+        Value::encode_bool_value(val.get_char() == val2.get_char())
+    } else {
+        if !val.is_char() {
+            wrong_type_argument_violation(
+                _thread,
+                "char=?",
+                0,
+                "character",
+                *val,
+                2,
+                &[val, val2],
+            )
+        } else {
+            wrong_type_argument_violation(
+                _thread,
+                "char=?",
+                1,
+                "character",
+                *val2,
+                2,
+                &[val, val2],
+            )
+        }
+    }
+}
+
 extern "C-unwind" fn procedure_p(_: &mut Thread, val: &mut Value) -> Value {
     Value::encode_bool_value(val.is_program())
 }
@@ -683,7 +802,6 @@ extern "C-unwind" fn procedure_eq_p(
     }
 }
 
-
 pub(crate) fn init() {
     scm_define_subr("make-weakmapping", 2, 0, 0, Subr::F2(make_weakmapping));
     scm_define_subr("weakmapping?", 1, 0, 0, Subr::F1(weakmapping_p));
@@ -694,6 +812,21 @@ pub(crate) fn init() {
     scm_define_subr("string-append", 0, 0, 1, Subr::F1(string_append));
     scm_define_subr("symbol->string", 1, 0, 0, Subr::F1(symbol_to_string));
     scm_define_subr("string->symbol", 1, 0, 0, Subr::F1(string_to_symbol));
+    scm_define_subr(
+        "string->bytevector",
+        1,
+        0,
+        0,
+        Subr::F1(string_to_bytevector),
+    );
+    scm_define_subr(
+        "bytevector->string",
+        1,
+        0,
+        0,
+        Subr::F1(bytevector_to_string),
+    );
+    scm_define_subr("list->string", 1, 0, 0, Subr::F1(list_to_string));
     scm_define_subr("string?", 1, 0, 0, Subr::F1(string_p));
     scm_define_subr("string-length", 1, 0, 0, Subr::F1(string_length));
     scm_define_subr("symbol?", 1, 0, 0, Subr::F1(symbol_p));
@@ -716,6 +849,7 @@ pub(crate) fn init() {
     scm_define_subr("current-millis", 0, 0, 0, Subr::F0(current_millis));
     scm_define_subr("integer->char", 1, 0, 0, Subr::F1(integer_to_char));
     scm_define_subr("char->integer", 1, 0, 0, Subr::F1(char_to_integer));
+    scm_define_subr("char=?", 2, 0, 0, Subr::F2(char_eq_p));
     scm_define_subr("procedure?", 1, 0, 0, Subr::F1(procedure_p));
     scm_define_subr("procedure=?", 2, 0, 0, Subr::F2(procedure_eq_p));
     super::subr_fixnum::init();

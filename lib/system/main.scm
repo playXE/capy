@@ -1,9 +1,9 @@
-(let ([port (file-io/open-file "test.scm" 'input 'text)])
-    (let loop ([ch (io/get-char port #f)])
-        (if (eof-object? ch)
-            (begin
-                (io/close-port port)
-                'done)
-            (begin
-                (print ch)
-                (loop (io/get-char port #f))))))
+(let ([port (open-text-output-file "file.txt")])
+    (put-string port "Hello, World!\n")
+    (flush-output-port port)
+    (close-port port))
+
+(let ([port (open-text-input-file "file.txt")])
+    (let ([str (read-line port)])
+        (close-port port)
+        str))

@@ -71,9 +71,10 @@ impl PatternContext {
         };
 
         self.pvcnt += 1;
-        self.pvars = sexp_acons(pvar, Sexpr::PVRef(pvref.clone()), self.pvars.clone());
+        
+        self.pvars = sexp_acons(pvar.clone(), Sexpr::PVRef(pvref.clone()), self.pvars.clone());
         pat.vars = sexp_cons(Sexpr::PVRef(pvref.clone()), pat.vars.clone());
-
+        
         Ok(Sexpr::PVRef(pvref))
     }
 
@@ -102,6 +103,7 @@ impl PatternContext {
         if matches!(self.ellipsis, Sexpr::Boolean(false)) {
             return false; // inside (... template)
         } else if matches!(self.ellipsis, Sexpr::Boolean(true)) {
+         
             return er_compare(
                 Sexpr::Symbol(*ELLIPSIS),
                 obj,
@@ -167,7 +169,7 @@ impl PatternContext {
             let mut t = Sexpr::Null;
 
             let mut ellipsis_seen = false;
-
+            
             if form.cdr().is_pair() && self.is_ellipsis(form.car()) {
                 if patternp {
                     return Err(format!(
@@ -183,9 +185,9 @@ impl PatternContext {
                 return r;
             }
 
-            let mut pp = form.clone();
-
-            while pp.is_pair() {
+            let mut pp;
+            
+            sexpr_for_each!(declared pp, form, {
                 if self.ellipsis_following(&pp) {
                     if patternp && ellipsis_seen {
                         return Err(
@@ -198,7 +200,6 @@ impl PatternContext {
                     ellipsis_seen = true;
                     let base = pp.car();
                     pp = pp.cdr();
-
                     let mut num_trailing = 0;
                     let mut ellipsis_nesting = 1;
 
@@ -262,9 +263,9 @@ impl PatternContext {
                             );
                         }
 
-                        vp = outermost.vars.clone();
+                       // vp = outermost.vars.clone();
 
-                        while vp.is_pair() {
+                        sexpr_for_each!(declared vp, outermost.vars.clone(), {
                             let Sexpr::PVRef(pvref) = vp.car().clone() else {
                                 unreachable!("[internal]: compile_rule1: not a PVRef")
                             };
@@ -272,9 +273,7 @@ impl PatternContext {
                             if pvref.level >= outermost.level {
                                 break;
                             }
-
-                            vp = vp.cdr();
-                        }
+                        });
 
                         if vp.is_null() {
                             return Err(
@@ -290,8 +289,8 @@ impl PatternContext {
                     template_append1(&mut h, &mut t, r);
                 }
 
-                pp = pp.cdr();
-            }
+                //pp = pp.cdr();
+            });
 
             if !pp.is_null() {
                 let r = self.compile_rule1(pp, spat.clone(), patternp)?;
@@ -342,6 +341,7 @@ impl PatternContext {
             }
 
             if patternp {
+               
                 return self.add_pvar(spat, form);
             } else {
                 let pvref = self.pvar_to_pvref(spat.clone(), form.clone())?;
@@ -482,16 +482,16 @@ fn compile_rules(
             level: 0,
             num_following_items: 0,
         });
-
+        
         ctx.pvars = Sexpr::Null;
         ctx.pvcnt = 0;
         ctx.maxlev = 0;
 
         ctx.form = rule.car();
-        pat.pattern = ctx.compile_rule1(ctx.form.clone(), pat.clone(), true)?;
+        
+        pat.pattern = ctx.compile_rule1(ctx.form.cdr().clone(), pat.clone(), true)?;
         ctx.form = rule.cadr();
         tmpl.pattern = ctx.compile_rule1(ctx.form.clone(), tmpl.clone(), false)?;
-
         let rule = SyntaxRuleBranch {
             pattern: pat.pattern.clone(),
             template: tmpl.pattern.clone(),
@@ -558,7 +558,7 @@ fn get_pvref_value(pvref: &PVRef, mvec: &[MatchVar], indices: &[i32], exlev: &mu
 
         tree = tree.car();
     }
-
+    //println!("pvref level={},count={} is {}", level, count, tree);
     tree
 }
 
@@ -579,13 +579,11 @@ fn grow_branch(rec: &mut MatchVar, level: i32) {
     let mut trunc = rec.root.clone();
     let mut i = 1;
     while i < level - 1 {
-        while trunc.is_pair() {
+        sexpr_for_each!(declared trunc, trunc.clone(), {
             if trunc.cdr().is_null() {
                 break;
             }
-
-            trunc = trunc.cdr();
-        }
+        });
 
         if trunc.car().is_null() {
             i += 1;
@@ -604,17 +602,17 @@ fn grow_branch(rec: &mut MatchVar, level: i32) {
         i += 1;
     }
 
-    while trunc.is_pair() {
+    sexpr_for_each!(declared trunc, trunc.clone(), {
         if trunc.cdr().is_null() {
             rec.sprout = sexp_cons(Sexpr::Null, Sexpr::Null);
             trunc.set_cdr(rec.sprout.clone());
             break;
         }
-    }
+    });
 }
 
 fn enter_subpattern(subpat: P<SyntaxPattern>, mvec: &mut [MatchVar]) {
-    let mut pp = subpat.vars.clone();
+    /*let mut pp = subpat.vars.clone();
 
     while pp.is_pair() {
         let Sexpr::PVRef(pvref) = pp.car() else {
@@ -623,11 +621,35 @@ fn enter_subpattern(subpat: P<SyntaxPattern>, mvec: &mut [MatchVar]) {
 
         grow_branch(&mut mvec[pvref.count as usize], subpat.level as i32);
         pp = pp.cdr();
-    }
+    }*/
+    sexpr_for_each!(pp, subpat.vars.clone(), {
+        let Sexpr::PVRef(pvref) = pp.car() else {
+            unreachable!("[internal]: enter_subpattern: not a PVRef")
+        };
+        let count = pvref.count;
+        grow_branch(&mut mvec[count as usize], subpat.level as i32)
+    });
 }
 
 fn exit_subpattern(subpat: P<SyntaxPattern>, mvec: &mut [MatchVar]) {
-    let mut pp = subpat.vars.clone();
+    sexpr_for_each!(pp, subpat.vars.clone(), {
+        let Sexpr::PVRef(pvref) = pp.car() else {
+            unreachable!("[internal]: exit_subpattern: not a PVRef")
+        };
+        let count = pvref.count;
+        let level = pvref.level;
+
+        if level == subpat.level {
+            if subpat.level == 1 {
+                mvec[count as usize].root = sexp_reversex(mvec[count as usize].branch.clone());
+            } else {
+                mvec[count as usize].sprout.set_car(sexp_reversex(mvec[count as usize].branch.clone()));
+                mvec[count as usize].branch = Sexpr::Null;
+            }
+        }
+    });
+
+    /*let mut pp = subpat.vars.clone();
 
     while pp.is_pair() {
         let Sexpr::PVRef(pvref) = pp.car() else {
@@ -646,7 +668,7 @@ fn exit_subpattern(subpat: P<SyntaxPattern>, mvec: &mut [MatchVar]) {
             }
         }
         pp = pp.cdr();
-    }
+    }*/
 }
 
 fn match_insert(pvref: &PVRef, matched: Sexpr, mvec: &mut [MatchVar]) {
@@ -820,7 +842,9 @@ fn match_synrule(
             }
         }
 
-        _ => sexp_equal(&form, &pattern),
+        _ => {
+            sexp_equal(&form, &pattern)
+        }
     }
 }
 
@@ -847,7 +871,6 @@ fn realize_template_rec(
     if template.is_pair() {
         let mut h = Sexpr::Null;
         let mut t = Sexpr::null();
-
         while template.is_pair() {
             let e = template.car();
 
@@ -868,6 +891,7 @@ fn realize_template_rec(
 
                 template_append1(&mut h, &mut t, r);
             }
+            //println!("h={}, t={}", h, t);
 
             template = template.cdr();
         }
@@ -892,7 +916,6 @@ fn realize_template_rec(
 
     if let Sexpr::PVRef(ref pvref) = &template {
         let v = get_pvref_value(pvref, mvec, indices, exlev);
-
         return v;
     }
 
@@ -932,6 +955,7 @@ fn realize_template_rec(
     }
 
     if matches!(template, Sexpr::Symbol(_) | Sexpr::Identifier(_)) {
+        
         return rename_variable(template, id_alist, sr.syntax_env.clone(), sr.env.clone());
     }
 
@@ -974,14 +998,13 @@ pub fn synrule_expand(
         });
        
         if match_synrule(
-            form.clone(),
+            form.cdr().clone(),
             &rule.pattern,
             syntax_env.clone(),
             env.clone(),
             &mut mvec,
         ) {
             let r = realize_template(sr, rule, &mvec);
-          
             return Ok(r);
         }
     }

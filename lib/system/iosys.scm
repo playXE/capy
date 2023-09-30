@@ -132,7 +132,6 @@
                     [(datum flush) (tuple-set! v port.bufmode 'datum) (tuple-set! v port.wr-flush #t)]
                     [(block) (tuple-set! v port.bufmode 'block)]
                     [else 
-                        (print rest)
                         (assertion-violation 'io/make-port "bad attribute" (car rest))]))
             rest)
         (if (and binary? textual?)
@@ -155,7 +154,7 @@
         (tuple-set! v port.mainptr 0)
         (tuple-set! v port.mainlim 0)
         (tuple-set! v port.mainpos 0)
-        (tuple-set! v port.transcoder (if binary? 0 #f))
+        (tuple-set! v port.transcoder (if binary? 0 (native-transcoder)))
         (tuple-set! v port.state (if binary? 'binary 'textual))
         (tuple-set! v port.iodata iodata)
         (tuple-set! v port.ioproc ioproc)
@@ -223,7 +222,7 @@
             (buf  (tuple-ref p port.mainbuf))
             (ptr  (tuple-ref p port.mainptr)))
         (cond ((eq? type type:textual-input)
-               (let ((unit (bytevector-ref buf ptr)))
+               (let ((unit (bytevector-u8-ref buf ptr)))
                  (if (< unit 128)
                      (begin (tuple-set! p port.mainptr (+ ptr 1))
                             (integer->char unit))
@@ -247,7 +246,7 @@
             (buf  (tuple-ref p port.mainbuf))
             (ptr  (tuple-ref p port.mainptr)))
         (cond ((eq? type type:textual-input)
-               (let ((unit (bytevector-ref buf ptr)))
+               (let ((unit (bytevector-u8-ref buf ptr)))
                  (if (< unit 128)
                      (integer->char unit)
                      (io/get-char p #t))))
@@ -343,7 +342,7 @@
     (io/flush-buffer p)
     (tuple-set! p port.mainbuf buf)
     (tuple-set! p port.mainlim 0)
-    (unspecified)))
+    (undefined)))
 
 ; When writing the contents of an entire string,
 ; we could do the error checking just once, but
@@ -352,7 +351,7 @@
 (define (io/write-string s p)
   (do ((n (string-length s))
        (i 0 (+ i 1)))
-      ((= i n) (unspecified))
+      ((= i n) (undefined))
     (io/write-char (string-ref s i) p)))
 
 (define (io/discretionary-flush p)
@@ -744,6 +743,7 @@
 
 (define default-transcoder 
     (make-parameter 
+        "default-transcoder"
         codec:latin-1
         (lambda (t)
             (and (fixnum? t)    
@@ -918,7 +918,7 @@
                 [(or (= unit 10) (= unit 13)) ; #\linefeed or #\return
                   (if (not lookahead?)
                     (tuple-set! p port.mainptr (+ ptr 1)))
-                  (io/return-eol p lookahead?unit)]
+                  (io/return-eol p lookahead? unit)]
                 [else
                   (if (not lookahead?)
                     (tuple-set! p port.mainptr (+ ptr 1)))
@@ -1285,6 +1285,8 @@
 ; and can be buffered without flushing.
 
 (define (io/put-string-maybe p s start count)
+
+
   (and (port? p)
        (string? s)
        (fixnum? start)
@@ -1298,7 +1300,7 @@
          (define (loop i j)
            (cond ((< i k)
                   (let* ((c (string-ref s i))
-                         (sv (char->integer c)))p
+                         (sv (char->integer c)))
                     (if (and (< 10 sv)    ; 10 = #\newline
                              (< sv 128))
                         (begin (bytevector-u8-set! buf j sv) ; FIXME
@@ -1307,6 +1309,7 @@
                  (else
                   (tuple-set! p port.mainlim j)
                   #t)))
+        
          (and (< start n)
               (<= k n)
               (eq? type type:textual-output)
@@ -1490,6 +1493,80 @@
                  (integer->char sv))))))
    (else
     (assertion-violation 'io/return-eol "internal error" p lookahead? sv))))
+
+; Whenever io/put-char is about to output a #\newline,
+; it should perform a tail call to this procedure instead.
+
+(define (io/put-eol p)
+  (let* ((buf        (tuple-ref p port.mainbuf))
+         (mainlim    (tuple-ref p port.mainlim))
+         (transcoder (tuple-ref p port.transcoder))
+         (eolstyle (fxlogand transcoder transcoder-mask:eolstyle)))
+
+    (define (put-byte b)
+      (bytevector-u8-set! buf mainlim b)
+      (let* ((mainpos (tuple-ref p port.mainpos))
+             (linesread (tuple-ref p port.linesread)))
+        (tuple-set! p port.mainlim (+ mainlim 1))
+        (tuple-set! p port.linesread (+ linesread 1))
+        (tuple-set! p port.linestart (+ mainlim mainpos)))
+      (undefined))
+
+    (define (put-bytes2 b0 b1)
+      (bytevector-u8-set! buf mainlim b0)
+      (bytevector-u8-set! buf (+ mainlim 1) b1)
+      (finish 2))
+    (define (put-bytes3 b0 b1 b2)
+      (bytevector-u8-set! buf mainlim b0)
+      (bytevector-u8-set! buf (+ mainlim 1) b1)
+      (bytevector-u8-set! buf (+ mainlim 2) b2)
+      (finish 3))
+
+    (define (finish count)
+      (let* ((mainpos (tuple-ref p port.mainpos))
+             (mainpos (+ mainpos (- count 1)))
+             (linesread (tuple-ref p port.linesread)))
+        (tuple-set! p port.mainlim (+ mainlim count))
+        (tuple-set! p port.mainpos mainpos)
+        (tuple-set! p port.linesread (+ linesread 1))
+        (tuple-set! p port.linestart (+ mainlim mainpos)))
+      (undefined))
+
+    (cond ((< (- (bytevector-length buf) mainlim) 4)
+           (io/flush-buffer p)
+           (io/put-eol p))
+
+          ((or (eq? eolstyle eolstyle:none)
+               (eq? eolstyle eolstyle:lf))
+           (put-byte 10))
+
+          ((eq? eolstyle eolstyle:cr)
+           (put-byte 13))
+
+          ((eq? eolstyle eolstyle:crlf)
+           (put-bytes2 13 10))
+
+          ((eq? codec:latin-1 (fxlogand transcoder transcoder-mask:codec))
+           (cond ((eq? eolstyle eolstyle:nel)
+                  (put-byte 133))
+                 ((eq? eolstyle eolstyle:crnel)
+                  (put-bytes2 13 133))
+                 (else
+                  (assertion-violation 'put-char "internal error" p))))
+
+          ((eq? codec:utf-8 (fxlogand transcoder transcoder-mask:codec))
+           (cond ((eq? eolstyle eolstyle:nel)
+                  (put-bytes2 194 133))
+                 ((eq? eolstyle eolstyle:crnel)
+                  (put-bytes3 13 194 133))
+                 ((eq? eolstyle eolstyle:ls)
+                  (put-bytes3 226 128 168))
+                 (else
+                  (assertion-violation 'put-char "internal error" p))))
+
+          (else
+           (assertion-violation 'put-char "internal error" p)))))
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;

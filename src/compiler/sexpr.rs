@@ -3,7 +3,10 @@ use std::{collections::HashMap, hash::Hash};
 use crate::{
     gc_protect,
     runtime::{
-        object::{scm_set_car, scm_set_cdr, scm_symbol_str, scm_vector_set, scm_string_str, scm_car, scm_cdr, scm_vector_length, scm_vector_ref},
+        object::{
+            scm_car, scm_cdr, scm_set_car, scm_set_cdr, scm_string_str, scm_symbol_str,
+            scm_vector_length, scm_vector_ref, scm_vector_set,
+        },
         symbol::scm_intern,
         value::Value,
     },
@@ -719,7 +722,10 @@ impl Sexpr {
             Self::Null => allocator.text("()"),
             Self::Undefined => allocator.text("#<undefined>"),
             Self::Bytevector(x) => allocator.text(format!("#u8({:?})", x)),
-            Self::SyntaxPattern(x) => allocator.text(format!("#<syntax-pattern {}>", x.pattern)),
+            Self::SyntaxPattern(x) => allocator.text(format!(
+                "#<syntax-pattern {}, vars={}, level={}, num_following_items={}>",
+                x.pattern, x.vars, x.level, x.num_following_items
+            )),
             Self::SyntaxRules(x) => allocator.text(format!("#<syntax-rules {}>", x.name)),
             Self::PVRef(x) => allocator.text(format!("#<pv-ref {}.{}>", x.level, x.count)),
         }
@@ -922,7 +928,6 @@ pub struct SourceLoc {
 
 pub type SourceInfo = HashMap<EqSexpr, SourceLoc>;
 
-
 pub fn value_to_sexpr(val: Value) -> Option<Sexpr> {
     Some(if val.is_int32() {
         Sexpr::Fixnum(val.get_int32())
@@ -947,7 +952,7 @@ pub fn value_to_sexpr(val: Value) -> Option<Sexpr> {
         Sexpr::Pair(P((car, cdr)))
     } else if val.is_vector() {
         let mut vec = vec![Sexpr::Null; scm_vector_length(val) as usize];
-        
+
         for i in 0..vec.len() {
             vec[i] = value_to_sexpr(scm_vector_ref(val, i as _))?;
         }
@@ -956,4 +961,29 @@ pub fn value_to_sexpr(val: Value) -> Option<Sexpr> {
     } else {
         todo!()
     })
+}
+
+#[macro_export]
+macro_rules! sexpr_for_each {
+    ($p: ident, $list: expr, $b: block) => {{
+        let mut $p = $list;
+        while { let p: &Sexpr = &$p; matches!(p, Sexpr::Pair(_)) } {
+            $b
+            #[allow(unreachable_code)]
+            {
+                $p = $p.cdr();
+            }
+        }};
+    };
+
+    (declared $p: ident, $list: expr, $b: block) => {{
+        $p = $list;
+        while { let p: &Sexpr = &$p; matches!(p, Sexpr::Pair(_)) } {
+            $b
+            #[allow(unreachable_code)]
+            {
+                $p = $p.cdr();
+            }
+        }
+    }}
 }

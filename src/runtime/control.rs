@@ -28,7 +28,7 @@ use crate::{
         frame_dynamic_link, frame_previous_sp, frame_virtual_return_address, StackElement,
     }, scm_call_n},
     utils::round_up,
-    vm::thread::Thread,
+    vm::thread::Thread, runtime::error::capture_stacktrace,
 };
 use crate::{
     gc::ObjEdge,
@@ -297,7 +297,8 @@ extern "C-unwind" fn continuation_p(_thread: &mut Thread, cont: &mut Value) -> V
 }
 
 extern "C-unwind" fn error(_thread: &mut Thread, val: &mut Value) -> Value {
-    eprintln!("error: {}", val);
+    let stacktrace = unsafe { capture_stacktrace(_thread) };
+    eprintln!("error: {}\n{}", val,stacktrace);
     std::process::abort();
 }
 
@@ -338,6 +339,7 @@ pub fn wrong_number_of_arguments_violation(thread: &mut Thread, proc: Value, req
 }
 
 pub fn wrong_type_argument_violation(thread: &mut Thread, who: &str, position: usize, expected: &str, got: Value, argc: usize, argv: &[&mut Value]) -> ! {
+    println!("wrong type argument violation: {} expected {}, got {}\n{}", who, expected, got, unsafe { capture_stacktrace(thread) });
     todo!()
 }
 

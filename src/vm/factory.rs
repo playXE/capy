@@ -445,12 +445,16 @@ impl Thread {
         };
         unsafe {
             let mutator = self.mutator();
-
+            let semantics = if datum_size >= 16*1024 {
+                AllocationSemantics::Los
+            } else {
+                AllocationSemantics::Default
+            };
             let datum_addr = mutator.alloc(
                 datum_size,
                 size_of::<usize>(),
                 0,
-                AllocationSemantics::Default,
+                semantics,
             );
 
             datum_addr.store(HashTableRec {

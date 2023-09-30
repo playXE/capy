@@ -20,7 +20,6 @@
         x)
     ((do "step" x y)
         y)))
-
 (define-syntax unless 
     (syntax-rules ()
         ((unless test-expr body-expr ...)
@@ -44,7 +43,15 @@
     (syntax-rules ()
         ((_) #f)
         ((_ a) a)
-        ((_ a b ...) (if a a (or b ...)))))
+        ((_ a b ...)
+            (let ((temp a))
+                (if temp temp (or b ...))))))
+
+;(define-syntax or 
+;    (syntax-rules ()
+;        ((_) #f)
+;        ((_ a) a)
+;        ((_ a b ...) (if a a (or b ...)))))
 
 (define-syntax let*
     (syntax-rules ()

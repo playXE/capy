@@ -10,9 +10,13 @@ SRCS += lib/system/exception.scm
 SRCS += lib/system/sys.scm
 SRCS += lib/system/sysparam.scm
 SRCS += lib/system/iosys.scm
-SRCS += lib/system/portio.scm
+SRCS += lib/system/conio.scm
+SRCS += lib/system/customio.scm
+SRCS += lib/system/stringio.scm
 SRCS += lib/system/fileio.scm
-SRCS += lib/system/ports.scm
+SRCS += lib/system/bytevectorio.scm
+SRCS += lib/system/portio.scm
+SRCS += lib/system/stdio.scm
 SRCS += lib/system/main.scm
 
 

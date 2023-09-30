@@ -12,7 +12,7 @@ use crate::compiler::{
 
 use super::{
     tree_il::{IForm, LVar, Label, Lambda, Let, LetType},
-    P,
+    P, sexpr::Sexpr,
 };
 
 fn is_misused(x: &IForm, tail: bool, lvar: P<LVar>, formals: &[P<LVar>]) -> bool {
@@ -223,6 +223,9 @@ pub fn recover_loops_rec(
         }
 
         IForm::Seq(seq) => {
+            if seq.forms.len() == 0 {
+                return P(IForm::Const(Sexpr::Undefined));
+            }
             for i in 0..seq.forms.len() - 1{
                 seq.forms[i] = recover_loops_rec(seq.forms[i].clone(), penv, false, changed);
             }
@@ -304,6 +307,7 @@ fn optimize_loop(
     }));
 
     fn rewrite(mut x: P<IForm>, lvar: &P<LVar>, formals: &[P<LVar>], label: P<IForm>) -> P<IForm> {
+
         match &mut *x {
             IForm::Call(call) => {
                 if call.proc.is_lref() && call.proc.lref_lvar().unwrap().as_ptr() == lvar.as_ptr() {
@@ -424,10 +428,19 @@ fn optimize_loop(
                 x
             }
 
+            IForm::Fix(fix) => {
+                for rhs in fix.rhs.iter_mut() {
+                    rhs.body = rewrite(rhs.body.clone(), lvar, formals, label.clone());
+                }
+                fix.body = rewrite(fix.body.clone(), lvar, formals, label.clone());
+                x
+
+            }
+
             _ => x,
         }
     }
-
+    
     let body = rewrite(lambda.body.clone(), &lvar, &lambda.lvars, label.clone());
 
     let IForm::Label(ref mut lbl_) = &mut *label else {
