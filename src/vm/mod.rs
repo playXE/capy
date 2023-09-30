@@ -46,6 +46,7 @@ pub struct VirtualMachine {
     pub(crate) initialized: bool,
     pub mmtk: mmtk::MMTK<CapyVM>,
     pub gc_waiters_lock: Monitor<()>,
+    pub gc_plan: GCPlan,
     pub safepoint_lock_data: Option<MutexGuard<'static, Vec<*mut Thread>>>,
     pub(crate) symtable: HashMap<&'static str, Value>,
     pub(crate) symtab_lock: RawMutex,
@@ -103,6 +104,7 @@ pub fn scm_init(mmtk: mmtk::MMTK<CapyVM>, plan: GCPlan) -> &'static mut VirtualM
     safepoint::init();
     let this = Box::leak(Box::new(VirtualMachine {
         mmtk,
+        gc_plan: plan,
         needs_wb: match plan {
             GCPlan::GenCopy | GCPlan::GenImmix | GCPlan::StickyImmix => true,
             _ => false,

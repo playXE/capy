@@ -5,5 +5,8 @@
         "./Cargo.toml"
     ],
     "C_Cpp.dimInactiveRegions": false,
-    "rust-analyzer.showUnlinkedFileNotification": false
+    "rust-analyzer.showUnlinkedFileNotification": false,
+    "files.associations": {
+        "settings": "cpp"
+    }
 }

@@ -58,6 +58,7 @@ pub enum TypeId {
     SyntaxExpander,
     VMCont,
     Continuation,
+    EofObject,
 }
 
 pub const HASH_STATE_UNHASHED: u8 = 0;

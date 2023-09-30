@@ -372,6 +372,7 @@ extern "C-unwind" fn bytevector_u8_set(
     value: &mut Value,
     endianess: &mut Value,
 ) -> Value {
+
     let param = NativeMutatorParam::new(
         1,
         "bytevector-u8-set!",
@@ -1502,8 +1503,8 @@ pub(crate) fn init() {
         0,
         Subr::F3(bytevector_char_ref),
     );
-    scm_define_subr("bytevector-u8-set!", 4, 0, 0, Subr::F4(bytevector_u8_set));
-    scm_define_subr("bytevector-s8-set!", 4, 0, 0, Subr::F4(bytevector_s8_set));
+    scm_define_subr("bytevector-u8-set!", 3, 1, 0, Subr::F4(bytevector_u8_set));
+    scm_define_subr("bytevector-s8-set!", 3, 1, 0, Subr::F4(bytevector_s8_set));
     scm_define_subr("bytevector-u16-set!", 4, 0, 0, Subr::F4(bytevector_u16_set));
     scm_define_subr("bytevector-s16-set!", 4, 0, 0, Subr::F4(bytevector_s16_set));
     scm_define_subr("bytevector-u32-set!", 4, 0, 0, Subr::F4(bytevector_u32_set));

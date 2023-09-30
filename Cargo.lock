@@ -108,6 +108,7 @@ dependencies = [
  "errno",
  "libc",
  "log",
+ "macroassembler",
  "mmtk",
  "murmur3",
  "num-traits",
@@ -150,6 +151,12 @@ name = "cfg-if"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
+
+[[package]]
+name = "cfgenius"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e4e14dc222697b7baf25030985dc061fd360b805ec69a8cec135bb01e77cc09"
 
 [[package]]
 name = "chrono"
@@ -390,6 +397,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "intrusive-collections"
+version = "0.9.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b694dc9f70c3bda874626d2aed13b780f137aab435f4e9814121955cf706122e"
+dependencies = [
+ "memoffset",
+]
+
+[[package]]
 name = "is-terminal"
 version = "0.4.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -407,6 +423,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b0fd2260e829bddf4cb6ea802289de2f86d6a7a690192fbe91b3f46e0f2c8473"
 dependencies = [
  "either",
+]
+
+[[package]]
+name = "jit-allocator"
+version = "0.2.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e28cf4ebc39fb6f738ec0d837aa6ad34d5ce3902c275b298fad2d0e9f857fff0"
+dependencies = [
+ "cfgenius",
+ "errno",
+ "intrusive-collections",
+ "libc",
+ "once_cell",
+ "parking_lot",
+ "wasmtime-jit-icache-coherence",
+ "winapi",
 ]
 
 [[package]]
@@ -484,6 +516,24 @@ name = "log"
 version = "0.4.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b5e6163cb8c49088c2c36f57875e58ccd8c87c7427f7fbd50ea6710b2f3f2e8f"
+
+[[package]]
+name = "macroassembler"
+version = "1.0.2"
+source = "git+https://github.com/playxe/masm-rs#b61d68ee50d9cc0586c15cf3f060fa5cfed46fbb"
+dependencies = [
+ "cfg-if",
+ "errno",
+ "jit-allocator",
+ "libc",
+ "num",
+ "num-traits",
+ "once_cell",
+ "parking_lot",
+ "paste",
+ "tinyvec",
+ "winapi",
+]
 
 [[package]]
 name = "memchr"
@@ -1221,6 +1271,17 @@ name = "wasm-bindgen-shared"
 version = "0.2.87"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ca6ad05a4870b2bf5fe995117d3728437bd27d7cd5f06f13c17443ef369775a1"
+
+[[package]]
+name = "wasmtime-jit-icache-coherence"
+version = "10.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6fb1e7c68ede63dc7a98c3e473162954e224951854e229c8b4e74697fe17dbdd"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "windows-sys",
+]
 
 [[package]]
 name = "winapi"

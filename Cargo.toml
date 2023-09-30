@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 paste = "1.0"
-#macroassembler = { git = "https://github.com/playxe/masm-rs" }
+macroassembler = { git = "https://github.com/playxe/masm-rs" }
 mmtk = { git = "https://github.com/mmtk/mmtk-core", features = ["malloc_mimalloc"] }
 #mmtk = { path = "mmtk-core" }
 libc = "0.2"

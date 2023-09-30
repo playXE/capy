@@ -171,7 +171,7 @@ impl Thread {
         self.handles = MaybeUninit::new(HandleMemory::new());
         let th = threads();
         th.add_thread(self as *mut Thread);
-        self.interpreter = MaybeUninit::new(InterpreterState::new());
+        self.interpreter = MaybeUninit::new(InterpreterState::new(self.mutator()));
         self.shadow_stack.init();
         self.local_finalization_queue = MaybeUninit::new(Vec::with_capacity(128));
         self.obj_handles = MaybeUninit::new(ObjStorage::new("thread-handles"));

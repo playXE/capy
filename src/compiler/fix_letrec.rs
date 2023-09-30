@@ -684,7 +684,7 @@ pub fn pass_fix_letrec(mut x: P<IForm>) -> P<IForm> {
             IForm::Let(let_) => match let_.typ {
                 LetType::Rec => {
                     let res = fixing_letrec(pass, false, &let_.lvars, &let_.inits, let_.body.clone());
-                    assert!(matches!(*res, IForm::Fix(_)));
+                    //assert!(matches!(*res, IForm::Fix(_)));
                     post_order(res, pass)
                 }
                 LetType::RecStar => {

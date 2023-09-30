@@ -174,6 +174,18 @@ extern "C-unwind" fn fixnum_p(_thread: &mut Thread, a: &mut Value) -> Value {
     Value::encode_bool_value(a.is_int32())
 }
 
+extern "C-unwind" fn fxrshl(thread: &mut Thread, a: &mut Value, b: &mut Value) -> Value {
+    if !a.is_int32() {
+        wrong_type_argument_violation(thread, "fxrshl", 0, "fixnum", *a, 2, &[a, b]);
+    }
+
+    if !b.is_int32() {
+        wrong_type_argument_violation(thread, "fxrshl", 1, "fixnum", *b, 2, &[a, b]);
+    }
+
+    Value::encode_int32(a.get_int32().wrapping_shl(b.get_int32() as _))
+}
+
 pub(crate) fn init() {
     
     scm_define_subr("fx=", 2, 0, 0, Subr::F2(fx_eq));
@@ -191,5 +203,6 @@ pub(crate) fn init() {
     scm_define_subr("fxlsh", 2, 0, 0, Subr::F2(fx_lsh));
     scm_define_subr("fxsha", 2, 0, 0, Subr::F2(fx_sha));
     scm_define_subr("fixnum?", 1, 0, 0, Subr::F1(fixnum_p));
+    scm_define_subr("fxrshl", 2, 0, 0, Subr::F2(fxrshl));
 
 }

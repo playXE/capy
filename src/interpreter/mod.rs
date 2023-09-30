@@ -1,7 +1,7 @@
-use self::stackframe::{
+use self::{stackframe::{
     frame_dynamic_link, frame_local, frame_previous_sp, set_frame_dynamic_link,
     set_frame_machine_return_address, set_frame_virtual_return_address, StackElement,
-};
+}, engine::EngineConstParams};
 use crate::{
     gc::{
         virtual_memory::{PlatformVirtualMemory, VirtualMemory, VirtualMemoryImpl},
@@ -14,10 +14,10 @@ use crate::{
     vm::{
         intrinsics::{get_callee_vcode, UnwindAndContinue},
         thread::Thread,
-        BOOT_CONTINUATION_CODE,
+        BOOT_CONTINUATION_CODE, scm_virtual_machine, options::GCPlan,
     },
 };
-use mmtk::{util::{Address, ObjectReference}, vm::RootsWorkFactory};
+use mmtk::{util::{Address, ObjectReference}, vm::RootsWorkFactory, Mutator};
 use rsetjmp::{setjmp, JumpBuf};
 use std::{
     mem::size_of,
@@ -26,8 +26,9 @@ use std::{
     sync::atomic::AtomicU64,
 };
 pub mod engine;
-pub mod llint;
+//pub mod llint;
 pub mod stackframe;
+pub mod entry_record;
 
 /// A simple counter used to identify different interpreter entrypoints.
 ///
@@ -66,7 +67,21 @@ pub struct InterpreterContinuation {
 }
 
 impl InterpreterState {
-    pub fn new() -> Self {
+    pub fn new(_mutator: &mut Mutator<CapyVM>) -> Self {
+        //let selector = mmtk::memory_manager::get_allocator_mapping(&scm_virtual_machine().mmtk, AllocationSemantics::Default);
+        //let info = AllocatorInfo::new::<CapyVM>(selector);
+
+        let engine = match scm_virtual_machine().gc_plan {
+            GCPlan::GenCopy | GCPlan::GenImmix | GCPlan::StickyImmix => engine::rust_engine::<{EngineConstParams {
+                needs_write_barrier: true,
+                bump_pointer_offset: usize::MAX 
+            }}>,
+            _ => engine::rust_engine::<{EngineConstParams {
+                needs_write_barrier: false,
+                bump_pointer_offset: usize::MAX 
+            }}>,
+        };
+
         let mut this = Self {
             ip: null(),
             registers: null_mut(),
@@ -80,7 +95,7 @@ impl InterpreterState {
             stack_bottom: null_mut(),
             stack_top: null_mut(),
             mra_after_abort: null(),
-            engines: [engine::rust_engine],
+            engines: [engine],
             stack_memory: VirtualMemory::null(),
         };
         unsafe {

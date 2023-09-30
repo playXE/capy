@@ -853,7 +853,7 @@ pub fn pass2(mut iform: P<IForm>, recover_loops: bool) -> Result<P<IForm>, Strin
             iform = pass2_rec(iform.clone(), &mut Vec::with_capacity(4), true, &mut ctx)?;
         }
       
-        if !ctx.changed {
+        if !ctx.changed || _passes >= 3 {
             return Ok(iform);
         }
         _passes += 1;

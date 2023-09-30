@@ -109,6 +109,36 @@ extern "C-unwind" fn symbol_p(_thread: &mut Thread, obj: &mut Value) -> Value {
     Value::encode_bool_value(obj.is_symbol())
 }
 
+extern "C-unwind" fn make_string(thread: &mut Thread, n: &mut Value, char: &mut Value) -> Value {
+    let ch = if char.is_undefined() {
+        '\0'
+    } else if char.is_char() {
+        char.get_char()
+    } else {
+        wrong_type_argument_violation(thread, "make-string", 1, "character", *char, 2, &[n, char])
+    };
+    
+    let _n = if n.is_int32() {
+        n.get_int32()
+    } else {
+        wrong_type_argument_violation(thread, "make-string", 0, "fixnum", *n, 2, &[n, char])
+    };
+
+    if _n < 0 {
+        invalid_argument_violation(
+            thread,
+            "make-string",
+            "length must be non-negative",
+            *n,
+            0,
+            2,
+            &[n, char],
+        );
+    }
+
+    thread.make_string::<false>(&ch.to_string().repeat(_n as usize))
+}
+
 extern "C-unwind" fn string_ref(_thread: &mut Thread, obj: &mut Value, index: &mut Value) -> Value {
     if !obj.is_string() {
         raise_exn!(
@@ -653,6 +683,7 @@ extern "C-unwind" fn procedure_eq_p(
     }
 }
 
+
 pub(crate) fn init() {
     scm_define_subr("make-weakmapping", 2, 0, 0, Subr::F2(make_weakmapping));
     scm_define_subr("weakmapping?", 1, 0, 0, Subr::F1(weakmapping_p));
@@ -666,6 +697,7 @@ pub(crate) fn init() {
     scm_define_subr("string?", 1, 0, 0, Subr::F1(string_p));
     scm_define_subr("string-length", 1, 0, 0, Subr::F1(string_length));
     scm_define_subr("symbol?", 1, 0, 0, Subr::F1(symbol_p));
+    scm_define_subr("make-string", 1, 1, 0, Subr::F2(make_string));
     scm_define_subr("string-ref", 2, 0, 0, Subr::F2(string_ref));
     scm_define_subr("string-set!", 3, 0, 0, Subr::F3(string_set));
     scm_define_subr("string=?", 0, 0, 1, Subr::F1(string_eq));

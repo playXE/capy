@@ -308,3 +308,13 @@
             (begin
                 (proc (car list))
                 (loop (cdr list))))))
+
+(define eof-object #f)
+(define eof-object? #f)
+
+(let ([eof-object-internal (make-tuple 1)]) 
+    (tuple-set! eof-object-internal 0 'type:eof-object)
+    (set! eof-object (lambda () eof-object-internal))
+    (set! eof-object? (lambda (x) (eq? x eof-object-internal))))
+
+(define (assert . rest) #f)

@@ -3,8 +3,8 @@ use std::intrinsics::unlikely;
 use std::mem::{size_of, transmute};
 use std::ptr::null;
 
-use mmtk::memory_manager::object_reference_write;
 use crate::bytecode::encode::Decode;
+use crate::gc::ObjEdge;
 use crate::raise_exn;
 use crate::runtime::equality::{equal, eqv, scm_compare};
 use crate::runtime::gsubr::scm_apply_subr;
@@ -12,11 +12,31 @@ use crate::runtime::object::*;
 use crate::runtime::value::Value;
 use crate::vm::intrinsics::{self, cons_rest, get_callee_vcode, reinstate_continuation_x};
 use crate::vm::thread::Thread;
+use mmtk::util::metadata::side_metadata::GLOBAL_SIDE_METADATA_VM_BASE_ADDRESS;
+use mmtk::util::ObjectReference;
+use mmtk::MutatorContext;
 
 use super::stackframe::StackElement;
 use super::stackframe::*;
 use crate::bytecode::opcodes::*;
-pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
+
+
+#[derive(std::marker::ConstParamTy, PartialEq, Eq)]
+pub struct EngineConstParams {
+    /// Whether we need to inline write barrier in interpreter loop.
+    ///
+    /// If set to `false` all the opcodes that write to heap objects will not do
+    /// extra write-barrier work. Note: intrinsics are not aware of this switch,
+    /// so they would still go through slowpath.
+    pub needs_write_barrier: bool,
+    /// Offset to `BumpPointer` type inside `Thread` if the selected GC plan supports
+    /// fast-path bump-pointer allocation. `usize::MAX` if not supported.
+    pub bump_pointer_offset: usize,
+}
+
+pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParams>(
+    thread: &mut Thread,
+) -> Value {
     let mut ip: *const u8 = thread.interpreter().ip;
     let mut sp: *mut StackElement = thread.interpreter().sp;
     let mut op: u8;
@@ -73,9 +93,7 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
 
     macro_rules! sp_set {
         ($i: expr, $val: expr) => {
-            std::hint::black_box({
-                sp.offset($i as _).write(StackElement { as_value: $val })
-            });
+            std::hint::black_box({ sp.offset($i as _).write(StackElement { as_value: $val }) });
         };
     }
 
@@ -506,8 +524,8 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 let gloc = global.cast_as::<ScmGloc>();
                 let src = sp_ref!(global_set.src().value());
                 if src.is_object() {
-                    object_reference_write(
-                        thread.mutator(),
+                    reference_write::<CONST_PARAMS>(
+                        thread,
                         transmute(gloc as *mut ScmGloc),
                         transmute(&mut gloc.value),
                         transmute(src),
@@ -537,8 +555,8 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 let src = sp_ref!(box_set.src());
 
                 if src.is_object() {
-                    object_reference_write(
-                        thread.mutator(),
+                    reference_write::<CONST_PARAMS>(
+                        thread,
                         transmute(boxed.cast_as::<ScmBox>() as *mut ScmBox),
                         transmute(&mut boxed.cast_as::<ScmBox>().value),
                         transmute(src),
@@ -562,14 +580,14 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 ip = ip.add(size_of::<OpCons>());
                 sync_sp!();
                 sync_ip!();
-             
+
                 let cell = thread
                     .make_cons::<false>(Value::encode_null_value(), Value::encode_null_value());
-                
+
                 let pair = cell.cast_as::<ScmPair>();
                 pair.car = sp_ref!(cons.car());
                 pair.cdr = sp_ref!(cons.cdr());
-              
+
                 sp_set!(cons.dst(), cell);
             }
 
@@ -578,14 +596,13 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                 ip = ip.add(size_of::<OpMakeVectorImmediate>());
                 sync_sp!();
                 sync_ip!();
-               
+
                 let v = thread
                     .make_vector::<false>(make_vector.len() as _, Value::encode_bool_value(false));
                 sp_set!(make_vector.dst(), v);
             }
 
             OP_MAKE_VECTOR => {
-
                 let make_vector = OpMakeVector::read(ip);
                 ip = ip.add(size_of::<OpMakeVector>());
                 sync_sp!();
@@ -662,7 +679,19 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                     raise_exn!(Exn, &[], "vector-set!: out of bounds");
                 }
 
-                scm_vector_set(vector, thread, imm, src);
+                let vector = vector.cast_as::<ScmVector>();
+                let slot = transmute::<_, ObjEdge>(vector.values.as_mut_ptr().add(imm as usize));
+
+                if src.is_object() {
+                    reference_write::<CONST_PARAMS>(
+                        thread,
+                        transmute(vector),
+                        slot,
+                        transmute(src),
+                    );
+                } else {
+                    vector.values.as_mut_ptr().add(imm as usize).write(src);
+                }
             }
 
             OP_VECTOR_REF => {
@@ -710,7 +739,19 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                     raise_exn!(Exn, &[], "vector-set!: out of bounds")
                 }
 
-                scm_vector_set(vector, thread, idx as _, src);
+                let vector = vector.cast_as::<ScmVector>();
+                let slot = transmute::<_, ObjEdge>(vector.values.as_mut_ptr().add(idx as usize));
+
+                if src.is_object() {
+                    reference_write::<CONST_PARAMS>(
+                        thread,
+                        transmute(vector),
+                        slot,
+                        transmute(src),
+                    );
+                } else {
+                    vector.values.as_mut_ptr().add(idx as usize).write(src);
+                }
             }
 
             OP_VECTOR_LENGTH => {
@@ -774,7 +815,7 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                         todo!("ovf");
                     }
                 } else {
-                    raise_exn!(Fail, &[], "NYI: Slow add: {}, {}", a,b);
+                    raise_exn!(Fail, &[], "NYI: Slow add: {}, {}", a, b);
                     //todo!("slow add {}, {}", a, b);
                 }
             }
@@ -824,7 +865,7 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                         sp_set!(div.dst(), Value::encode_int32(result));
                         continue;
                     }
-                    // TODO: Load `ratnum.scm` file and invoke 
+                    // TODO: Load `ratnum.scm` file and invoke
                 } else {
                     todo!("slow div")
                 }
@@ -1141,7 +1182,18 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                     raise_exn!(Exn, &[], "set-car!: expected pair, got {}", dst)
                 }
 
-                scm_set_car(dst, thread, src);
+                let pair = dst.cast_as::<ScmPair>();
+
+                if src.is_object() {
+                    reference_write::<CONST_PARAMS>(
+                        thread,
+                        transmute(pair as *mut ScmPair),
+                        transmute(&mut pair.car),
+                        transmute(src),
+                    );
+                } else {
+                    pair.car = src;
+                }
             }
 
             OP_SET_CDR => {
@@ -1156,7 +1208,18 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
                     raise_exn!(Exn, &[], "set-cdr!: expected pair, got {}", dst)
                 }
 
-                scm_set_cdr(dst, thread, src);
+                let pair = dst.cast_as::<ScmPair>();
+
+                if src.is_object() {
+                    reference_write::<CONST_PARAMS>(
+                        thread,
+                        transmute(pair as *mut ScmPair),
+                        transmute(&mut pair.cdr),
+                        transmute(src),
+                    );
+                } else {
+                    pair.cdr = src;
+                }
             }
 
             OP_BIND_OPTIONALS => {
@@ -1222,4 +1285,49 @@ pub unsafe extern "C-unwind" fn rust_engine(thread: &mut Thread) -> Value {
             _ => (),
         }
     }
+}
+
+#[inline(always)]
+unsafe fn reference_write<const PARAMS: EngineConstParams>(
+    thread: &mut Thread,
+    src: ObjectReference,
+    slot: ObjEdge,
+    target: ObjectReference,
+) {
+    // use transmutes here because MMTk calls are inlined only with PGO enabled builds
+    // and we still want somewhat decent performance when developing without PGO.
+    let addr = transmute::<_, *mut ObjectReference>(slot);
+    addr.write(target);
+    if PARAMS.needs_write_barrier {
+        // load unlogged bit from side-metadata.
+        // if it is set then we invoke slow-path from MMTk.
+        let addr = transmute::<_, usize>(src);
+        let meta_addr = transmute::<_, usize>(GLOBAL_SIDE_METADATA_VM_BASE_ADDRESS) + (addr >> 6);
+        let shift = (addr >> 3) & 0b111;
+
+        let byte_val = (meta_addr as *const u8).read();
+
+        if unlikely((byte_val >> shift) & 1 == 1) {
+            thread
+                .mutator()
+                .barrier()
+                .object_reference_write_slow(src, slot, target);
+        }
+    }
+}
+
+pub unsafe fn fast_reference_write(
+    thread: &mut Thread,
+    src: ObjectReference,
+    slot: ObjEdge,
+    target: ObjectReference,
+) {
+    reference_write::<
+        {
+            EngineConstParams {
+                needs_write_barrier: true,
+                bump_pointer_offset: usize::MAX,
+            }
+        },
+    >(thread, src, slot, target)
 }

@@ -129,7 +129,7 @@
                     [(set-position!) (set! set-position? #t)]
                     [(none) (tuple-set! v port.bufmode 'none)]
                     [(line) (tuple-set! v port.bufmode 'line)]
-                    [(datum flush) (tuple-set! v port.bufmode 'datum) (tuple-set! v port.wr-flush #t)]\
+                    [(datum flush) (tuple-set! v port.bufmode 'datum) (tuple-set! v port.wr-flush #t)]
                     [(block) (tuple-set! v port.bufmode 'block)]
                     [else 
                         (print rest)
@@ -202,12 +202,12 @@
 (define (io/input-port? p)
     (and (port? p)
         (let ([direction (fxlogand type-mask:direction (tuple-ref p port.type))])
-            (fx= type:input (fxlogand direction type:input)))))
+            (= type:input (fxlogand direction type:input)))))
 
 (define (io/output-port? p)
     (and (port? p)
         (let ([direction (fxlogand type-mask:direction (tuple-ref p port.type))])
-            (fx= type:output (fxlogand direction type:output)))))
+            (= type:output (fxlogand direction type:output)))))
 
 (define (io/open-port? p)
     (or (io/input-port? p)
@@ -216,6 +216,51 @@
 (define (io/buffer-mode p)
     (tuple-ref p port.bufmode))
 
+
+(define (io/read-char p)
+  (if (port? p)
+      (let ((type (tuple-ref p port.type))
+            (buf  (tuple-ref p port.mainbuf))
+            (ptr  (tuple-ref p port.mainptr)))
+        (cond ((eq? type type:textual-input)
+               (let ((unit (bytevector-ref buf ptr)))
+                 (if (< unit 128)
+                     (begin (tuple-set! p port.mainptr (+ ptr 1))
+                            (integer->char unit))
+                     (io/get-char p #f))))
+              ((eq? type type:binary-input)                 ; FIXME (was io/if)
+               (let ((x (io/get-u8 p #f)))
+                 (if (eof-object? x)
+                     x
+                     (integer->char x))))
+              (else
+               (error 'read-char "not a textual input port" p)
+               #t)))
+      (begin (error 'read-char "not a textual input port" p)
+             #t)))
+
+; FIXME:  See comments for io/read-char above.
+
+(define (io/peek-char p)
+  (if (port? p)
+      (let ((type (tuple-ref p port.type))
+            (buf  (tuple-ref p port.mainbuf))
+            (ptr  (tuple-ref p port.mainptr)))
+        (cond ((eq? type type:textual-input)
+               (let ((unit (bytevector-ref buf ptr)))
+                 (if (< unit 128)
+                     (integer->char unit)
+                     (io/get-char p #t))))
+              ((eq? type type:binary-input)                 ; FIXME (was io/if)
+               (let ((x (io/get-u8 p #t)))
+                 (if (eof-object? x)
+                     x
+                     (integer->char x))))
+              (else
+               (error 'peek-char "not a textual input port" p)
+               #t)))
+      (begin (error 'peek-char "not a textual input port" p)
+             #t)))
 
 ; FIXME: trusts the ioproc, which might be unwise.
 
@@ -249,7 +294,7 @@
             (buf  (tuple-ref p port.mainbuf))
             (ptr  (tuple-ref p port.mainptr)))
         (cond ((eq? type type:textual-input)
-               (let ((unit (bytevector-ref buf ptr)))
+               (let ((unit (bytevector-u8-ref buf ptr)))
                  (or (< unit 128)
                      (eq? (tuple-ref p port.state)
                           'eof)
@@ -257,6 +302,76 @@
                       (tuple-ref p port.iodata)))))
               (else #f)))
       (error 'char-ready? "not textual input" p)))
+
+
+
+(define (io/write-char c p)
+  (if (port? p)
+      (let ((type (tuple-ref p port.type)))
+        (cond ((eq? type type:binary-output)                ; FIXME (was io/if)
+               (let ((sv (char->integer c)))
+                 (if (fx< sv 256)
+                     (io/put-u8 p sv)
+                     (error 'write-char
+                            "non-latin-1 character to binary port"
+                            c p))))
+              ((eq? type type:textual-output)
+               (io/put-char p c))
+              (else
+               (error 'write-char "not a textual output port" p)
+               #t)))
+      (begin (error 'write-char "not a textual output port" p)
+             #t)))
+
+; FIXME:  The name is misleading, since it now requires a bytevector.
+; FIXME:  Asm/Shared/makefasl.sch uses this procedure, mainly
+; to write codevectors.
+;
+; For short bytevectors, it might be more effective to copy rather than
+; flush.  This procedure is really most useful for long bytevectors, and
+; was written to speed up fasl file writing.
+;
+; With the advent of transcoded i/o in v0.94, this procedure
+; is useful only for writing fasl files, which are either
+; binary or Latin-1 with no end-of-line translation.
+
+(define (io/write-bytetuple bvl p)
+  (let ((buf (tuple-ref p port.mainbuf)))
+    (io/flush-buffer p)
+    (tuple-set! p port.mainbuf bvl)
+    (tuple-set! p port.mainlim (bytetuple-length bvl))
+    (io/flush-buffer p)
+    (tuple-set! p port.mainbuf buf)
+    (tuple-set! p port.mainlim 0)
+    (unspecified)))
+
+; When writing the contents of an entire string,
+; we could do the error checking just once, but
+; this should be fast enough for now.
+
+(define (io/write-string s p)
+  (do ((n (string-length s))
+       (i 0 (+ i 1)))
+      ((= i n) (unspecified))
+    (io/write-char (string-ref s i) p)))
+
+(define (io/discretionary-flush p)
+  (if (and (port? p) (io/output-port? p))
+      (if (tuple-ref p port.wr-flush?)
+          (io/flush-buffer p))
+      (begin (error "io/discretionary-flush: not an output port: " p)
+             #t)))
+
+; Flushes output-only ports, but does not flush combined input/output
+; ports because they are unbuffered on the output side.
+
+(define (io/flush p)
+  (if (and (port? p) (io/output-port? p))
+      (if (not (io/input-port? p))
+          (io/flush-buffer p))
+      (begin (error "io/flush: not an output port: " p)
+             #t)))
+
 
 (define (io/close-port p)
   (if (port? p)
@@ -335,8 +450,8 @@
         [auxptr (tuple-ref p port.auxptr)]
         [auxlim (tuple-ref p port.auxlim)])
         (cond 
-            [(fx= type type:binary-input) #t]
-            [(fx= type type:textual-input)
+            [(= type type:binary-input) #t]
+            [(= type type:textual-input)
                 (case state 
                     [(closed error eof)
                         (io/reset-buffer! p)
@@ -408,7 +523,7 @@
 ;     port-position-in-chars (used by custom ports)
 
 (define (io/port-position p)
-  (io/port-position-nocache p))
+  (io/port-position-nocache p)  )
 
 ; Like io/port-position, but faster and more space-efficient
 ; because it doesn't cache.  The call to io/flush is necessary
@@ -448,22 +563,130 @@
          (error 'io/has-set-port-position!? "illegal argument" p)
          #t)))
 
+; FIXME: for textual output ports with variable-length encoding,
+; any output operation should invalidate all cached positions
+; that lie beyond the position of the output operation.
+
+(define (io/set-port-position! p posn)
+  (if (io/output-port? p)
+      (io/flush p))
+  (cond ((not (and (port? p)
+                   (tuple-ref p port.setposn)))
+         (error 'io/set-port-position! (errmsg 'msg:illegalarg1) p posn))
+        ((eq? (tuple-ref p port.state) 'closed)
+         (undefined))
+        ((not (and (exact? posn) (integer? posn)))
+         (error 'io/set-port-position! "illegal argument" posn))
+        ((or (= posn 0)
+             (io/binary-port? p))
+         (io/reset-buffers! p)
+         (tuple-set! p port.mainpos posn)
+         (io/set-port-position-as-binary! p posn))
+        (else
+
+         ; Lookup the corresponding byte position.
+
+         (let* ((t (io/port-transcoder p))
+                (codec (io/transcoder-codec t))
+                (input? (io/input-port? p))
+                (output? (io/output-port? p))
+                (alist (io/port-alist p))
+                (probe1 (assq 'port-position alist))
+                (port-position-in-chars (if probe1 (cdr probe1) #f))
+                (probe2 (assq 'port-position-in-bytes alist))
+                (port-position-in-bytes (if probe2 (cdr probe2) #f))
+                (probe3 (assq 'cached-positions alist))
+                (ht (if probe3 (cdr probe3) #f))
+                (byte-posn (and ht (hashtable-ref ht posn #f))))
+
+           (define (reposition!)
+             (io/reset-buffers! p)
+             (tuple-set! p port.mainpos posn)
+             (io/set-port-position-as-binary! p byte-posn))
+
+           ; We can't enforce the R6RS restriction for combined
+           ; input/output ports because it may be a lookahead correction.
+
+           (cond ((or byte-posn
+                      (and input? output?))
+
+                  (if (and (not input?)
+                           output?
+                           (not (eq? codec 'latin-1))
+                           (not port-position-in-chars))
+                      (issue-warning-deprecated
+                       'set-port-position!...on_Unicode_output_port))
+
+                  (reposition!))
+
+                 (else
+
+                  ; error case: posn > 0 and not in cache
+
+                  (if (not (issue-deprecated-warnings?))
+
+                      (assertion-violation 'set-port-position!
+                                           (errmsg 'msg:uncachedposition)
+                                           p posn)
+
+                      ; FIXME: ad hoc warning message
+
+                      (let ((out (current-error-port)))
+                        (display "Warning from set-port-position!: " out)
+                        (newline out)
+                        (display (errmsg 'msg:uncachedposition) out)
+                        (display ": " out)
+                        (write posn out)
+                        (newline out)
+
+                        ; Attempt the operation anyway.  Hey, it might work.
+
+                        (cond ((or port-position-in-chars
+                                   (and
+                                    (eq? 'latin-1 codec)
+                                    (eq? 'none (io/transcoder-eol-style t))))
+                               (reposition!))
+                              ((io/input-port? p)
+                               (io/set-port-position! p 0)
+                               (do ((posn posn (- posn 1)))
+                                   ((= posn 0))
+                                 (read-char p)))
+                              (else
+                               (reposition!))))))))))
+
+  (undefined))
+
+(define (io/set-port-position-as-binary! p posn)
+  (let ((r (((tuple-ref p port.ioproc) 'set-position!)
+            (tuple-ref p port.iodata)
+            posn)))
+    (cond ((eq? r 'ok)
+           (if (eq? (tuple-ref p port.state) 'eof)
+               (tuple-set!
+                p
+                port.state
+                (if (binary-port? p) 'binary 'textual)))
+           (undefined))
+          (else
+           (error 'set-port-position! "io error" p posn)))))
+
+
 (define (io/port-transcoder p)
   (tuple-ref p port.transcoder))
 
 (define (io/textual-port? p)
-  (not (fx= 0 (fxlogand type-mask:binary/textual
+  (not (= 0 (fxlogand type-mask:binary/textual
                         (tuple-ref p port.type)))))
 
 (define (io/r7rs-textual-port? p)
-  (not (fx= 0 (fxlogand type-mask:binary/textual
+  (not (= 0 (fxlogand type-mask:binary/textual
                         (tuple-ref p port.r7rstype)))))
 
 (define (io/binary-port? p)
-  (fx= 0 (fxlogand type-mask:binary/textual (tuple-ref p port.type))))
+  (= 0 (fxlogand type-mask:binary/textual (tuple-ref p port.type))))
 
 (define (io/r7rs-binary-port? p)
-  (fx= 0 (fxlogand type-mask:binary/textual
+  (= 0 (fxlogand type-mask:binary/textual
                    (tuple-ref p port.r7rstype))))
 
 ; Transcoders et cetera.
@@ -568,10 +791,10 @@
 (define (io/transcoder-codec t)
   (let ((codec (fxlogand t transcoder-mask:codec)))
 
-    (cond ((fx= codec codec:binary)  'binary)
-          ((fx= codec codec:latin-1) 'latin-1)
-          ((fx= codec codec:utf-8)   'utf-8)
-          ((fx= codec codec:utf-16)  'utf-16)
+    (cond ((= codec codec:binary)  'binary)
+          ((= codec codec:latin-1) 'latin-1)
+          ((= codec codec:utf-8)   'utf-8)
+          ((= codec codec:utf-16)  'utf-16)
           (else
            (assertion-violation 'transcoder-codec
                                 "weird transcoder" t)))))
@@ -579,22 +802,22 @@
 
 (define (io/transcoder-eol-style t)
   (let ((style (fxlogand t transcoder-mask:eolstyle)))
-    (cond ((fx= style eolstyle:none)  'none)
-          ((fx= style eolstyle:lf)    'lf)
-          ((fx= style eolstyle:nel)   'nel)
-          ((fx= style eolstyle:ls)    'ls)
-          ((fx= style eolstyle:cr)    'cr)
-          ((fx= style eolstyle:crlf)  'crlf)
-          ((fx= style eolstyle:crnel) 'crnel)
+    (cond ((= style eolstyle:none)  'none)
+          ((= style eolstyle:lf)    'lf)
+          ((= style eolstyle:nel)   'nel)
+          ((= style eolstyle:ls)    'ls)
+          ((= style eolstyle:cr)    'cr)
+          ((= style eolstyle:crlf)  'crlf)
+          ((= style eolstyle:crnel) 'crnel)
           (else
            (assertion-violation 'transcoder-eol-style
                                 "weird transcoder" t)))))
 
 (define (io/transcoder-error-handling-mode t)
   (let ((mode (fxlogand t transcoder-mask:errmode)))
-    (cond ((fx= mode errmode:ignore)  'ignore)
-          ((fx= mode errmode:replace) 'replace)
-          ((fx= mode errmode:raise)   'raise)
+    (cond ((= mode errmode:ignore)  'ignore)
+          ((= mode errmode:replace) 'replace)
+          ((= mode errmode:raise)   'raise)
           (else
            (assertion-violation 'transcoder-error-handling-mode
                                 "weird transcoder" t)))))
@@ -658,7 +881,7 @@
           (io/get-u8-input/output p lookahead?)
           (assertion-violation 'io/get-u8 "not an open binary input port" p))]
       [(< ptr lim)
-        (let ([byte (bytevector-ref buf ptr)])
+        (let ([byte (bytevector-u8-ref buf ptr)])
           (if (not lookahead?)
             (tuple-set! p port.mainptr (+ ptr 1)))
           byte)]
@@ -683,7 +906,7 @@
           (io/get-char-input/output p lookahead?)
           (assertion-violation 'io/get-char "not an open textual input port" p))]
       [(< ptr lim)
-        (let ([unit (bytevector-ref buf ptr)])
+        (let ([unit (bytevector-u8-ref buf ptr)])
           (cond 
             [(<= unit 127)
               (cond 
@@ -723,4 +946,873 @@
                               (integer->char unit))]
                           [(= codec codec:utf-8)
                             (io/get-char-utf8 p lookahead? unit buf ptr lim)]
-                          [else (error 'io/get-char "unimplemented codec" codec p)]))]))]))])))
+                          [else (error 'io/get-char "unimplemented codec" codec p)]))]
+                  [else (error 'io/get-char "internal error" state p)]))]))]
+        [(eq? (tuple-ref p port.state) 'eof)
+          (io/reset-buffers! p) ; FIXME: Probably redundant
+          (eof-object)]
+        [(eq? (tuple-ref p port.state) 'error)
+          (io/reset-buffers! p)
+          (error 'get-char "permanent read error" p)]
+        [(eq? (tuple-ref p port.state) 'auxend)
+          (let* (
+            [auxbuf (tuple-ref p port.auxbuf)]
+            [auxptr (tuple-ref p port.auxptr)]
+            [auxlim (tuple-ref p port.auxlim)]
+            [n      (- auxlim auxptr)]
+            [mainbuf (tuple-ref p port.mainbuf)])
+            
+            (bytevector-copy! auxbuf auxptr mainbuf 0 n) 
+            (bytevector-u8-set! mainbuf n port.sentinel)
+            (tuple-set! p port.mainpos 
+                          (+ (tuple-ref p port.mainpos) ptr))
+            (tuple-set! p port.mainptr 0)
+            (tuple-set! p port.mainlim n)
+            (tuple-set! p port.auxptr 0)
+            (tuple-set! p port.state 'textual)
+            (io/get-char p lookahead?))]
+        [else 
+          (io/reset-buffers! p)
+          (io/fill-buffer! p) 
+          (io/get-char p lookahead?)])))
+
+(define (io/put-u8 p byte)
+  (let (
+      [type (tuple-ref p port.type)]
+      [buf  (tuple-ref p port.mainbuf)]
+      [lim   (tuple-ref p port.mainlim)])
+    (cond 
+      [(eq? type type:binary-output)
+        (cond 
+          [(< lim (bytevector-length buf))
+            (bytevector-u8-set! buf lim byte)
+            (tuple-set! p port.mainlim (+ lim 1))]
+          [else 
+            (io/flush-buffer p)
+            (io/put-u8 p byte)])]
+      [(eq? type type:binary-input/output)
+        (io/put-u8-input/output p byte)]
+      [else (error 'put-u8 "not a binary output port")])))
+(define (io/put-char p c)
+  (if (port? p)
+    (let (
+        [type (tuple-ref p port.type)]
+        [buf  (tuple-ref p port.mainbuf)]
+        [lim   (tuple-ref p port.mainlim)])
+      (cond 
+        [(eq? type type:textual-output)
+          (let ([sv (char->integer c)]
+                [n (bytevector-length buf)])
+            (cond 
+              [(>= lim n) 
+                (io/flush-buffer p)
+                (io/put-char p c)]
+              [(= sv 10)
+                (io/put-eol p)]
+              [(<= sv 127)
+                (bytevector-u8-set! buf lim sv)
+                (tuple-set! p port.mainlim (+ lim 1))]
+              [(and (<= sv 255)
+                    (= codec:latin-1
+                        (fxlogand 
+                          transcoder-mask:codec
+                          (tuple-ref p port.transcoder))))
+                (bytevector-u8-set! buf lim sv)
+                (tuple-set! p port.mainlim (+ lim 1))]
+              [(not (= codec:utf-8)
+                      (fxlogand 
+                        transcoder-mask:codec 
+                        (tuple-ref p port.transcoder)))
+                (let* (
+                    [t (tuple-ref p port.transcoder)]
+                    [mode (fxlogand transcoder-mask:errmode t)])
+                  (cond 
+                    [(= mode errmode:ignore)
+                      (undefined)]
+                    [(= mode errmode:replace)
+                      (io/put-char p #\?)]
+                    [(= mode errmode:raise)
+                      (error 'put-char "encoding error" (list p c))]
+                    [else 
+                      (assertion-violation 'put-char "internal error" p c)]))]
+              [(>= lim (- n 4))
+                (io/flush-buffer p)
+                (io/put-char p c)]
+              [(<= sv 2047)
+                (let (
+                    [u0 (fxlogior 192 (fxrshl sv 6))]
+                    [u1 (fxlogior 128 (fxlogand sv 63))]
+                    [pos (tuple-ref p port.mainpos)])
+                  (bytevector-u8-set! buf lim u0)
+                  (bytevector-u8-set! buf (+ lim 1) u1)
+                  (tuple-set! p port.mainpos (- pos 1)
+                  (tuple-set! p port.mainlim (+ lim 2))))]
+              [(<= 65535)
+                (let (
+                    [u0 (fxlogior 224 (fxrshl sv 12))]
+                    [u1 (fxlogior 128 (fxlogand (fxrshl sv 6) 63))]
+                    [u2 (fxlogior 128 (fxlogand sv 63))]
+                    [pos (tuple-ref p port.mainpos)])
+                  (bytevector-u8-set! buf lim u0)
+                  (bytevector-u8-set! buf (+ lim 1) u1)
+                  (bytevector-u8-set! buf (+ lim 2) u2)
+                  (tuple-set! p port.mainpos (- pos 2)
+                  (tuple-set! p port.mainlim (+ lim 3))))]
+              [else 
+                (let (
+                    [u0 (fxlogior 240 (fxrshl sv 18))]
+                    [u1 (fxlogior 128 (fxlogand (fxrshl sv 12) 63))]
+                    [u2 (fxlogior 128 (fxlogand (fxrshl sv 6) 63))]
+                    [u3 (fxlogior 128 (fxlogand sv 63))]
+                    [pos (tuple-ref p port.mainpos)])
+                  (bytevector-u8-set! buf lim u0)
+                  (bytevector-u8-set! buf (+ lim 1) u1)
+                  (bytevector-u8-set! buf (+ lim 2) u2)
+                  (bytevector-u8-set! buf (+ lim 3) u3)
+                  (tuple-set! p port.mainpos (- pos 3)
+                  (tuple-set! p port.mainlim (+ lim 4))))]))]
+          [(eq? type:textual-input/output)
+            (io/put-char-input/output p c)]
+          [else 
+            (error 'put-char "not an output port" p)])
+      ) (error 'put-char "not an output port" p)))
+
+; Operations on input/output ports, which are peculiar.
+; Currently, the only input/output ports are
+;
+;     bytevector input/output ports
+;     custom input/output ports
+;     transcoded input/output ports
+;
+; These operations are invoked only when p is known to be an
+; input/output port of the correct type (binary/textual).
+
+
+(define (io/get-u8-input/output p lookahead?)
+  (let* ((state   (tuple-ref p port.state))
+         (mainbuf (tuple-ref p port.mainbuf))
+         (mainlim (tuple-ref p port.mainlim))
+         (iodata  (tuple-ref p port.iodata))
+         (ioproc  (tuple-ref p port.ioproc)))
+    (cond ((eq? state 'eof)
+           (eof-object))
+          ((eq? state 'error)
+           (error 'get-u8 "permanent read error on port " p)
+           (eof-object))
+          ((eq? state 'closed)
+           (error 'get-u8 "read attempted on closed port " p))
+          ((> mainlim 0)
+           (let ((r (bytevector-u8-ref mainbuf 0)))
+             (if (not lookahead?)
+                 (let ((mainpos (tuple-ref p port.mainpos)))
+                   (tuple-set! p port.mainpos (+ mainpos 1))
+                   (tuple-set! p port.mainlim 0)))
+             r))
+          (else
+           (let ((n ((ioproc 'read) iodata mainbuf)))
+             (cond ((eq? n 1)
+                    (let ((r (bytevector-u8-ref mainbuf 0)))
+                      (if (not lookahead?)
+                          (let ((mainpos (tuple-ref p port.mainpos)))
+                            (tuple-set! p port.mainpos (+ mainpos 1))
+                            (tuple-set! p port.mainlim 0))
+                          (tuple-set! p port.mainlim 1))
+                      r))
+                   ((or (eq? n 0) (eq? n 'eof))
+                    (io/set-eof-state! p)
+                    (eof-object))
+                   (else
+                    (io/set-error-state! p)
+                    (io/get-u8-input/output p lookahead?))))))))
+
+(define (io/get-char-input/output p lookahead?)
+  (let* ((state   (tuple-ref p port.state))
+         (mainbuf (tuple-ref p port.mainbuf))
+         (mainlim (tuple-ref p port.mainlim))
+         (iodata  (tuple-ref p port.iodata))
+         (ioproc  (tuple-ref p port.ioproc)))
+    (cond ((eq? state 'eof)
+           (eof-object))
+          ((eq? state 'error)
+           (error 'get-char "Read error on port " p)
+           (eof-object))
+          ((eq? state 'closed)
+           (error 'get-char "Read attempted on closed port " p))
+          ((> mainlim 0)
+           (let* ((bv (make-bytevector mainlim))
+                  (s  (begin (r6rs:bytevector-copy! mainbuf 0 bv 0 mainlim)
+                             (utf8->string bv))))
+             (if (not lookahead?)
+                 (let ((mainpos (tuple-ref p port.mainpos)))
+                   (tuple-set! p port.mainpos (+ mainpos 1))
+                   (tuple-set! p port.mainlim 0)))
+             (string-ref s 0)))
+          (else
+           (let ((n ((ioproc 'read) iodata mainbuf)))
+             (cond ((and (fixnum? n) (> n 0))
+                    (let* ((bv (make-bytevector n))
+                           (s  (begin (r6rs:bytevector-copy! mainbuf 0 bv 0 n)
+                                      (utf8->string bv))))
+                      (if (not lookahead?)
+                          (let ((mainpos (tuple-ref p port.mainpos)))
+                            (tuple-set! p port.mainpos (+ mainpos 1))
+                            (tuple-set! p port.mainlim 0))
+                          (tuple-set! p port.mainlim n))
+                      (string-ref s 0)))
+                   ((or (eq? n 0) (eq? n 'eof))
+                    (io/set-eof-state! p)
+                    (eof-object))
+                   (else
+                    (io/set-error-state! p)
+                    (io/get-char-input/output p lookahead?))))))))
+
+(define (io/put-u8-input/output p byte)
+  (let* ((state   (tuple-ref p port.state))
+         (mainbuf (tuple-ref p port.mainbuf))
+         (mainpos (tuple-ref p port.mainpos))
+         (mainlim (tuple-ref p port.mainlim))
+         (iodata  (tuple-ref p port.iodata))
+         (ioproc  (tuple-ref p port.ioproc))
+         (buf     mainbuf))
+    (cond ((eq? state 'error)
+           (error 'put-u8 "permanent write error on port " p)
+           (eof-object))
+          ((eq? state 'closed)
+           (error 'put-u8 "write attempted on closed port " p))
+          ((> mainlim 0)
+           (if (tuple-ref p port.setposn)
+               (begin (io/set-port-position! p mainpos)
+                      (io/put-u8-input/output p byte))
+               (begin (io/set-error-state! p)
+                      (error 'put-u8
+                             "input/output port without set-port-position!"
+                             p))))
+          (else
+           (bytevector-u8-set! buf 0 byte)
+           (let ((r ((ioproc 'write) iodata buf 1)))
+             (cond ((eq? r 'ok)
+                    (tuple-set! p port.mainpos (+ mainpos 1))
+                    (undefined))
+                   (else
+                    (io/set-error-state! p)
+                    (io/put-u8-input/output p byte))))))))
+
+(define (io/put-char-input/output p c)
+  (let* ((state   (tuple-ref p port.state))
+         (mainpos (tuple-ref p port.mainpos))
+         (mainlim (tuple-ref p port.mainlim))
+         (iodata  (tuple-ref p port.iodata))
+         (ioproc  (tuple-ref p port.ioproc))
+         (buf     (string->utf8 (string c))))
+    (cond ((eq? state 'error)
+           (error 'put-char "permanent write error on port " p)
+           (eof-object))
+          ((eq? state 'closed)
+           (error 'put-char "write attempted on closed port " p))
+          ((> mainlim 0)
+
+           ; Must correct for buffered lookahead character.
+
+           (if (tuple-ref p port.setposn)
+               (begin (io/set-port-position! p mainpos)
+                      (io/put-char-input/output p c))
+               (begin (io/set-error-state! p)
+                      (error 'put-char
+                             "input/output port without set-port-position!"
+                             p))))
+          (else
+           (let* ((n0 (bytevector-length buf))
+                  (r ((ioproc 'write) iodata buf n0)))
+             (cond ((eq? r 'ok)
+                    (tuple-set! p port.mainpos (+ mainpos 1))
+                    (undefined))
+                   (else
+                    (io/set-error-state! p)
+                    (io/put-char-input/output p c))))))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;
+;;; Bulk i/o.
+;;;
+;;; Most of these handle a common case by returning the same
+;;; value as a corresponding R6RS library procedure, but may
+;;; fail on complex or unusual cases by returning #f.
+;;;
+;;; These should be majorly bummed, else there's no point.
+;;;
+;;; FIXME: could add a few more, such as
+;;;     get-bytevector-n!
+;;;     get-string-n!
+;;;     put-bytevector
+;;;
+;;; Note, however, that io/put-string-maybe didn't help as much
+;;; as io/get-line-maybe, and probably wasn't worth the effort
+;;; and code size.
+;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+; Handles the common case in which the line is all-Ascii,
+; terminated by a linefeed, and lies entirely within the buffer.
+
+(define (io/get-line-maybe p)
+  (and (port? p)
+       (let ((type (tuple-ref p port.type))
+             (buf  (tuple-ref p port.mainbuf))
+             (ptr  (tuple-ref p port.mainptr)))
+         (define (loop i)
+           (let ((unit (bytevector-u8-ref buf i)))     ; FIXME: should be trusted
+             (cond ((and (< 13 unit)       ; 13 = #\return
+                         (< unit 128))
+                    (loop (+ i 1)))
+                   ((= 10 unit)            ; 10 = #\linefeed
+                    (let* ((n (- i ptr))
+                           (s (make-string n)))
+                      (loop2 ptr i s 0)))
+                   (else #f))))
+         (define (loop2 j k s i)
+           (cond ((< j k)
+                  (string-set! s i (integer->char
+                                             (bytevector-u8-ref buf j)))
+                  (loop2 (+ j 1) k s (+ i 1)))
+                 (else
+                  (tuple-set! p port.mainptr (+ k 1))
+                  s)))
+         (and (eq? type type:textual-input)
+              (not (tuple-ref p port.wasreturn))
+              (loop ptr)))))
+  
+; Handles the common case in which the string is all-Ascii
+; and can be buffered without flushing.
+
+(define (io/put-string-maybe p s start count)
+  (and (port? p)
+       (string? s)
+       (fixnum? start)
+       (fixnum? count)
+       (<= 0 start)
+       (let ((k (+ start count))
+             (n (string-length s))
+             (type (tuple-ref p port.type))
+             (buf  (tuple-ref p port.mainbuf))
+             (lim  (tuple-ref p port.mainlim)))
+         (define (loop i j)
+           (cond ((< i k)
+                  (let* ((c (string-ref s i))
+                         (sv (char->integer c)))p
+                    (if (and (< 10 sv)    ; 10 = #\newline
+                             (< sv 128))
+                        (begin (bytevector-u8-set! buf j sv) ; FIXME
+                               (loop (+ i 1) (+ j 1)))
+                        #f)))
+                 (else
+                  (tuple-set! p port.mainlim j)
+                  #t)))
+         (and (< start n)
+              (<= k n)
+              (eq? type type:textual-output)
+              (<= (+ lim count) (bytevector-length buf))
+              (loop start lim)))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;
+;;; Private procedures (called only from code within this file)
+;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+; Works only on input ports.
+; The main invariants may not hold here.
+; In particular, the port may be in the textual state
+; but have a nonempty auxbuf.
+
+(define (io/fill-buffer! p)
+  (let ((r (((tuple-ref p port.ioproc) 'read)
+            (tuple-ref p port.iodata)
+            (tuple-ref p port.mainbuf))))
+    (cond ((eq? r 'eof)
+           (io/set-eof-state! p))
+          ((eq? r 'error)
+           ; FIXME: should retry before giving up
+           (io/set-error-state! p)
+           (error 'io/fill-buffer! "Read error on port " p)
+           #t)
+          ((and (fixnum? r) (>= r 0))
+           (tuple-set! p port.mainpos
+                             (+ (tuple-ref p port.mainpos)
+                                (tuple-ref p port.mainptr)))
+           (tuple-set! p port.mainptr 0)
+           (tuple-set! p port.mainlim r))
+          (else
+           (io/set-error-state! p)
+           (error 'io/fill-buffer! "bad value " r " on " p)))
+    (io/transcode-port! p)))
+
+
+; The main buffer has just been filled, but the state has not been changed.
+; If the port was in the textual state, it should enter the auxstart state.
+; If the port was in the auxstart state, it should remain in that state.
+; If the port was in the auxend state, it should enter the auxstart state.
+; So the main job here is to convert the port to the auxstart state.
+
+(define (io/transcode-port! p)
+  (let* ((type       (tuple-ref p port.type))
+         (state      (tuple-ref p port.state))
+         (mainbuf    (tuple-ref p port.mainbuf))
+         (mainptr    (tuple-ref p port.mainptr))
+         (mainlim    (tuple-ref p port.mainlim))
+         (auxbuf     (tuple-ref p port.auxbuf))
+         (auxptr     (tuple-ref p port.auxptr))
+         (auxlim     (tuple-ref p port.auxlim)))
+    
+    (cond ((= type type:binary-input) #t)
+          ((= type type:textual-input)
+           (case state
+            ((closed error eof)
+             (io/reset-buffers! p))
+            ((textual auxstart auxend)
+             (bytevector-u8-set! auxbuf auxlim (bytevector-u8-ref mainbuf 0))
+             (tuple-set! p port.auxlim (+ auxlim 1))
+             (bytevector-u8-set! mainbuf 0 port.sentinel)
+             (tuple-set! p port.state 'auxstart))
+            (else
+             (error 'io/transcode-port! "internal error" p))))
+          (else
+           (error 'io/transcode-port! "internal error" p)))))
+
+; Works only on output ports.
+
+(define (io/flush-buffer p)
+  (let ((wr-ptr (tuple-ref p port.mainlim)))
+    (if (> wr-ptr 0)
+        (let ((r (((tuple-ref p port.ioproc) 'write)
+                  (tuple-ref p port.iodata)
+                  (tuple-ref p port.mainbuf)
+                  wr-ptr)))
+          (cond ((eq? r 'ok)
+                 (tuple-set! p port.mainpos
+                                   (+ (tuple-ref p port.mainpos) wr-ptr))
+                 (tuple-set! p port.mainlim 0))
+                ((eq? r 'error)
+                 (io/set-error-state! p)
+                 (error 'io/flush-buffer "Write error on port " p)
+                 #t)
+                (else
+                 (io/set-error-state! p)
+                 (error 'io/flush-buffer "bad value " r " on " p)
+                 #t))))))
+
+
+; Converts port to a clean error state.
+
+(define (io/set-error-state! p)
+  (tuple-set! p port.state 'error)
+  (io/reset-buffers! p))
+
+; Converts port to a clean eof state.
+
+(define (io/set-eof-state! p)
+  (tuple-set! p port.state 'eof)
+  (io/reset-buffers! p))
+
+; Converts port to a clean closed state.
+; FIXME:  Should this reduce the size of mainbuf?
+
+(define (io/set-closed-state! p)
+  (tuple-set! p port.type  type:closed)
+  (tuple-set! p port.state 'closed)
+  (io/reset-buffers! p))
+
+; Resets buffers to an empty state.
+
+(define (io/reset-buffers! p)
+  (tuple-set! p
+                    port.mainpos
+                    (+ (tuple-ref p port.mainpos)
+                       (tuple-ref p port.mainptr)))
+  (tuple-set! p port.mainptr 0)
+  (tuple-set! p port.mainlim 0)
+  (tuple-set! p port.auxptr 0)
+  (tuple-set! p port.auxlim 0)
+  (bytevector-u8-set! (tuple-ref p port.mainbuf) 0 port.sentinel)
+  (case (tuple-ref p port.state)
+   ((auxstart auxend)
+    (tuple-set! p port.state 'textual))))
+
+; Shallow-clones a port without closing it.
+
+(define (io/clone-port p)
+  (let* ((n (tuple-length p))
+         (newport (make-tuple n)))
+    (do ((i 0 (+ i 1)))
+        ((= i n)
+         (tuple-set! newport 0 'type:port)
+         newport)
+      (tuple-set! newport i (tuple-ref p i)))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;
+;;; End-of-line processing.
+;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+; Whenever io/get-char is about to return one of the four
+; end-of-line characters (#\linefeed, #\return, #\x85, #x2028),
+; it should perform a tail call to this procedure instead, with
+; the scalar value of the specific end-of-line character as the
+; last argument.
+;
+; That call should occur *after* the port's state has been
+; updated to consume the character (unless lookahead?
+; is true), but before the linesread, linestart, and wasreturn
+; fields have been updated.  Updating those fields is the
+; responsibility of these procedures.
+
+(define (io/return-eol p lookahead? sv)
+  (case sv
+   ((13)
+    (io/return-cr p lookahead?))
+   ((10 133 8232)
+    (if (tuple-ref p port.wasreturn)
+        (begin (tuple-set! p port.wasreturn #f)
+               (io/return-char-following-cr p lookahead? sv))
+        (let* ((pos (tuple-ref p port.mainpos))
+               (ptr (tuple-ref p port.mainptr))
+               (line (tuple-ref p port.linesread))
+               (transcoder (tuple-ref p port.transcoder))
+               (eolstyle (fxlogand transcoder transcoder-mask:eolstyle)))
+          (cond ((or (= sv 10)
+                     (not (= eolstyle eolstyle:none)))
+                 (if (not lookahead?)
+                     (begin (tuple-set! p port.linesread (+ line 1))
+                            (tuple-set! p port.linestart (+ pos ptr))))
+                 #\newline)
+                (else
+                 (integer->char sv))))))
+   (else
+    (assertion-violation 'io/return-eol "internal error" p lookahead? sv))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;
+;;; On-the-fly transcoding of UTF-8.
+;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+; On-the-fly transcoding of a non-Ascii UTF-8 character.
+; The first argument is known to be a textual input port
+; whose transcoder uses the UTF-8 codec.
+; The second argument is true if this is a lookahead operation.
+; The third argument is the first code unit of the character.
+; The last three arguments are for the active buffer, either
+; mainbuf (if the state is textual or auxend)
+; or auxbuf (if the state is auxstart).
+;
+; If the active buffer does not contain enough bytes, then
+; the port must be forced into the auxstart state, and bytes
+; must be transferred from mainbuf to auxbuf until the auxbuf
+; contains a complete character.
+
+(define (io/get-char-utf-8 p lookahead? unit buf ptr lim)
+
+  (define (decoding-error units)
+    (for-each (lambda (x) (io/consume-byte! p)) units)
+    (let* ((transcoder (tuple-ref p port.transcoder))
+           (errmode (fxlogand transcoder-mask:errmode transcoder)))
+      (cond ((= errmode errmode:replace)
+             (integer->char 65533))
+            ((= errmode errmode:ignore)
+             (io/get-char p lookahead?))
+            (else
+             (let* ((line (+ 1 (port-lines-read p)))
+                    (msg (string-append "utf-8 decoding error in line "
+                                        (number->string line))))
+               (raise-r6rs-exception (make-i/o-decoding-error p)
+                                     'get-char
+                                     msg
+                                     units))))))
+  ; Forces at least one more byte into the active buffer,
+  ; and retries.
+
+  (define (read-more-bytes)
+    (let* ((state (tuple-ref p port.state))
+           (mainbuf (tuple-ref p port.mainbuf))
+           (mainptr (tuple-ref p port.mainptr))
+           (mainlim (tuple-ref p port.mainlim))
+           (auxbuf (tuple-ref p port.auxbuf))
+           (auxptr (tuple-ref p port.auxptr))
+           (auxlim (tuple-ref p port.auxlim))
+           (m (- mainlim mainptr))
+           (n (- auxlim auxptr)))
+      (case state
+
+       ((auxend)
+        (bytevector-copy! mainbuf mainptr mainbuf 0 m)
+        (bytevector-copy! auxbuf auxptr mainbuf m n)
+        (bytevector-u8-set! mainbuf (+ m n) port.sentinel)
+
+        (tuple-set! p
+                          port.mainpos
+                          (+ (tuple-ref p port.mainpos) mainptr))
+        (tuple-set! p port.mainptr 0)
+        (tuple-set! p port.mainlim (+ m n))
+        (tuple-set! p port.auxptr 0)
+        (tuple-set! p port.auxlim 0)
+        (tuple-set! p port.state 'textual)
+        (io/get-char p lookahead?))
+
+       ((textual)
+        (bytevector-copy! mainbuf mainptr auxbuf 0 m)
+        (tuple-set! p
+                          port.mainpos
+                          (+ (tuple-ref p port.mainpos) mainptr))
+        (tuple-set! p port.mainptr 0)
+        (tuple-set! p port.mainlim 0)
+        (tuple-set! p port.auxptr 0)
+        (tuple-set! p port.auxlim m)
+        (io/fill-buffer! p)
+        (io/get-char p lookahead?))
+
+       ((auxstart)
+        (if (>= m 2)
+            (begin
+
+             ; Copy one byte from mainbuf to auxbuf,
+             ; and move mainbuf down by 1.
+             ; FIXME:  This is grossly inefficient, but works for now.
+
+             (bytevector-u8-set! auxbuf auxlim (bytevector-u8-ref mainbuf 1))
+             (bytevector-copy! mainbuf 2 mainbuf 1 (- m 2))
+             (tuple-set! p port.mainlim (- mainlim 1))
+             (tuple-set! p port.auxlim (+ auxlim 1))
+             (io/get-char p lookahead?))
+
+            (begin
+             (io/fill-buffer! p)
+             (io/get-char p lookahead?))))
+
+       (else
+        ; state is closed, error, eof, or binary
+        (error 'io/get-char-utf-8 "internal error" state)))))
+  
+  (define (finish k sv)
+    (if (not lookahead?)
+        (let ((mainbuf (tuple-ref p port.mainbuf))
+              (mainptr (tuple-ref p port.mainptr))
+              (mainpos (tuple-ref p port.mainpos)))
+          (if (eq? mainbuf buf)
+              (begin (tuple-set! p port.mainpos (+ mainpos (- 1 k)))
+                     (tuple-set! p port.mainptr (+ k mainptr)))
+              (begin (tuple-set! p port.mainpos (+ mainpos 1))
+                     (io/consume-byte-from-auxbuf! p)
+                     (io/consume-byte-from-auxbuf! p)
+                     (if (> k 2) (io/consume-byte-from-auxbuf! p))
+                     (if (> k 3) (io/consume-byte-from-auxbuf! p))))))
+    (case sv
+     ((133 8232)
+      (io/return-eol p lookahead? sv))
+     (else
+      (integer->char sv))))
+  
+  (define (decode2) ; decodes 2 bytes
+    (let ((unit2 (bytevector-u8-ref buf (+ ptr 1))))
+      (if (<= 128 unit2 191)
+          (finish 2
+                  (fxlogior
+                   (fxlsh (fxlogand 31 unit) 6)
+                   (fxlogand 63 (bytevector-u8-ref buf (+ ptr 1)))))
+          (decoding-error (list unit unit2)))))
+
+  (define (decode3) ; decodes 3 bytes
+    (let ((unit2 (bytevector-u8-ref buf (+ ptr 1)))
+          (unit3 (bytevector-u8-ref buf (+ ptr 2))))
+      (cond ((or (and (fx= unit 224)
+                      (fx< unit2 160))
+                 (not (<= 128 unit2 191)))
+             (decoding-error (list unit unit2)))
+            ((not (<= 128 unit3 191))
+             (decoding-error (list unit unit2 unit3)))
+            (else
+             (finish 3
+                     (fxlogior
+                      (fxlsh (fxlogand 15 unit) 12)
+                      (fxlogior
+                       (fxlsh (fxlogand 63 unit2) 6)
+                       (fxlogand 63 unit3))))))))
+  
+  (define (decode4) ; decodes 4 bytes
+    (let ((unit2 (bytevector-u8-ref buf (+ ptr 1)))
+          (unit3 (bytevector-u8-ref buf (+ ptr 2)))
+          (unit4 (bytevector-u8-ref buf (+ ptr 3))))
+      (cond ((or (and (fx= unit 240)
+                      (fx< unit2 144))
+                 (and (fx= unit 244)
+                      (fx> unit2 143))
+                 (not (<= 128 unit2 191)))
+             (decoding-error (list unit unit2)))
+            ((not (<= 128 unit3 191))
+             (decoding-error (list unit unit2 unit3)))
+            ((not (<= 128 unit4 191))
+             (decoding-error (list unit unit2 unit3 unit4)))
+            (else
+             (finish 4
+                     (fxlogior
+                      (fxlogior
+                       (fxlsh (fxlogand 7 unit) 18)
+                       (fxlsh (fxlogand 63 unit2) 12))
+                      (fxlogior
+                       (fxlsh (fxlogand 63 unit3) 6)
+                       (fxlogand 63 unit4))))))))
+
+  (define n (- lim ptr))
+
+  (cond ((< n 2)
+         (read-more-bytes))
+        ((<= unit 193)
+         (decoding-error (list unit)))
+        ((<= unit 223)
+         (decode2))
+        ((< n 3)
+         (read-more-bytes))
+        ((<= unit 239)
+         (decode3))
+        ((< n 4)
+         (read-more-bytes))
+        ((<= unit 244)
+         (decode4))
+        (else
+         (decoding-error (list unit)))))
+
+
+; The special case of get-char and lookahead-char on a textual port
+; that's in the auxstart state, where it reads from auxbuf instead
+; of mainbuf.
+; The port is known to be a textual input port in the auxstart state.
+
+(define (io/get-char-auxstart p lookahead?)
+  (let ((buf  (tuple-ref p port.auxbuf))
+        (ptr  (tuple-ref p port.auxptr))
+        (lim  (tuple-ref p port.auxlim)))
+
+    (cond ((fx< ptr lim)
+           (let ((unit (bytevector-u8-ref buf ptr)))
+             (cond ((<= unit 127)
+                    (cond ((fx> unit 13)
+                           ; not #\linefeed, #\return, #\nel, or #\x2028
+                           (if (not lookahead?)
+                               (let ((pos  (tuple-ref p port.mainpos)))
+                                 (tuple-set! p port.mainpos (+ pos 1))
+                                 (io/consume-byte-from-auxbuf! p)))
+                           (integer->char unit))
+                          ((or (fx= unit 10)                       ; #\linefeed
+                               (fx= unit 13))                        ; #\return
+                           (let ((pos (tuple-ref p port.mainpos)))
+                             (if (not lookahead?)
+                                 (begin
+                                  (tuple-set! p port.mainpos (+ pos 1))
+                                  (io/consume-byte-from-auxbuf! p)))
+                             (io/return-eol p lookahead? unit)))
+                          (else
+                           (if (not lookahead?)
+                               (let ((pos  (tuple-ref p port.mainpos)))
+                                 (tuple-set! p port.mainpos (+ pos 1))
+                                 (io/consume-byte-from-auxbuf! p)))
+                           (integer->char unit))))
+                   ((let ((codec (fxlogand
+                                  transcoder-mask:codec
+                                  (tuple-ref p port.transcoder))))
+                      (fx= codec codec:latin-1))
+                    ; Latin-1
+                    (if (not lookahead?)
+                        (let ((pos  (tuple-ref p port.mainpos)))
+                          (tuple-set! p port.mainpos (+ pos 1))
+                          (io/consume-byte-from-auxbuf! p)))
+                    (if (fx= unit 133)
+                        (io/return-eol p lookahead? unit)
+                        (integer->char unit)))
+                   (else
+                    (io/get-char-utf-8 p lookahead? unit buf ptr lim)))))
+          (else
+           ; In the auxstart state, auxbuf should always be nonempty.
+           (error 'io/get-char-auxstart "internal error" p)
+           (eof-object)))))
+
+
+; Given an input port in auxstart state, consumes a byte from its auxbuf.
+; If that empties auxbuf, then the port enters a textual or auxend state.
+
+(define (io/consume-byte-from-auxbuf! p)
+
+  (define (leave-auxstart-state!)
+    (let ((mainbuf (tuple-ref p port.mainbuf))
+          (mainptr (tuple-ref p port.mainptr))
+          (mainlim (tuple-ref p port.mainlim))
+          (mainpos (tuple-ref p port.mainpos)))
+      (assert (fx= 0 mainptr))
+      (assert (fx< 0 mainlim))
+      (tuple-set! p port.mainpos (- mainpos 1))
+      (tuple-set! p port.mainptr 1)
+      (if (fx< mainlim (bytevector-length mainbuf))
+          (begin (bytevector-u8-set! mainbuf mainlim port.sentinel)
+                 (tuple-set! p port.state 'textual))
+          (begin (bytevector-u8-set! (tuple-ref p port.auxbuf)
+                                  0
+                                  (bytevector-u8-ref mainbuf (- mainlim 1)))
+                 (bytevector-u8-set! mainbuf (- mainlim 1) port.sentinel)
+                 (tuple-set! p port.mainlim (- mainlim 1))
+                 (tuple-set! p port.auxptr 0)
+                 (tuple-set! p port.auxlim 1)
+                 (tuple-set! p port.state 'auxend)))))
+
+  (assert (eq? 'auxstart (tuple-ref p port.state)))
+
+  (let* ((ptr (tuple-ref p port.auxptr))
+         (lim (tuple-ref p port.auxlim))
+         (ptr+1 (+ ptr 1)))
+
+    (cond ((fx= ptr+1 lim)
+           (tuple-set! p port.auxptr 0)
+           (tuple-set! p port.auxlim 0)
+           (leave-auxstart-state!))
+          (else
+           (tuple-set! p port.auxptr ptr+1)))))
+
+; Given an input textual port, consumes a byte from its buffers.
+; This may cause a change of state.
+; This procedure is called only during error handling
+; and #\return handling, so it can be fairly slow.
+
+(define (io/consume-byte! p)
+  (let ((state (tuple-ref p port.state))
+        (mainbuf (tuple-ref p port.mainbuf))
+        (mainptr (tuple-ref p port.mainptr))
+        (mainlim (tuple-ref p port.mainlim))
+        (auxbuf (tuple-ref p port.auxbuf))
+        (auxptr (tuple-ref p port.auxptr))
+        (auxlim (tuple-ref p port.auxlim)))
+    (case state
+     ((auxstart)
+      (io/consume-byte-from-auxbuf! p))
+     ((textual auxend)
+      (cond ((fx< mainptr mainlim)
+             (tuple-set! p port.mainpos
+                               (- (tuple-ref p port.mainpos) 1))
+             (tuple-set! p port.mainptr (+ mainptr 1)))
+            ((eq? state 'auxend)
+             (assert (fx< auxptr auxlim))
+             (r6rs:bytevector-copy! auxbuf auxptr mainbuf 0 (- auxlim auxptr))
+             (bytevector-u8-set! mainbuf (- auxlim auxptr) port.sentinel)
+             (tuple-set! p
+                               port.mainpos
+                               (+ (tuple-ref p port.mainpos) mainptr))
+             (tuple-set! p port.mainptr 0)
+             (tuple-set! p port.mainlim (- auxlim auxptr))
+             (tuple-set! p port.auxptr 0)
+             (tuple-set! p port.auxlim 0)
+             (tuple-set! p port.state 'textual)
+             (io/consume-byte! p))
+            (else
+             (io/reset-buffers! p))))
+     (else
+      ; must be closed, error, eof
+      (undefined)))))
+
+; eof

@@ -1,18 +1,9 @@
-(eval-core 
-    '(define (interpreter-loop)
-        (let loop ([i 0])
-            (if (< i 10000000)
-                (loop (+ i 1))))))
-
-(define (bytecode-loop)
-    (let loop ([i 0])
-        (if (< i 10000000)
-            (loop (+ i 1)))))
-
-(let ([start (current-millis)])
-    (interpreter-loop)
-    (print (- (current-millis) start)))
-
-(let ([start (current-millis)])
-    (bytecode-loop)
-    (print (- (current-millis) start)))
+(let ([port (file-io/open-file "test.scm" 'input 'text)])
+    (let loop ([ch (io/get-char port #f)])
+        (if (eof-object? ch)
+            (begin
+                (io/close-port port)
+                'done)
+            (begin
+                (print ch)
+                (loop (io/get-char port #f))))))

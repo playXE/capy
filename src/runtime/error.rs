@@ -121,7 +121,6 @@ pub static EXN_TABLE: Lazy<[ExnRec; Exception::Other as usize]> = Lazy::new(|| {
 #[macro_export]
 macro_rules! raise_exn {
     ($id:ident, $eargs:expr, $msg:literal $(,)? $($arg:expr),*) => {{
-
         $crate::runtime::error::finish_exn_impl($crate::runtime::error::Exception::$id, $crate::runtime::error::EXN_TABLE[$crate::runtime::error::Exception::$id as usize].args, $eargs, format!($msg, $($arg),*), None, false)
     }};
 

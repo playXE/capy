@@ -24,6 +24,15 @@
         [else 
             (error 'file-io/ioproc "unknown operation" op)]))
 
+(define (file-io/read data buffer)
+  (file-io/read-bytes (file-io/fd data) buffer))
+
+(define (file-io/write data buffer count)
+  (file-io/write-bytes (file-io/fd data) buffer count 0))
+
+(define (file-io/close data)
+  (file-io/close-file data))
+
 (define whence:seek-set          0)     ; offset is absolute
 (define whence:seek-cur          1)     ; offset is relative to current
 (define whence:seek-end          2)     ; offset is relative to end
