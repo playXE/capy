@@ -945,7 +945,7 @@
                               (io/return-eol p lookahead? unit)
                               (integer->char unit))]
                           [(= codec codec:utf-8)
-                            (io/get-char-utf8 p lookahead? unit buf ptr lim)]
+                            (io/get-char-utf-8 p lookahead? unit buf ptr lim)]
                           [else (error 'io/get-char "unimplemented codec" codec p)]))]
                   [else (error 'io/get-char "internal error" state p)]))]))]
         [(eq? (tuple-ref p port.state) 'eof)
