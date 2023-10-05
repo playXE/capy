@@ -215,30 +215,47 @@
 (define (symbol? x) (symbol? x))
 (define (char? x) (char? x))
 
+(define (-- x) (-- x))
 
-(define (+ . args)
-    (let loop ([args args] [acc 0])
-        (if (null? args)
-            acc
-            (loop (cdr args) (+ (car args) acc)))))
+(define +
+  (letrec ((loop (lambda (sum args)
+		   (if (null? args)
+		       sum
+		       (loop (+ sum (car args)) (cdr args))))))
+    (lambda args
+      (if (null? args)
+	  0
+	  (loop (car args) (cdr args))))))
 
-(define (- arg . args)
-    (let loop ([diff arg] [args args])
-        (if (null? args)
-            diff
-            (loop (- diff (car args)) (cdr args)))))
-(define (* . args)
-    (let loop ([args args] [acc 1])
-        (if (null? args)
-            acc
-            (loop (cdr args) (* (car args) acc)))))
+(define - 
+  (letrec ((loop (lambda (diff args)
+		   (if (null? args)
+		       diff
+		       (loop (- diff (car args)) (cdr args))))))
+    (lambda (arg . args)
+      (if (null? args)
+	  (-- arg)
+	  (loop arg args)))))
 
-(define (/ . args)
-    (let loop ([args args] [acc 1])
-        (if (null? args)
-            acc
-            (loop (cdr args) (/ acc (car args))))))
+(define * 
+  (letrec ((loop (lambda (prod args)
+		   (if (null? args)
+		       prod
+		       (loop (* prod (car args)) (cdr args))))))
+    (lambda args
+      (if (null? args)
+	  1
+	  (loop (car args) (cdr args))))))
 
+(define /
+  (letrec ((loop (lambda (quot args)
+		   (if (null? args)
+		       quot
+		       (loop (/ quot (car args)) (cdr args))))))
+    (lambda (arg . args)
+      (if (null? args)
+	  (/ 1 arg)
+	  (loop arg args)))))
 (define (make-nary-comparison name binop)
     (lambda (a b . rest)
         (if (null? rest)
@@ -318,3 +335,17 @@
     (set! eof-object? (lambda (x) (eq? x eof-object-internal))))
 
 (define (assert . rest) #f)
+
+(define **nul** 0)
+(define **alarm** 7)
+(define **backspace** 8)
+(define **tab** 9)
+(define **linefeed** 10)
+(define **vtab** 11)
+(define **page** 12)
+(define **return** 13)
+(define **esc** 27)
+(define **space** 32)
+(define **delete** 127)
+
+(define **newline** 10)

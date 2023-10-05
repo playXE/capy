@@ -92,10 +92,10 @@ pub(crate) unsafe extern "C-unwind" fn reinstate_continuation_x(
 
     return_to_continuation_inner(thread, continuation.vm_cont.cast_as());
 
-    let new_sp = thread.interpreter().sp.sub(3).offset(-n);
+    let new_sp = thread.interpreter().sp.sub(2).offset(-n);
     thread.interpreter().push_sp(new_sp);
 
-    for i in 0..3 {
+    for i in 0..2 {
         thread
             .interpreter()
             .sp

@@ -1,12 +1,11 @@
-use std::cmp::Ordering;
 use std::intrinsics::unlikely;
 use std::mem::{size_of, transmute};
-use std::ptr::null;
 
 use crate::bytecode::encode::Decode;
 use crate::gc::ObjEdge;
 use crate::raise_exn;
-use crate::runtime::equality::{equal, eqv, scm_compare};
+use crate::runtime::control::wrong_type_argument_violation;
+use crate::runtime::equality::{equal, eqv};
 use crate::runtime::gsubr::scm_apply_subr;
 use crate::runtime::object::*;
 use crate::runtime::value::Value;
@@ -93,7 +92,7 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
 
     macro_rules! sp_set {
         ($i: expr, $val: expr) => {
-            std::hint::black_box({ sp.offset($i as _).write(StackElement { as_value: $val }) });
+           sp.offset($i as _).write(StackElement { as_value: $val });
         };
     }
 
@@ -101,7 +100,9 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
         ($n: expr) => {
             sp = thread.interpreter().fp.sub($n as _);
             if sp < thread.interpreter().stack_limit {
-                panic!("stack overflow")
+                sync_ip!();
+                sync_sp!();
+                panic!("stack overflow: {}", crate::runtime::error::capture_stacktrace(thread));
                 // TODO: Expand stack
             } else {
                 thread.interpreter().sp = sp;
@@ -142,11 +143,10 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
 
     loop {
         op = ip.read();
-        ip = ip.add(1);
 
         match op {
             OP_HALT => {
-                let frame_size = 3;
+                let frame_size = 2;
                 let first_value = frame_size;
 
                 let nvals = frame_locals_count_from!(first_value);
@@ -155,11 +155,12 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                 } else {
                     sync_ip!();
                     // todo: values
-                    todo!()
+                    ////todo!()
+                    Value::encode_null_value()
                 };
 
                 let fp = thread.interpreter().fp;
-                thread.interpreter().fp = frame_dynamic_link(fp);
+                thread.interpreter().fp = frame_dynamic_link(fp).cast();
                 thread.interpreter().ip = frame_virtual_return_address(fp);
                 thread.interpreter().sp = frame_previous_sp(fp);
 
@@ -174,16 +175,19 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                 thread.safepoint();
                 sp = thread.interpreter().sp;
                 ip = thread.interpreter().ip;
+                
+                
             }
 
             OP_LOOP_HINT => {
                 let _loop_hint = OpLoopHint::read(ip);
-                ip = ip.add(size_of::<OpLoopHint>());
+                
                 thread.interpreter().sp = sp;
                 thread.interpreter().ip = ip;
                 thread.safepoint();
                 sp = thread.interpreter().sp;
                 ip = thread.interpreter().ip;
+                ip = ip.add(size_of::<OpLoopHint>());
             }
 
             OP_CALL => {
@@ -191,30 +195,33 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                 ip = ip.add(size_of::<OpCall>());
 
                 let old_fp = thread.interpreter().fp;
-                let new_fp = frame_slot(old_fp, call.proc().value() as usize - 1);
+                let new_fp = frame_slot(old_fp, call.proc() as usize - 1);
                 set_frame_dynamic_link(new_fp, old_fp);
                 set_frame_virtual_return_address(new_fp, ip);
-                set_frame_machine_return_address(new_fp, null());
                 thread.interpreter().fp = new_fp;
 
-                reset_frame!(call.nlocals().value() as isize);
+                reset_frame!(call.nlocals() as isize);
                 thread.interpreter().ip = ip;
+                
                 ip = get_callee_vcode(thread);
+                
                 cache_sp!();
             }
 
             OP_TAIL_CALL => {
                 thread.interpreter().ip = ip;
                 ip = get_callee_vcode(thread);
-
+ 
                 cache_sp!();
             }
 
             OP_RETURN_VALUES => {
                 let old_fp = thread.interpreter().fp;
-                thread.interpreter().fp = frame_dynamic_link(old_fp);
-
+                thread.interpreter().fp = frame_dynamic_link(old_fp).cast();
+                
+                
                 ip = frame_virtual_return_address(old_fp);
+               
             }
 
             OP_RECEIVE => {
@@ -237,7 +244,7 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                 }
 
                 fp_set!(dst, *fp_ref!(proc));
-                reset_frame!(nlocals.value());
+                reset_frame!(nlocals);
             }
 
             OP_RECEIVE_VALUES => {
@@ -249,7 +256,7 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
 
                 if rest {
                     if unlikely(
-                        frame_locals_count!() < proc.value() as isize + nvalues.value() as isize,
+                        frame_locals_count!() < proc as isize + nvalues as isize,
                     ) {
                         sync_sp!();
                         sync_ip!();
@@ -257,13 +264,13 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                             FailContractArity,
                             &[],
                             "expected at least {}, got {}",
-                            nvalues.value() - 1,
-                            frame_locals_count!() - proc.value() as isize - 1
+                            nvalues - 1,
+                            frame_locals_count!() - proc as isize - 1
                         );
                     }
                 } else {
                     if unlikely(
-                        frame_locals_count!() != proc.value() as isize + nvalues.value() as isize,
+                        frame_locals_count!() != proc as isize + nvalues as isize,
                     ) {
                         sync_sp!();
                         sync_ip!();
@@ -271,8 +278,8 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                             FailContractArity,
                             &[],
                             "expected {}, got {}",
-                            nvalues.value() - 1,
-                            frame_locals_count!() - proc.value() as isize - 1
+                            nvalues - 1,
+                            frame_locals_count!() - proc as isize - 1
                         );
                     }
                 }
@@ -282,17 +289,17 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                 let assert_nargs_ee = OpAssertNargsEe::read(ip);
                 ip = ip.add(size_of::<OpAssertNargsEe>());
 
-                if unlikely(frame_locals_count!() != assert_nargs_ee.n().value() as isize) {
+                if unlikely(frame_locals_count!() != assert_nargs_ee.n() as isize) {
                     sync_sp!();
                     sync_ip!();
                     raise_exn!(
                         FailContractArity,
                         &[],
                         "expected {}, got {}",
-                        assert_nargs_ee.n().value() - 1,
+                        assert_nargs_ee.n() - 1,
                         frame_locals_count!() - 1
                     );
-                    //todo!("no values error, expected {}, got {}", assert_nargs_ee.n().value(), frame_locals_count!()); // FIXME: Throw error
+                    ////todo!("no values error, expected {}, got {}", assert_nargs_ee.n(), frame_locals_count!()); // FIXME: Throw error
                 }
             }
 
@@ -300,14 +307,14 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                 let assert_nargs_ge = OpAssertNargsGe::read(ip);
                 ip = ip.add(size_of::<OpAssertNargsGe>());
 
-                if unlikely(frame_locals_count!() < assert_nargs_ge.n().value() as isize) {
+                if unlikely(frame_locals_count!() < assert_nargs_ge.n() as isize) {
                     sync_sp!();
                     sync_ip!();
                     raise_exn!(
                         FailContractArity,
                         &[],
                         "expected at least {}, got {}",
-                        assert_nargs_ge.n().value() - 1,
+                        assert_nargs_ge.n() - 1,
                         frame_locals_count!() - 1
                     );
                 }
@@ -317,14 +324,14 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                 let assert_nargs_le = OpAssertNargsLe::read(ip);
                 ip = ip.add(size_of::<OpAssertNargsLe>());
 
-                if unlikely(frame_locals_count!() > assert_nargs_le.n().value() as isize) {
+                if unlikely(frame_locals_count!() > assert_nargs_le.n() as isize) {
                     sync_sp!();
                     sync_ip!();
                     raise_exn!(
                         FailContractArity,
                         &[],
                         "expected at most {}, got {}",
-                        assert_nargs_le.n().value() - 1,
+                        assert_nargs_le.n() - 1,
                         frame_locals_count!() - 1
                     );
                 }
@@ -339,7 +346,7 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                 let bind_rest = OpBindRest::read(ip);
                 ip = ip.add(size_of::<OpBindRest>());
 
-                let dst = bind_rest.dst().value();
+                let dst = bind_rest.dst();
                 let nargs = frame_locals_count!();
 
                 if nargs <= dst as isize {
@@ -348,7 +355,7 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                 } else {
                     sync_ip!();
                     sync_sp!();
-                    let rest = cons_rest(thread, dst);
+                    let rest = cons_rest(thread, dst as _);
                     reset_frame!(dst + 1);
 
                     sp_set!(0, rest);
@@ -359,14 +366,14 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                 let alloc_frame = OpAllocFrame::read(ip);
                 ip = ip.add(size_of::<OpAllocFrame>());
 
-                alloc_frame!(alloc_frame.nlocals().value());
+                alloc_frame!(alloc_frame.nlocals());
             }
 
             OP_RESET_FRAME => {
                 let reset_frame = OpResetFrame::read(ip);
                 ip = ip.add(size_of::<OpResetFrame>());
 
-                reset_frame!(reset_frame.nlocals().value());
+                reset_frame!(reset_frame.nlocals());
             }
 
             OP_MOV => {
@@ -381,23 +388,23 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                 let long_mov = OpLongMov::read(ip);
                 ip = ip.add(size_of::<OpLongMov>());
 
-                let src = sp_ref!(long_mov.src().value());
-                sp_set!(long_mov.dst().value(), src);
+                let src = sp_ref!(long_mov.src());
+                sp_set!(long_mov.dst(), src);
             }
 
             OP_LONG_FMOV => {
                 let long_fmov = OpLongFmov::read(ip);
                 ip = ip.add(size_of::<OpLongFmov>());
 
-                let src = *fp_ref!(long_fmov.src().value());
-                fp_set!(long_fmov.dst().value(), src);
+                let src = *fp_ref!(long_fmov.src());
+                fp_set!(long_fmov.dst(), src);
             }
 
             OP_PUSH => {
                 let push = OpPush::read(ip);
                 ip = ip.add(size_of::<OpPush>());
 
-                let src = sp_ref!(push.src().value());
+                let src = sp_ref!(push.src());
                 alloc_frame!(frame_locals_count!() + 1);
                 sp_set!(0, src);
             }
@@ -408,14 +415,14 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                 let val = sp_ref!(0);
                 sp = sp.add(1);
                 thread.interpreter().sp = sp;
-                sp_set!(pop.dst().value(), val);
+                sp_set!(pop.dst(), val);
             }
 
             OP_DROP => {
                 let drop = OpDrop::read(ip);
                 ip = ip.add(size_of::<OpDrop>());
 
-                sp = sp.add(drop.n().value() as _);
+                sp = sp.add(drop.n() as _);
                 thread.interpreter().sp = sp;
             }
 
@@ -485,7 +492,7 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                     make_non_immediate.offset(),
                 );
 
-                sp_set!(make_non_immediate.dst().value(), constants);
+                sp_set!(make_non_immediate.dst(), constants);
             }
 
             OP_GLOBAL_REF => {
@@ -508,7 +515,7 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                     );
                 }
 
-                sp_set!(global_ref.dst().value(), value);
+                sp_set!(global_ref.dst(), value);
             }
 
             OP_GLOBAL_SET => {
@@ -522,7 +529,7 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                     global_set.offset(),
                 );
                 let gloc = global.cast_as::<ScmGloc>();
-                let src = sp_ref!(global_set.src().value());
+                let src = sp_ref!(global_set.src());
                 if src.is_object() {
                     reference_write::<CONST_PARAMS>(
                         thread,
@@ -771,7 +778,7 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                 let program_ref_imm = OpProgramRefImm::read(ip);
                 ip = ip.add(size_of::<OpProgramRefImm>());
 
-                let program = sp_ref!(program_ref_imm.src().value());
+                let program = sp_ref!(program_ref_imm.src());
                 let var = scm_program_free_variable(program, program_ref_imm.idx());
                 //println!("{:p}: get {} at {} from {} to {}", ip, var, program_ref_imm.idx(), program_ref_imm.src(), program_ref_imm.dst());
                 sp_set!(program_ref_imm.dst(), var);
@@ -781,7 +788,7 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                 let program_set_imm = OpProgramSetImm::read(ip);
                 ip = ip.add(size_of::<OpProgramSetImm>());
 
-                let program = sp_ref!(program_set_imm.dst().value());
+                let program = sp_ref!(program_set_imm.dst());
                 let var = sp_ref!(program_set_imm.src());
                 scm_program_set_free_variable(program, thread, program_set_imm.idx(), var);
             }
@@ -804,19 +811,26 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                 let add = OpAdd::read(ip);
                 ip = ip.add(size_of::<OpAdd>());
 
-                let a = sp_ref!(add.a());
-                let b = sp_ref!(add.b());
+                let mut a = sp_ref!(add.a());
+                let mut b = sp_ref!(add.b());
 
                 if a.is_int32() && b.is_int32() {
-                    if let Some(result) = a.get_int32().checked_add(b.get_int32()) {
-                        sp_set!(add.dst(), Value::encode_int32(result));
-                        continue;
-                    } else {
-                        todo!("ovf");
-                    }
+                    sp_set!(add.dst(), Value::encode_int32(a.get_int32().wrapping_add(b.get_int32())));
                 } else {
-                    raise_exn!(Fail, &[], "NYI: Slow add: {}, {}", a, b);
-                    //todo!("slow add {}, {}", a, b);
+                    if a.is_double() || b.is_double() {
+                        let lhs = a.get_number();
+                        let rhs = b.get_number();
+
+                        sp_set!(add.dst(), Value::encode_f64_value(lhs + rhs));
+                    } else {
+                        if !a.is_number() {
+                            wrong_type_argument_violation(thread, "+", 0, "number", a, 2, &[&mut a, &mut b]);
+                        }
+
+                        if !b.is_number() {
+                            wrong_type_argument_violation(thread, "+", 1, "number", b, 2, &[&mut a, &mut b]);
+                        }
+                    }
                 }
             }
 
@@ -824,16 +838,41 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                 let sub = OpSub::read(ip);
                 ip = ip.add(size_of::<OpSub>());
 
-                let a = sp_ref!(sub.a());
-                let b = sp_ref!(sub.b());
+                let mut a = sp_ref!(sub.a());
+                let mut b = sp_ref!(sub.b());
 
                 if a.is_int32() && b.is_int32() {
-                    if let Some(result) = a.get_int32().checked_sub(b.get_int32()) {
-                        sp_set!(sub.dst(), Value::encode_int32(result));
-                        continue;
-                    }
+                    sp_set!(sub.dst(), Value::encode_int32(a.get_int32().wrapping_sub(b.get_int32())));
                 } else {
-                    todo!("slow sub")
+                    if a.is_double() || b.is_double() {
+                        let lhs = a.get_number();
+                        let rhs = b.get_number();
+
+                        sp_set!(sub.dst(), Value::encode_f64_value(lhs - rhs));
+                    } else {
+                        if !a.is_number() {
+                            wrong_type_argument_violation(thread, "-", 0, "number", a, 2, &[&mut a, &mut b]);
+                        }
+
+                        if !b.is_number() {
+                            wrong_type_argument_violation(thread, "-", 1, "number", b, 2, &[&mut a, &mut b]);
+                        }
+                    }
+                }
+            }
+
+            OP_NEG => {
+                let neg = OpNeg::read(ip);
+                ip = ip.add(size_of::<OpNeg>());
+
+                let mut src = sp_ref!(neg.src());
+
+                if src.is_int32() {
+                    sp_set!(neg.dst(), Value::encode_int32(-src.get_int32()));
+                } else if src.is_double() {
+                    sp_set!(neg.dst(), Value::encode_f64_value(-src.get_double()));
+                } else {
+                    wrong_type_argument_violation(thread, "--", 0, "number", src, 1, &[&mut src])
                 }
             }
 
@@ -841,15 +880,25 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                 let mul = OpMul::read(ip);
                 ip = ip.add(size_of::<OpMul>());
 
-                let a = sp_ref!(mul.a());
-                let b = sp_ref!(mul.b());
+                let mut a = sp_ref!(mul.a());
+                let mut b = sp_ref!(mul.b());
                 if a.is_int32() && b.is_int32() {
-                    if let Some(result) = a.get_int32().checked_mul(b.get_int32()) {
-                        sp_set!(mul.dst(), Value::encode_int32(result));
-                        continue;
-                    }
+                    sp_set!(mul.dst(), Value::encode_int32(a.get_int32().wrapping_mul(b.get_int32())));
                 } else {
-                    todo!("slow mul")
+                    if a.is_double() || b.is_double() {
+                        let lhs = a.get_number();
+                        let rhs = b.get_number();
+
+                        sp_set!(mul.dst(), Value::encode_f64_value(lhs * rhs));
+                    } else {
+                        if !a.is_number() {
+                            wrong_type_argument_violation(thread, "*", 0, "number", a, 2, &[&mut a, &mut b]);
+                        }
+
+                        if !b.is_number() {
+                            wrong_type_argument_violation(thread, "*", 1, "number", b, 2, &[&mut a, &mut b]);
+                        }
+                    }
                 }
             }
 
@@ -857,17 +906,26 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                 let div = OpDiv::read(ip);
                 ip = ip.add(size_of::<OpDiv>());
 
-                let a = sp_ref!(div.a());
-                let b = sp_ref!(div.b());
+                let mut a = sp_ref!(div.a());
+                let mut b = sp_ref!(div.b());
 
                 if a.is_int32() && b.is_int32() {
-                    if let Some(result) = a.get_int32().checked_div(b.get_int32()) {
-                        sp_set!(div.dst(), Value::encode_int32(result));
-                        continue;
-                    }
-                    // TODO: Load `ratnum.scm` file and invoke
+                    sp_set!(div.dst(), Value::encode_int32(a.get_int32().wrapping_div(b.get_int32())));
                 } else {
-                    todo!("slow div")
+                    if a.is_double() || b.is_double() {
+                        let lhs = a.get_number();
+                        let rhs = b.get_number();
+
+                        sp_set!(div.dst(), Value::encode_f64_value(lhs / rhs));
+                    } else {
+                        if !a.is_number() {
+                            wrong_type_argument_violation(thread, "/", 0, "number", a, 2, &[&mut a, &mut b]);
+                        }
+
+                        if !b.is_number() {
+                            wrong_type_argument_violation(thread, "/", 1, "number", b, 2, &[&mut a, &mut b]);
+                        }
+                    }
                 }
             }
 
@@ -875,16 +933,26 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                 let quotient = OpQuotient::read(ip);
                 ip = ip.add(size_of::<OpQuotient>());
 
-                let a = sp_ref!(quotient.a());
-                let b = sp_ref!(quotient.b());
+                let mut a = sp_ref!(quotient.a());
+                let mut b = sp_ref!(quotient.b());
 
                 if a.is_int32() && b.is_int32() {
-                    if let Some(result) = a.get_int32().checked_div(b.get_int32()) {
-                        sp_set!(quotient.dst(), Value::encode_int32(result));
-                        continue;
-                    }
+                    sp_set!(quotient.dst(), Value::encode_int32(a.get_int32().wrapping_div(b.get_int32())));
                 } else {
-                    todo!("slow quotient")
+                    if a.is_double() || b.is_double() {
+                        let lhs = a.get_number();
+                        let rhs = b.get_number();
+
+                        sp_set!(quotient.dst(), Value::encode_f64_value(lhs / rhs));
+                    } else {
+                        if !a.is_number() {
+                            wrong_type_argument_violation(thread, "quotient", 0, "number", a, 2, &[&mut a, &mut b]);
+                        }
+
+                        if !b.is_number() {
+                            wrong_type_argument_violation(thread, "quotient", 1, "number", b, 2, &[&mut a, &mut b]);
+                        }
+                    }
                 }
             }
 
@@ -892,16 +960,26 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                 let modulo = OpMod::read(ip);
                 ip = ip.add(size_of::<OpMod>());
 
-                let a = sp_ref!(modulo.a());
-                let b = sp_ref!(modulo.b());
+                let mut a = sp_ref!(modulo.a());
+                let mut b = sp_ref!(modulo.b());
 
                 if a.is_int32() && b.is_int32() {
-                    if let Some(result) = a.get_int32().checked_rem(b.get_int32()) {
-                        sp_set!(modulo.dst(), Value::encode_int32(result));
-                        continue;
-                    }
+                    sp_set!(modulo.dst(), Value::encode_int32(a.get_int32().wrapping_rem(b.get_int32())));
                 } else {
-                    todo!("slow modulo")
+                    if a.is_double() || b.is_double() {
+                        let lhs = a.get_number();
+                        let rhs = b.get_number();
+
+                        sp_set!(modulo.dst(), Value::encode_f64_value(lhs % rhs));
+                    } else {
+                        if !a.is_number() {
+                            wrong_type_argument_violation(thread, "modulo", 0, "number", a, 2, &[&mut a, &mut b]);
+                        }
+
+                        if !b.is_number() {
+                            wrong_type_argument_violation(thread, "modulo", 1, "number", b, 2, &[&mut a, &mut b]);
+                        }
+                    }
                 }
             }
 
@@ -909,8 +987,8 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                 let less = OpLess::read(ip);
                 ip = ip.add(size_of::<OpLess>());
 
-                let a = sp_ref!(less.a());
-                let b = sp_ref!(less.b());
+                let mut a = sp_ref!(less.a());
+                let mut b = sp_ref!(less.b());
 
                 if a.is_int32() && b.is_int32() {
                     sp_set!(
@@ -920,18 +998,20 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                     continue;
                 }
 
-                let cmp = scm_compare(a, b);
+                if a.is_double() || b.is_double() {
+                    let lhs = a.get_number();
+                    let rhs = b.get_number();
 
-                match cmp {
-                    Some(Ordering::Less) => {
-                        sp_set!(less.dst(), Value::encode_bool_value(true));
-                        continue;
-                    }
+                    sp_set!(less.dst(), Value::encode_bool_value(lhs < rhs));
+                    continue;
+                }
 
-                    _ => {
-                        sp_set!(less.dst(), Value::encode_bool_value(false));
-                        continue;
-                    }
+                if !a.is_number() {
+                    wrong_type_argument_violation(thread, "<", 0, "number", a, 2, &[&mut a, &mut b]);
+                }
+
+                if !b.is_number() {
+                    wrong_type_argument_violation(thread, "<", 1, "number", b, 2, &[&mut a, &mut b]);
                 }
             }
 
@@ -939,21 +1019,31 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                 let greater = OpGreater::read(ip);
                 ip = ip.add(size_of::<OpGreater>());
 
-                let a = sp_ref!(greater.a());
-                let b = sp_ref!(greater.b());
+                let mut a = sp_ref!(greater.a());
+                let mut b = sp_ref!(greater.b());
 
-                let cmp = scm_compare(a, b);
+                if a.is_int32() && b.is_int32() {
+                    sp_set!(
+                        greater.dst(),
+                        Value::encode_bool_value(a.get_int32() > b.get_int32())
+                    );
+                    continue;
+                }
 
-                match cmp {
-                    Some(Ordering::Greater) => {
-                        sp_set!(greater.dst(), Value::encode_bool_value(true));
-                        continue;
-                    }
+                if a.is_double() || b.is_double() {
+                    let lhs = a.get_number();
+                    let rhs = b.get_number();
 
-                    _ => {
-                        sp_set!(greater.dst(), Value::encode_bool_value(false));
-                        continue;
-                    }
+                    sp_set!(greater.dst(), Value::encode_bool_value(lhs > rhs));
+                    continue;
+                }
+
+                if !a.is_number() {
+                    wrong_type_argument_violation(thread, ">", 0, "number", a, 2, &[&mut a, &mut b]);
+                }
+
+                if !b.is_number() {
+                    wrong_type_argument_violation(thread, ">", 1, "number", b, 2, &[&mut a, &mut b]);
                 }
             }
 
@@ -961,21 +1051,32 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                 let less_equal = OpLessEqual::read(ip);
                 ip = ip.add(size_of::<OpLessEqual>());
 
-                let a = sp_ref!(less_equal.a());
-                let b = sp_ref!(less_equal.b());
+                let mut a = sp_ref!(less_equal.a());
+                let mut b = sp_ref!(less_equal.b());
 
-                let cmp = scm_compare(a, b);
+   
+                if a.is_int32() && b.is_int32() {
+                    sp_set!(
+                        less_equal.dst(),
+                        Value::encode_bool_value(a.get_int32() <= b.get_int32())
+                    );
+                    continue;
+                }
 
-                match cmp {
-                    Some(Ordering::Less) | Some(Ordering::Equal) => {
-                        sp_set!(less_equal.dst(), Value::encode_bool_value(true));
-                        continue;
-                    }
+                if a.is_double() || b.is_double() {
+                    let lhs = a.get_number();
+                    let rhs = b.get_number();
 
-                    _ => {
-                        sp_set!(less_equal.dst(), Value::encode_bool_value(false));
-                        continue;
-                    }
+                    sp_set!(less_equal.dst(), Value::encode_bool_value(lhs <= rhs));
+                    continue;
+                }
+
+                if !a.is_number() {
+                    wrong_type_argument_violation(thread, "<=", 0, "number", a, 2, &[&mut a, &mut b]);
+                }
+
+                if !b.is_number() {
+                    wrong_type_argument_violation(thread, "<=", 1, "number", b, 2, &[&mut a, &mut b]);
                 }
             }
 
@@ -983,42 +1084,62 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                 let greater_equal = OpGreaterEqual::read(ip);
                 ip = ip.add(size_of::<OpGreaterEqual>());
 
-                let a = sp_ref!(greater_equal.a());
-                let b = sp_ref!(greater_equal.b());
+                let mut a = sp_ref!(greater_equal.a());
+                let mut b = sp_ref!(greater_equal.b());
 
-                let cmp = scm_compare(a, b);
+                if a.is_int32() && b.is_int32() {
+                    sp_set!(
+                        greater_equal.dst(),
+                        Value::encode_bool_value(a.get_int32() >= b.get_int32())
+                    );
+                    continue;
+                }
 
-                match cmp {
-                    Some(Ordering::Greater) | Some(Ordering::Equal) => {
-                        sp_set!(greater_equal.dst(), Value::encode_bool_value(true));
-                        continue;
-                    }
+                if a.is_double() || b.is_double() {
+                    let lhs = a.get_number();
+                    let rhs = b.get_number();
 
-                    _ => {
-                        sp_set!(greater_equal.dst(), Value::encode_bool_value(false));
-                        continue;
-                    }
+                    sp_set!(greater_equal.dst(), Value::encode_bool_value(lhs >= rhs));
+                    continue;
+                }
+
+                if !a.is_number() {
+                    wrong_type_argument_violation(thread, ">=", 0, "number", a, 2, &[&mut a, &mut b]);
+                }
+
+                if !b.is_number() {
+                    wrong_type_argument_violation(thread, ">=", 1, "number", b, 2, &[&mut a, &mut b]);
                 }
             }
             OP_NUMERICALLY_EQUAL => {
                 let numerically_equal = OpNumericallyEqual::read(ip);
                 ip = ip.add(size_of::<OpNumericallyEqual>());
 
-                let a = sp_ref!(numerically_equal.a());
-                let b = sp_ref!(numerically_equal.b());
+                let mut a = sp_ref!(numerically_equal.a());
+                let mut b = sp_ref!(numerically_equal.b());
 
-                let cmp = scm_compare(a, b);
+                if a.is_int32() && b.is_int32() {
+                    sp_set!(
+                        numerically_equal.dst(),
+                        Value::encode_bool_value(a.get_int32() == b.get_int32())
+                    );
+                    continue;
+                }
 
-                match cmp {
-                    Some(Ordering::Equal) => {
-                        sp_set!(numerically_equal.dst(), Value::encode_bool_value(true));
-                        continue;
-                    }
+                if a.is_double() || b.is_double() {
+                    let lhs = a.get_number();
+                    let rhs = b.get_number();
 
-                    _ => {
-                        sp_set!(numerically_equal.dst(), Value::encode_bool_value(false));
-                        continue;
-                    }
+                    sp_set!(numerically_equal.dst(), Value::encode_bool_value(lhs == rhs));
+                    continue;
+                }
+
+                if !a.is_number() {
+                    wrong_type_argument_violation(thread, "==", 0, "number", a, 2, &[&mut a, &mut b]);
+                }
+
+                if !b.is_number() {
+                    wrong_type_argument_violation(thread, "==", 1, "number", b, 2, &[&mut a, &mut b]);
                 }
             }
 
@@ -1056,7 +1177,7 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                 let heap_tag_eq = OpHeapTagEq::read(ip);
                 ip = ip.add(size_of::<OpHeapTagEq>());
 
-                let src = sp_ref!(heap_tag_eq.src().value());
+                let src = sp_ref!(heap_tag_eq.src());
                 let tag = heap_tag_eq.tag();
 
                 sp_set!(
@@ -1142,6 +1263,15 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                 sp_set!(is_flonum.dst(), Value::encode_bool_value(src.is_double()));
             }
 
+            OP_IS_NUMBER => {
+                let is_number = OpIsNumber::read(ip);
+                ip = ip.add(size_of::<OpIsNumber>());
+
+                let src = sp_ref!(is_number.src());
+
+                sp_set!(is_number.dst(), Value::encode_bool_value(src.is_inline_number()));
+            }
+
             OP_CAR => {
                 let car = OpCar::read(ip);
                 ip = ip.add(size_of::<OpCar>());
@@ -1225,7 +1355,7 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
             OP_BIND_OPTIONALS => {
                 let bind_optionals = OpBindOptionals::read(ip);
                 ip = ip.add(size_of::<OpBindOptionals>());
-                let nlocals = bind_optionals.nargs().value() as isize;
+                let nlocals = bind_optionals.nargs() as isize;
                 let mut nargs = frame_locals_count!();
                 if nargs < nlocals {
                     alloc_frame!(nlocals);
@@ -1240,7 +1370,7 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                 let subr_call = OpSubrCall::read(ip);
                 ip = ip.add(size_of::<OpSubrCall>());
 
-                let idx = subr_call.idx().value();
+                let idx = subr_call.idx();
 
                 let ret = scm_apply_subr(thread, sp, idx);
 
@@ -1282,7 +1412,16 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                 sp_set!(dst, cont);
             }
 
-            _ => (),
+            _ => {
+                #[cfg(debug_assertions)]
+                {
+                    unreachable!("unknown opcode: {}", ip.read())
+                }
+                #[cfg(not(debug_assertions))]
+                {
+                    std::hint::unreachable_unchecked();
+                }
+            },
         }
     }
 }

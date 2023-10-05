@@ -37,7 +37,6 @@ pub enum TypeId {
     Pair,
     Vector,
     Tuple,
-    Struct,
     String,
     Symbol,
     Program,

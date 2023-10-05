@@ -30,7 +30,7 @@ fn main() {
     vm.disassemble = opts.disassemble;
 
     scm_define_subr(
-        "print",
+        "print-raw",
         0,
         0,
         1,

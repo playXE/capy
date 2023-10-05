@@ -1,9 +1,4 @@
-(let ([port (open-text-output-file "file.txt")])
-    (put-string port "Hello, World!\n")
-    (flush-output-port port)
-    (close-port port))
+(define (foo x y z w r)
+  (- (+ x (- y (/ (* z w) r)))))
 
-(let ([port (open-text-input-file "file.txt")])
-    (let ([str (read-line port)])
-        (close-port port)
-        str))
+(print-raw (foo 1 2 3 4 5))

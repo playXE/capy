@@ -4,6 +4,9 @@ pub trait Encode {
 
 pub trait Decode: Sized {
     unsafe fn read(stream: *const u8) -> Self;
+    unsafe fn read_ref<'a>(stream: *const u8) -> &'a Self {
+        &*stream.cast::<Self>()
+    }
 }
 
 impl Encode for u8 {

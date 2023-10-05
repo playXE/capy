@@ -53,7 +53,7 @@ pub unsafe extern "C" fn segv_handler(sig: i32, info: *mut siginfo_t, context: *
         "FATAL: Unhandled signal {}: {:p}, backtrace: \n{}",
         sig,
         (*info).si_addr(),
-        std::backtrace::Backtrace::force_capture()
+        std::backtrace::Backtrace::force_capture(),
     );
 
     sigdie_handler(sig, info, context as _);

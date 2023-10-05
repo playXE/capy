@@ -44,6 +44,7 @@ pub const INTERESTING_PRIMTIIVE_NAMES: &[&str] = &[
     "+",
     "*",
     "-",
+    "--",
     "/",
     "1-",
     "1+",

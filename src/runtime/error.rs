@@ -89,7 +89,7 @@ pub unsafe fn capture_stacktrace(thread: &mut Thread) -> Value {
                 ls = scm_cons(Value::encode_bool_value(false), ls);
             }
             ip = frame_virtual_return_address(fp);
-            fp = frame_dynamic_link(fp);
+            fp = frame_dynamic_link(fp).cast();
             if fp == thread.interpreter().stack_top {
                 break;
             }
@@ -121,14 +121,15 @@ pub static EXN_TABLE: Lazy<[ExnRec; Exception::Other as usize]> = Lazy::new(|| {
 #[macro_export]
 macro_rules! raise_exn {
     ($id:ident, $eargs:expr, $msg:literal $(,)? $($arg:expr),*) => {{
-        $crate::runtime::error::finish_exn_impl($crate::runtime::error::Exception::$id, $crate::runtime::error::EXN_TABLE[$crate::runtime::error::Exception::$id as usize].args, $eargs, format!($msg, $($arg),*), None, false)
+        //unsafe { std::hint::unreachable_unchecked(); }
+        $crate::runtime::error::finish_exn_impl($crate::runtime::error::Exception::$id, std::hint::black_box($crate::runtime::error::EXN_TABLE[$crate::runtime::error::Exception::$id as usize].args), $eargs, std::hint::black_box(format!($msg, $($arg),*)), None, false)
     }};
 
     ($t: ty, $id:ident, $eargs:expr, $msg:literal $(,)? $($arg:expr),*) => {{
         if $crate::runtime::error::Exception::$id == $crate::runtime::error::Exception::FailRead {
             panic!($msg, $($arg),*);
         }
-        $crate::runtime::error::finish_exn_impl::<$t>($crate::runtime::error::Exception::$id, $crate::runtime::error::EXN_TABLE[$crate::runtime::error::Exception::$id as usize].args, $eargs, format!($msg, $($arg),*), None, false)
+        std::hint::black_box($crate::runtime::error::finish_exn_impl::<$t>($crate::runtime::error::Exception::$id, $crate::runtime::error::EXN_TABLE[$crate::runtime::error::Exception::$id as usize].args, $eargs, format!($msg, $($arg),*), None, false))
     }};
 }
 

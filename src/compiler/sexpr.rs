@@ -762,6 +762,7 @@ pub fn r7rs_expr_to_sexpr<I: Interner>(
 ) -> Sexpr {
     match expr {
         Expr::Fixnum(x) => Sexpr::Fixnum(*x),
+        Expr::Float(x) => Sexpr::Flonum(*x),
         Expr::Bool(x) => Sexpr::Boolean(*x),
         Expr::Char(x) => Sexpr::Char(*x),
         Expr::Str(x) => Sexpr::String(P::new(x.clone())),

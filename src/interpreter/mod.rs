@@ -1,7 +1,7 @@
 use self::{stackframe::{
     frame_dynamic_link, frame_local, frame_previous_sp, set_frame_dynamic_link,
-    set_frame_machine_return_address, set_frame_virtual_return_address, StackElement,
-}, engine::EngineConstParams};
+    set_frame_virtual_return_address, StackElement, StackFrame,
+}, engine::EngineConstParams, entry_record::EntryFrame};
 use crate::{
     gc::{
         virtual_memory::{PlatformVirtualMemory, VirtualMemory, VirtualMemoryImpl},
@@ -26,9 +26,10 @@ use std::{
     sync::atomic::AtomicU64,
 };
 pub mod engine;
-//pub mod llint;
+pub mod llint;
 pub mod stackframe;
 pub mod entry_record;
+pub mod indirect_threaded;
 
 /// A simple counter used to identify different interpreter entrypoints.
 ///
@@ -43,6 +44,8 @@ pub struct InterpreterState {
     pub ip: *const u8,
     pub sp: *mut StackElement,
     pub fp: *mut StackElement,
+    pub top_entry_frame: *mut EntryFrame,
+    pub top_call_frame: *mut StackFrame,
     pub stack_limit: *mut StackElement,
     pub entry_id: u64,
     /// Disable JIT
@@ -87,6 +90,8 @@ impl InterpreterState {
             registers: null_mut(),
             sp: null_mut(),
             fp: null_mut(),
+            top_call_frame: null_mut(),
+            top_entry_frame: null_mut(),
             entry_id: ENTRY.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
             stack_limit: null_mut(),
 
@@ -108,6 +113,7 @@ impl InterpreterState {
         let sp = self.fp.sub(nlocals as _);
 
         if sp < self.stack_limit {
+            panic!();
             // todo: expand stack
         }
 
@@ -136,7 +142,7 @@ impl InterpreterState {
             }
 
             sp = frame_previous_sp(fp);
-            fp = frame_dynamic_link(fp);
+            fp = frame_dynamic_link(fp).cast();
         }
 
         self.return_unused_stack_to_os();
@@ -232,7 +238,7 @@ fn allocate_stack(mut size: usize) -> VirtualMemory {
 pub fn scm_call_n(thread: &mut Thread, proc: Value, args: &[Value]) -> Result<Value, Value> {
     let return_nlocals = 0;
     let call_nlocals = args.len() + 1;
-    let frame_size = 3;
+    let frame_size = 2;
 
     /* Check that we have enough space for the two stack frames: the
     innermost one that makes the call, and its continuation which
@@ -250,13 +256,11 @@ pub fn scm_call_n(thread: &mut Thread, proc: Value, args: &[Value]) -> Result<Va
         let return_fp = call_fp.add(return_nlocals + frame_size);
 
         set_frame_virtual_return_address(return_fp, thread.interpreter().ip);
-        set_frame_machine_return_address(return_fp, null());
         set_frame_dynamic_link(return_fp, thread.interpreter().fp);
 
         thread.interpreter().ip = BOOT_CONTINUATION_CODE.as_ptr();
 
         set_frame_virtual_return_address(call_fp, thread.interpreter().ip);
-        set_frame_machine_return_address(call_fp, null());
         set_frame_dynamic_link(call_fp, return_fp);
         *frame_local(call_fp, 0) = proc;
 

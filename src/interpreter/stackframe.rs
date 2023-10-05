@@ -4,12 +4,10 @@ use crate::runtime::value::Value;
 ///
 /// ```text
 /// | ...                            |
-/// +================================+ <- fp + 3 = previous sp
-/// | Dynamic link                   |
+/// +================================+ <- fp + 2 = previous sp
+/// | Return address                 |
 /// +--------------------------------+
-/// | Virtual return address (vRA)   |
-/// +--------------------------------+
-/// | Machine return address (mRA)   |
+/// | Dynamic link (caller frame)    |
 /// +================================+ <- fp
 /// | Local 0                        |    |
 /// +--------------------------------+    |
@@ -50,9 +48,8 @@ use crate::runtime::value::Value;
 /// stack pointer back to its original value from before the call.
 #[repr(C)]
 pub struct StackFrame {
-    pub dynamic_link: Value,
+    pub dynamic_link: *mut StackFrame,
     pub vra: *const u32,
-    pub mra: *const u32,
 }
 
 #[repr(C)]
@@ -68,17 +65,7 @@ pub union StackElement {
 
 #[inline]
 pub unsafe fn frame_previous_sp(fp: *mut StackElement) -> *mut StackElement {
-    fp.add(3)
-}
-
-#[inline]
-pub unsafe fn frame_machine_return_address(fp: *mut StackElement) -> *const u8 {
-    fp.add(0).read().as_mcode
-}
-
-#[inline]
-pub unsafe fn set_frame_machine_return_address(fp: *mut StackElement, mra: *const u8) {
-    fp.add(0).cast::<*const u8>().write(mra);
+    fp.add(2)
 }
 
 #[inline]
@@ -92,15 +79,15 @@ pub unsafe fn set_frame_virtual_return_address(fp: *mut StackElement, vra: *cons
 }
 
 #[inline]
-pub unsafe fn frame_dynamic_link(fp: *mut StackElement) -> *mut StackElement {
-    let dl = fp.add(2).read().as_usize;
-    fp.add(dl)
+pub unsafe fn frame_dynamic_link(fp: *mut StackElement) -> *mut StackFrame {
+    fp.add(0).cast::<*mut StackFrame>().read()
 }
 
 #[inline]
 pub unsafe fn set_frame_dynamic_link(fp: *mut StackElement, dl: *mut StackElement) {
     debug_assert!(dl >= fp);
-    fp.add(2).cast::<usize>().write(dl.offset_from(fp) as _);
+    fp.add(0).cast::<*mut StackFrame>().write(dl.cast());
+    //fp.add(1).cast::<usize>().write(dl.offset_from(fp) as _);
 }
 
 #[inline]

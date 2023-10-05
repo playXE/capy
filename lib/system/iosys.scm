@@ -129,7 +129,7 @@
                     [(set-position!) (set! set-position? #t)]
                     [(none) (tuple-set! v port.bufmode 'none)]
                     [(line) (tuple-set! v port.bufmode 'line)]
-                    [(datum flush) (tuple-set! v port.bufmode 'datum) (tuple-set! v port.wr-flush #t)]
+                    [(datum flush) (tuple-set! v port.bufmode 'datum) (tuple-set! v port.wr-flush? #t)]
                     [(block) (tuple-set! v port.bufmode 'block)]
                     [else 
                         (assertion-violation 'io/make-port "bad attribute" (car rest))]))
@@ -193,6 +193,11 @@
 (define readmode:r5rs               128)
 (define readmode:r6rs               256)
 (define readmode:r7rs               512)
+
+(define (default-read-mode)
+    (define (default parameter iftrue iffalse)
+        (if (parameter) iftrue iffalse))
+    (+ readmode:nofoldcase readmode:locations readmode:flags readmode:r5rs readmode:r6rs readmode:r7rs))
 
 (define (port? t)
     (and (tuple? t)
@@ -859,12 +864,12 @@
         [(and (io/input-port? newport) (io/output-port? newport))
           #t]
         [(io/input-port? newport)
-          (io/transocde-port! newport)])
+          (io/transcode-port! newport)])
       newport)))
 
 (define (io/custom-transcoded-port p)
   (let* ([t (make-transcoder (utf8-codec) 'none 'ignore)]
-         [newport (io/transocded-port p t)])
+         [newport (io/transcoded-port p t)])
       newport))
 
 (define (io/get-u8 p lookahead?)

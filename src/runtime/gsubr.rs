@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::{
-    bytecode::{opcodes::*, u24::u24},
+    bytecode::opcodes::*,
     interpreter::stackframe::StackElement,
     utils::round_up_to_power_of_two,
     vm::{sync::mutex::Mutex, thread::Thread},
@@ -123,14 +123,14 @@ pub fn scm_i_alloc_primitive_code_with_instrumentation(
 
 fn alloc_subr_code(subr_idx: u32, code: &[u8]) -> *const u8 {
     let post = {
-        let subr_call = OpSubrCall::new(u24::new(subr_idx));
+        let subr_call = OpSubrCall::new(subr_idx);
 
-        let mut buf = [0u8; 1 + size_of::<OpSubrCall>() + 1];
+        let mut buf = [0u8; 1 + size_of::<OpSubrCall>()];
         let mut ptr = buf.as_mut_ptr();
         unsafe {
-            ptr.write(OP_SUBR_CALL);
-            ptr.add(1).cast::<OpSubrCall>().write(subr_call);
-            ptr = ptr.add(1 + size_of::<OpSubrCall>());
+            //ptr.write(OP_SUBR_CALL);
+            ptr.cast::<OpSubrCall>().write(subr_call);
+            ptr = ptr.add(size_of::<OpSubrCall>());
             ptr.write(OP_RETURN_VALUES);
         }
         buf
@@ -143,6 +143,7 @@ fn alloc_subr_code(subr_idx: u32, code: &[u8]) -> *const u8 {
         write = write.add(code.len());
         write.copy_from_nonoverlapping(post.as_ptr(), post.len());
     }
+
     ret
 }
 
@@ -178,106 +179,91 @@ fn get_subr_stub_code(subr_idx: u32, nreq: usize, nopt: usize, rest: usize) -> *
 
     match kind {
         ArityKind::Nullary | ArityKind::Req => {
-            let nargs = u24::new(nreq as u32 + 1);
-            alloc_subr_code(
-                subr_idx,
-                &[OP_ASSERT_NARGS_EE, nargs.0[0], nargs.0[1], nargs.0[2]],
-            )
+            let nargs = (nreq as u16 + 1).to_le_bytes();
+            alloc_subr_code(subr_idx, &[OP_ASSERT_NARGS_EE, nargs[0], nargs[1]])
         }
 
         ArityKind::Opt => {
-            let nopt = u24::new(nopt as u32 + 1);
+            let nopt = (nopt as u16 + 1).to_le_bytes();
             let code = &[
                 OP_ASSERT_NARGS_LE,
-                nopt.0[0],
-                nopt.0[1],
-                nopt.0[2],
+                nopt[0],
+                nopt[1],
                 OP_BIND_OPTIONALS,
-                nopt.0[0],
-                nopt.0[1],
-                nopt.0[2],
+                nopt[0],
+                nopt[1],
             ];
 
             alloc_subr_code(subr_idx, code)
         }
 
         ArityKind::Rest => {
-            let dst = u24::new(1);
-            alloc_subr_code(subr_idx, &[OP_BIND_REST, dst.0[0], dst.0[1], dst.0[2]])
+            let dst = 1u16.to_le_bytes();
+            alloc_subr_code(subr_idx, &[OP_BIND_REST, dst[0], dst[1]])
         }
 
         ArityKind::ReqOpt => {
-            let nreq_nopt = u24::new(nreq as u32 + nopt as u32 + 1);
-            let nreq = u24::new(nreq as u32 + 1);
+            let nreq_nopt = (nreq as u16 + nopt as u16 + 1).to_le_bytes();
+            let nreq = (nreq as u16 + 1).to_le_bytes();
             let code = &[
                 OP_ASSERT_NARGS_GE,
-                nreq.0[0],
-                nreq.0[1],
-                nreq.0[2],
+                nreq[0],
+                nreq[1],
                 OP_ASSERT_NARGS_LE,
-                nreq_nopt.0[0],
-                nreq_nopt.0[1],
-                nreq_nopt.0[2],
+                nreq_nopt[0],
+                nreq_nopt[1],
                 OP_BIND_OPTIONALS,
-                nreq_nopt.0[0],
-                nreq_nopt.0[1],
-                nreq_nopt.0[2],
+                nreq_nopt[0],
+                nreq_nopt[1],
             ];
 
             alloc_subr_code(subr_idx, code)
         }
 
         ArityKind::ReqRest => {
-            let nreq = u24::new(nreq as u32 + 1);
+            let nreq = (nreq as u16 + 1).to_le_bytes();
 
             let code = &[
                 OP_ASSERT_NARGS_GE,
-                nreq.0[0],
-                nreq.0[1],
-                nreq.0[2],
+                nreq[0],
+                nreq[1],
                 OP_BIND_REST,
-                nreq.0[0],
-                nreq.0[1],
-                nreq.0[2],
+                nreq[0],
+                nreq[1],
             ];
 
             alloc_subr_code(subr_idx, code)
         }
 
         ArityKind::OptRest => {
-            let nopt = u24::new(nopt as u32 + 1);
+            let nopt = (nopt as u16 + 1).to_le_bytes();
 
             let code = &[
                 OP_BIND_OPTIONALS,
-                nopt.0[0],
-                nopt.0[1],
-                nopt.0[2],
+                nopt[0],
+                nopt[1],
                 OP_BIND_REST,
-                nopt.0[0],
-                nopt.0[1],
-                nopt.0[2],
+                nopt[0],
+                nopt[1],
             ];
 
             alloc_subr_code(subr_idx, code)
         }
 
         ArityKind::ReqOptRest => {
-            let nreq_nopt = u24::new(nreq as u32 + nopt as u32 + 1);
-            let nreq = u24::new(nreq as u32 + 1);
+            let nreq_nopt = (nreq as u16 + nopt as u16 + 1).to_le_bytes();
+            let nreq = (nreq as u16 + 1).to_le_bytes();
 
             let code = &[
                 OP_ASSERT_NARGS_GE,
-                nreq.0[0],
-                nreq.0[1],
-                nreq.0[2],
+                nreq[0],
+                nreq[1],
                 OP_BIND_OPTIONALS,
-                nreq_nopt.0[0],
-                nreq_nopt.0[1],
-                nreq_nopt.0[2],
+                nreq_nopt[0],
+                nreq_nopt[1],
                 OP_BIND_REST,
-                nreq_nopt.0[0],
-                nreq_nopt.0[1],
-                nreq_nopt.0[2],
+                nreq_nopt[0],
+                nreq_nopt[1],
             ];
 
             alloc_subr_code(subr_idx, code)

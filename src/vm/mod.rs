@@ -13,12 +13,10 @@ use crate::{
     },
     runtime::{
         self, control, equality,
-        hashtable::HashTableType,
         object::{CleanerType, ScmCellRef},
-        struct_::StructGlobals,
         subr_core,
         symbol::scm_intern,
-        value::Value,
+        value::Value
     },
 };
 
@@ -57,11 +55,9 @@ pub struct VirtualMachine {
     pub(crate) gc_counter: u64,
 
     pub(crate) boot_continuation: Value,
-    pub(crate) module_obarray: Value,
     pub disassemble: bool,
     pub interaction_environment: Value,
     pub(crate) globals: ObjStorage,
-    pub struct_globals: StructGlobals,
     pub symbols: [Value; InherentSymbols::Last as usize],
 }
 
@@ -92,10 +88,9 @@ impl VirtualMachine {
                     ObjEdge::from_address(Address::from_mut_ptr(&mut self.interaction_environment));
                 edges.push(edge);
             }
-            let edge = ObjEdge::from_address(Address::from_mut_ptr(&mut self.module_obarray));
-            edges.push(edge);
+            //let edge = ObjEdge::from_address(Address::from_mut_ptr(&mut self.module_obarray));
+            //edges.push(edge);
         }
-        self.struct_globals.scan_roots(factory);
         factory.create_process_edge_roots_work(edges);
     }
 }
@@ -121,10 +116,8 @@ pub fn scm_init(mmtk: mmtk::MMTK<CapyVM>, plan: GCPlan) -> &'static mut VirtualM
         boot_continuation: Value::encode_undefined_value(),
         disassemble: false,
         globals: ObjStorage::new("global-roots"),
-        module_obarray: Value::encode_undefined_value(),
         interaction_environment: Value::encode_null_value(),
         symbols: [Value::encode_undefined_value(); InherentSymbols::Last as usize],
-        struct_globals: StructGlobals::default(),
         initialized: false,
     }));
 
@@ -140,8 +133,8 @@ pub fn scm_init(mmtk: mmtk::MMTK<CapyVM>, plan: GCPlan) -> &'static mut VirtualM
         scm_virtual_machine().boot_continuation =
             Thread::current().make_program::<true>(BOOT_CONTINUATION_CODE.as_ptr(), 0);
 
-        let modules = Thread::current().make_hashtable(128, HashTableType::Eq);
-        scm_virtual_machine().module_obarray = modules;
+       // let modules = Thread::current().make_hashtable(128, HashTableType::Eq);
+       // scm_virtual_machine().module_obarray = modules;
         this.init_inherent();
         runtime::environment::init_env();
         intrinsics::init();

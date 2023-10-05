@@ -1,5 +1,8 @@
 use std::collections::HashMap;
 
+use once_cell::sync::Lazy;
+use unicode_general_category::GeneralCategory;
+
 use crate::{
     compiler::{
         expand, fix_letrec,
@@ -19,7 +22,7 @@ use super::{
     list::scm_length,
     object::{
         scm_car, scm_cdr, scm_program_code, scm_string_mut_str, scm_string_str, scm_symbol_str,
-        scm_tuple_ref, scm_tuple_set, ScmTuple, ScmWeakMapping, TypeId,
+        scm_tuple_ref, scm_tuple_set, ScmTuple, ScmWeakMapping, TypeId, scm_program_num_free_vars, ScmProgram,
     },
     symbol::scm_intern,
     value::Value,
@@ -729,6 +732,37 @@ extern "C-unwind" fn integer_to_char(thread: &mut Thread, val: &mut Value) -> Va
     }
 }
 
+extern "C-unwind" fn number_to_string(thread: &mut Thread, val: &mut Value, radix: &mut Value) -> Value {
+    let radix = if radix.is_int32() {
+        radix.get_int32()
+    } else if radix.is_undefined() {
+        10
+    } else {
+        wrong_type_argument_violation(thread, "number->string", 1, "integer", *radix, 2, &[val, radix])
+    };
+    
+    if val.is_int32() {
+        let int = val.get_int32();
+        match radix {
+            10 => thread.make_string::<false>(&int.to_string()),
+            16 => thread.make_string::<false>(&format!("{:x}", int)),
+            8 => thread.make_string::<false>(&format!("{:o}", int)),
+            2 => thread.make_string::<false>(&format!("{:b}", int)),
+            _ => invalid_argument_violation(
+                thread,
+                "number->string",
+                "radix must be 2, 8, 10, or 16",
+                Value::encode_int32(radix),
+                1,
+                2,
+                &[val, &mut Value::encode_int32(radix)],
+            ),
+        }
+    } else {
+        wrong_type_argument_violation(thread, "number->string", 0, "integer", *val, 2, &[val, &mut Value::encode_int32(radix)])
+    }
+}
+
 extern "C-unwind" fn char_to_integer(thread: &mut Thread, val: &mut Value) -> Value {
     if val.is_char() {
         let ch = val.get_char();
@@ -763,6 +797,59 @@ extern "C-unwind" fn char_eq_p(_thread: &mut Thread, val: &mut Value, val2: &mut
                 &[val, val2],
             )
         }
+    }
+}
+
+static CATEGORY_MAP: Lazy<[Value; GeneralCategory::UppercaseLetter as usize + 1]> = Lazy::new(||{
+    [
+        scm_intern("Pe"),
+        scm_intern("Pc"),
+        scm_intern("Cc"),
+        scm_intern("Sc"),
+        scm_intern("Pd"),
+        scm_intern("Nd"),
+        scm_intern("Me"),
+        scm_intern("Pf"),
+        scm_intern("Cf"),
+        scm_intern("Pi"),
+        scm_intern("Nl"),
+        scm_intern("Zl"),
+        scm_intern("Ll"),
+        scm_intern("Sm"),
+        scm_intern("Lm"),
+        scm_intern("Sm"),
+        scm_intern("Mn"),
+        scm_intern("Ps"),
+        scm_intern("Lo"),
+        scm_intern("No"),
+        scm_intern("Po"),
+        scm_intern("So"),
+        scm_intern("Zp"),
+        scm_intern("Co"),
+        scm_intern("Zs"),
+        scm_intern("Mc"),
+        scm_intern("Cs"),
+        scm_intern("Lt"),
+        scm_intern("unassigned"),
+        scm_intern("Lu")
+    ]
+});
+
+extern "C-unwind" fn char_general_category(thread: &mut Thread, char: &mut Value) -> Value {
+    if char.is_char() {
+        let ch = char.get_char();
+        let category = unicode_general_category::get_general_category(ch);
+        CATEGORY_MAP[category as usize]
+    } else {
+        wrong_type_argument_violation(
+            thread,
+            "char-general-category",
+            0,
+            "character",
+            *char,
+            1,
+            &[char],
+        )
     }
 }
 
@@ -802,7 +889,34 @@ extern "C-unwind" fn procedure_eq_p(
     }
 }
 
+extern "C-unwind" fn procedure_to_string(thread: &mut Thread, proc: &mut Value) -> Value {
+    if !proc.is_program() {
+        wrong_type_argument_violation(
+            thread,
+            "procedure->string",
+            0,
+            "procedure",
+            *proc,
+            1,
+            &[proc],
+        );
+    }
+
+    if scm_program_num_free_vars(*proc) == 0 {
+        thread.make_string::<false>(&format!(
+            "#<procedure {:p}>",
+            proc.get_object().cast_as::<ScmProgram>()
+        ))
+    } else {
+        thread.make_string::<false>(&format!(
+            "#<closure {:p}>",
+            proc.get_object().cast_as::<ScmProgram>()
+        ))
+    }
+}
+
 pub(crate) fn init() {
+    scm_define_subr(".procedure->string", 1, 0, 0, Subr::F1(procedure_to_string));
     scm_define_subr("make-weakmapping", 2, 0, 0, Subr::F2(make_weakmapping));
     scm_define_subr("weakmapping?", 1, 0, 0, Subr::F1(weakmapping_p));
     scm_define_subr("weakmapping-value", 1, 0, 0, Subr::F1(weakmapping_value));
@@ -848,13 +962,14 @@ pub(crate) fn init() {
     scm_define_subr("tuple-length", 1, 0, 0, Subr::F1(tuple_length));
     scm_define_subr("current-millis", 0, 0, 0, Subr::F0(current_millis));
     scm_define_subr("integer->char", 1, 0, 0, Subr::F1(integer_to_char));
+    scm_define_subr("number->string", 1, 1, 0, Subr::F2(number_to_string));
     scm_define_subr("char->integer", 1, 0, 0, Subr::F1(char_to_integer));
     scm_define_subr("char=?", 2, 0, 0, Subr::F2(char_eq_p));
+    scm_define_subr("char-general-category", 1, 0, 0, Subr::F1(char_general_category));
     scm_define_subr("procedure?", 1, 0, 0, Subr::F1(procedure_p));
     scm_define_subr("procedure=?", 2, 0, 0, Subr::F2(procedure_eq_p));
     super::subr_fixnum::init();
     super::subr_hash::init();
-    super::struct_::init();
     super::list::init();
     super::bytevector::init();
     super::fileio::init();

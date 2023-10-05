@@ -24,11 +24,15 @@ use crate::{
     },
     gc::stack::{approximate_stack_pointer, StackBounds},
     gc_protect,
-    interpreter::{stackframe::{
-        frame_dynamic_link, frame_previous_sp, frame_virtual_return_address, StackElement,
-    }, scm_call_n},
+    interpreter::{
+        scm_call_n,
+        stackframe::{
+            frame_dynamic_link, frame_previous_sp, frame_virtual_return_address, StackElement,
+        },
+    },
+    runtime::error::capture_stacktrace,
     utils::round_up,
-    vm::thread::Thread, runtime::error::capture_stacktrace,
+    vm::thread::Thread,
 };
 use crate::{
     gc::ObjEdge,
@@ -69,7 +73,7 @@ impl VMCont {
             }
 
             sp = frame_previous_sp(fp);
-            fp = frame_dynamic_link(fp);
+            fp = frame_dynamic_link(fp).cast();
         }
     }
 }
@@ -164,7 +168,7 @@ impl Thread {
     pub unsafe fn capture_current_stack(&mut self) -> Value {
         let vra = frame_virtual_return_address(self.interpreter().fp);
         let mra = null();
-        let fp = frame_dynamic_link(self.interpreter().fp);
+        let fp = frame_dynamic_link(self.interpreter().fp).cast();
         let sp = frame_previous_sp(self.interpreter().fp);
         let stack_top = self.interpreter().stack_top;
 
@@ -298,7 +302,7 @@ extern "C-unwind" fn continuation_p(_thread: &mut Thread, cont: &mut Value) -> V
 
 extern "C-unwind" fn error(_thread: &mut Thread, val: &mut Value) -> Value {
     let stacktrace = unsafe { capture_stacktrace(_thread) };
-    eprintln!("error: {}\n{}", val,stacktrace);
+    eprintln!("error: {}\n{}", val, stacktrace);
     std::process::abort();
 }
 
@@ -321,12 +325,12 @@ pub fn raise_assertion_violation(
             unsafe {
                 std::hint::unreachable_unchecked();
             }
-        } 
+        }
 
         Err(_) => {
             let message = match irritant {
                 Some(irritant) => format!("{}: {}: {}", who, message, irritant),
-                None => format!("{}: {}",who, message),
+                None => format!("{}: {}", who, message),
             };
             eprintln!("Pre-boot error: {}", message);
             std::process::abort();
@@ -334,16 +338,47 @@ pub fn raise_assertion_violation(
     }
 }
 
-pub fn wrong_number_of_arguments_violation(thread: &mut Thread, proc: Value, required_min: i32, required_max: i32, argc: usize, argv: &[&mut Value]) -> ! { 
+pub fn wrong_number_of_arguments_violation(
+    thread: &mut Thread,
+    proc: Value,
+    required_min: i32,
+    required_max: i32,
+    argc: usize,
+    argv: &[&mut Value],
+) -> ! {
     todo!()
 }
 
-pub fn wrong_type_argument_violation(thread: &mut Thread, who: &str, position: usize, expected: &str, got: Value, argc: usize, argv: &[&mut Value]) -> ! {
-    println!("wrong type argument violation: {} expected {}, got {}\n{}", who, expected, got, unsafe { capture_stacktrace(thread) });
+#[inline(never)]
+#[cold]
+pub fn wrong_type_argument_violation(
+    thread: &mut Thread,
+    who: &str,
+    position: usize,
+    expected: &str,
+    got: Value,
+    argc: usize,
+    argv: &[&mut Value],
+) -> ! {
+    println!(
+        "wrong type argument violation: {} expected {}, got {}\n{}",
+        who,
+        expected,
+        got,
+        unsafe { capture_stacktrace(thread) }
+    );
     todo!()
 }
 
-pub fn invalid_argument_violation(thread: &mut Thread, who: &str, description: &str, value: Value, pos: usize, argc: usize, argv: &[&mut Value]) -> ! {
+pub fn invalid_argument_violation(
+    thread: &mut Thread,
+    who: &str,
+    description: &str,
+    value: Value,
+    pos: usize,
+    argc: usize,
+    argv: &[&mut Value],
+) -> ! {
     todo!()
 }
 
@@ -351,8 +386,26 @@ pub fn raise_error(thread: &mut Thread, who: &str, description: &str, code: i32)
     todo!()
 }
 
-pub fn raise_error_argv(thread: &mut Thread, who: &str, description: &str, code: i32, argc: usize, argv: &[Value]) -> ! {
+pub fn raise_error_argv(
+    thread: &mut Thread,
+    who: &str,
+    description: &str,
+    code: i32,
+    argc: usize,
+    argv: &[Value],
+) -> ! {
     todo!()
+}
+
+pub fn scheme_raise(thread: &mut Thread, value: Value) -> ! {
+    let raise_proc = environment_get(
+        scm_virtual_machine().interaction_environment,
+        scm_intern("raise"),
+    )
+    .unwrap();
+    let _ = scm_call_n(thread, raise_proc, &[value]);
+
+    unreachable!("raise returned")
 }
 
 pub(crate) fn init() {

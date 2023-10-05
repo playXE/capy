@@ -2,7 +2,6 @@ use crate::runtime::object::ScmProgram;
 use crate::runtime::value::Value;
 
 use super::encode::*;
-use super::u24::*;
 
 #[macro_export]
 macro_rules! for_each_opcode {
@@ -24,14 +23,14 @@ macro_rules! for_each_opcode {
             // instruction There may be any number of values on the return stack;
             // the precise number can be had by subtracting the address of
             // slot `proc - 1` from the post-call SP.
-            (op_call, "call", { proc: u24, nlocals: u24 })
+            (op_call, "call", { proc: u16, nlocals: u16 })
             // Call a procedure in the same compilation unit.
             //
             // This instruction is just like "call", except that instead of
             // dereferencing `proc` to find the call target, the call target is
             // known to be at `label`, a signed 32 bit offset from
             // the current IP.
-            (op_call_label, "call-label", { proc: u24, nlocals: u24, label: u32 })
+            (op_call_label, "call-label", { proc: u16, nlocals: u16, label: u32 })
             // Tail-call the procedure in slot 0 with the arguments in the current stack frame.
             // Requires that the procedure and all of the arguments have already been
             // shuffled into position
@@ -43,44 +42,44 @@ macro_rules! for_each_opcode {
             // Receive a single return value from a call whose procedure was in `proc`,
             // asserting that the call actually returned at least one value. Afterwards,
             // resets the frame to `nlocals` locals.
-            (op_receive, "receive", { dest: u16, proc: u16, nlocals: u24 })
+            (op_receive, "receive", { dest: u16, proc: u16, nlocals: u16 })
             // Receive a return of multiple values from a call whose procedure was
             // in PROC.  If fewer than NVALUES values were returned, signal an
             // error.  Unless ALLOW-EXTRA? is true, require that the number of
             // return values equals NVALUES exactly.  After receive-values has
             // run, the values can be copied down via `mov'.
-            (op_receive_values, "receive-values", { proc: u24, allow_extra: bool, nvalues: u24 })
-            (op_assert_nargs_ee, "assert-nargs-ee", { n: u24 })
-            (op_assert_nargs_ge, "assert-nargs-ge", { n: u24 })
-            (op_assert_nargs_le, "assert-nargs-le", { n: u24 })
+            (op_receive_values, "receive-values", { proc: u16, allow_extra: bool, nvalues: u16 })
+            (op_assert_nargs_ee, "assert-nargs-ee", { n: u16 })
+            (op_assert_nargs_ge, "assert-nargs-ge", { n: u16 })
+            (op_assert_nargs_le, "assert-nargs-le", { n: u16 })
             (op_assert_nargs_ee_locals, "assert-nargs-ee/locals", { expected: u16, nlocals: u16 })
-            (op_check_arguments, "arguments<=?", { expected: u24 })
-            (op_check_positional_arguments, "positional-arguments<=?", { nreq: u24, expected: u24 })
-            (op_bind_kwards, "bind-kwargs", { nreq: u24, flags: u8, nreq_and_opt: u24, ntotal: u24, kw_offset: u32 })
-            (op_bind_rest, "bind-rest", { dst: u24 })
-            (op_alloc_frame, "alloc-frame", { nlocals: u24 })
-            (op_reset_frame, "reset-frame", { nlocals: u24 })
+            (op_check_arguments, "arguments<=?", { expected: u16 })
+            (op_check_positional_arguments, "positional-arguments<=?", { nreq: u16, expected: u16 })
+            (op_bind_kwards, "bind-kwargs", { nreq: u16, flags: u8, nreq_and_opt: u16, ntotal: u16, kw_offset: u32 })
+            (op_bind_rest, "bind-rest", { dst: u16 })
+            (op_alloc_frame, "alloc-frame", { nlocals: u16 })
+            (op_reset_frame, "reset-frame", { nlocals: u16 })
             (op_mov, "mov", { dst: u16, src: u16 })
-            (op_long_mov, "long-mov", { dst: u24, src: u24 })
-            (op_long_fmov, "long-fmov", { dst: u24, src: u24 })
-            (op_push, "push", { src: u24 })
-            (op_pop, "pop", { dst: u24 })
-            (op_drop, "drop", { n: u24 })
+            (op_long_mov, "long-mov", { dst: u16, src: u16 })
+            (op_long_fmov, "long-fmov", { dst: u16, src: u16 })
+            (op_push, "push", { src: u16 })
+            (op_pop, "pop", { dst: u16 })
+            (op_drop, "drop", { n: u16 })
             (op_shuffle_down, "shuffle-down", { from: u16, to: u16 })
             (op_expand_apply_argument, "expand-apply-argument", {})
-            (op_subr_call, "subr-call", { idx: u24 })
+            (op_subr_call, "subr-call", { idx: u32 })
             (op_foreign_call, "foreign-call", { cif_idx: u16, ptr_idx: u16 })
             (op_call_intrinsic, "call-intrinsic", { intrinsic: u32 })
-            (op_call_intrinsic_val, "call-intrinsic-val", { a: u24, intrinsic: u32 })
+            (op_call_intrinsic_val, "call-intrinsic-val", { a: u16, intrinsic: u32 })
             (op_call_intrinsic_val_val, "call-intrinsic-val-val", { a: u16, b: u16, intrinsic: u32 })
-            (op_call_intrinsic_ret, "call-intrinsic-ret", { dst: u24, intrinsic: u32 })
+            (op_call_intrinsic_ret, "call-intrinsic-ret", { dst: u16, intrinsic: u32 })
             (op_call_intrinsic_ret_val, "call-intrinsic-ret-val", { dst: u16, a: u16, intrinsic: u32 })
             (op_call_intrinsic_ret_val_val, "call-intrinsic-ret-val-val", { dst: u16, a: u16, b: u16, intrinsic: u32 })
             (op_call_intrinsic_val_val_val, "call-intrinsic-val-val-val", { a: u16, b: u16, c: u16, intrinsic: u32 })
             // Reads a value from instruction stream and sets `dst` to it.
             (op_make_immediate, "make-immediate",  { dst: u16, value: u64 })
             // Reads a value from constant pool and sets `dst` to it.
-            (op_make_non_immediate, "make-non-immediate", { dst: u24, offset: u32 })
+            (op_make_non_immediate, "make-non-immediate", { dst: u16, offset: u32 })
             (op_cons, "cons", { dst: u16, car: u16, cdr: u16 })
             (op_box, "box", { dst: u16, src: u16 })
             (op_box_ref, "box-ref", { dst: u16, src: u16 })
@@ -94,22 +93,23 @@ macro_rules! for_each_opcode {
             (op_vector_set, "vector-set", { dst: u16, idx: u16, src: u16 })
             (op_vector_set_imm, "vector-set/immediate", { dst: u16, idx: u32, src: u16 })
             (op_vector_length, "vector-length", { dst: u16, src: u16 })
-            (op_program_ref, "program-ref", { dst: u16, src: u24, idx: u16 })
-            (op_program_ref_imm, "program-ref/immediate", { dst: u16, src: u24, idx: u32 })
-            (op_program_set, "program-set", { dst: u24, idx: u16, src: u16 })
-            (op_program_set_imm, "program-set/immediate", { dst: u24, idx: u32, src: u16 })
+            (op_program_ref, "program-ref", { dst: u16, src: u16, idx: u16 })
+            (op_program_ref_imm, "program-ref/immediate", { dst: u16, src: u16, idx: u32 })
+            (op_program_set, "program-set", { dst: u16, idx: u16, src: u16 })
+            (op_program_set_imm, "program-set/immediate", { dst: u16, idx: u32, src: u16 })
 
             // Creates a new program object with `vcode` at `offset` and `nfree` free variables.
             (op_make_program, "make-program", { dst: u16, nfree: u32, offset: i32 })
             // Fetches global variable from constant pool and sets `dst` to it.
-            (op_global_ref, "global-ref", { dst: u24, offset: u32})
+            (op_global_ref, "global-ref", { dst: u16, offset: u32})
             // Sets global variable from constant pool to `src`.
-            (op_global_set, "global-set", { src: u24, offset: u32})
+            (op_global_set, "global-set", { src: u16, offset: u32})
             (op_not, "not", { dst: u16, src: u16 })
             (op_add, "add", { dst: u16, a: u16, b: u16 })
             (op_add_imm, "add/immediate", { dst: u16, a: u16, b: i32 })
             (op_sub, "sub", { dst: u16, a: u16, b: u16 })
             (op_sub_imm, "sub/immediate", { dst: u16, a: u16, b: i32 })
+            (op_neg, "neg", { dst: u16, src: u16 })
             (op_div, "div", { dst: u16, a: u16, b: u16 })
             (op_quotient, "quotient", { dst: u16, a: u16, b: u16 })
             (op_quotient_imm, "quotient/immediate", { dst: u16, a: u16, b: i32 })
@@ -139,8 +139,8 @@ macro_rules! for_each_opcode {
             (op_eq, "eq?", { dst: u16, a: u16, b: u16 })
             (op_eqv, "eqv?", { dst: u16, a: u16, b: u16 })
             (op_equal, "equal?", { dst: u16, a: u16, b: u16 })
-            (op_heap_tag_eq, "heap-tag-eq?", { dst: u16, src: u24, tag: u32} )
-            (op_immediate_tag_eq, "immediate-tag-eq?", { dst: u16, src: u24, tag: u32 })
+            (op_heap_tag_eq, "heap-tag-eq?", { dst: u16, src: u16, tag: u32} )
+            (op_immediate_tag_eq, "immediate-tag-eq?", { dst: u16, src: u16, tag: u32 })
             (op_is_false, "false?", { dst: u16, src: u16 })
             (op_is_null, "null?", { dst: u16, src: u16 })
             (op_is_undefined, "undefined?", { dst: u16, src: u16 })
@@ -148,6 +148,7 @@ macro_rules! for_each_opcode {
             (op_is_int32, "int32?", { dst: u16, src: u16 })
             (op_is_char, "char?", { dst: u16, src: u16 })
             (op_is_flonum, "flonum?", { dst: u16, src: u16 })
+            (op_is_number, "number?", { dst: u16, src: u16 })
 
             (op_j, "j", { offset: i32 })
             (op_jz, "jz", { src: u16, offset: i32})
@@ -157,10 +158,12 @@ macro_rules! for_each_opcode {
             (op_cdr, "cdr", { dst: u16, src: u16 })
             (op_set_car, "set-car!", { dst: u16, src: u16 })
             (op_set_cdr, "set-cdr!", { dst: u16, src: u16 })
-            (op_bind_optionals, "bind-optionals", { nargs: u24 })
+            (op_bind_optionals, "bind-optionals", { nargs: u16 })
 
             (op_continuation_call, "continuation-call", { contregs: u8 })
             (op_capture_continuation, "capture-continuation", { dst: u8 })
+
+            (op_last, "last", {})
         }
     };
 }
@@ -172,6 +175,7 @@ macro_rules! decl_opcodes {
                 #[repr(C, packed)]
                 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
                 pub struct [<$name: camel>] {
+                    pub opcode: u8,
                     $(pub $field: $t),*
                 }
 
@@ -180,16 +184,33 @@ macro_rules! decl_opcodes {
                     #[inline(always)]
                     pub const fn new($($field: $t),*) -> Self {
                         Self {
+                            opcode: paste::paste!([<$name:upper>]),
                             $($field),*
                         }
+                    }
+                    #[inline(always)]
+                    pub const fn opcode(&self) -> u8 {
+                        //self.opcode
+                        paste::paste!([<$name:upper>])
                     }
 
                     $(
                         #[inline(always)]
-                        pub fn $field(&self) -> $t {
+                        pub const fn $field(&self) -> $t {
                             self.$field
                         }
                     )*
+                    #[allow(unused_parens, unused_variables)]
+                    #[inline(always)]
+                    pub unsafe fn decode(stream: &mut *const u8) -> ($($t),*) {
+                        let op = stream.read();
+                        debug_assert_eq!(op, paste::paste!([<$name:upper>]), "expected opcode {} {:x} but found {:x}", stringify!($name), paste::paste!([<$name:upper>]), op);
+                        let op = stream.cast::<[<$name: camel>]>();
+                        *stream = stream.add(std::mem::size_of::<[<$name: camel>]>());
+                        ( $(
+                            (*op).$field()
+                        ),* )
+                    }
                 }
 
                 impl Encode for [<$name: camel>] {
@@ -207,7 +228,7 @@ macro_rules! decl_opcodes {
                 impl Decode for [<$name: camel>] {
                     #[inline(always)]
                     unsafe fn read(stream: *const u8) -> Self {
-                        debug_assert_eq!(stream.wrapping_sub(1).read(), paste::paste!([<$name:upper>]), "expected opcode {} {:x} but found {:x}", stringify!($name), paste::paste!([<$name:upper>]), stream.wrapping_sub(1).read());
+                        debug_assert_eq!(stream.read(), paste::paste!([<$name:upper>]), "expected opcode {} {:x} but found {:x}", stringify!($name), paste::paste!([<$name:upper>]), stream.wrapping_sub(1).read());
                         stream.cast::<Self>().read_unaligned()
                     }
                 }
@@ -287,7 +308,6 @@ pub fn disassemble<const ADDR_INSN: bool>(vcode: &[u8]) {
             let start = pc;
 
             let op = pc.read();
-            pc = pc.add(1);
             let mut out = String::new();
 
             match op {

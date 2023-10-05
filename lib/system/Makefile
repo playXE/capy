@@ -7,6 +7,9 @@ SRCS += lib/system/eval.scm
 SRCS += lib/system/records.scm
 SRCS += lib/system/condition.scm
 SRCS += lib/system/exception.scm
+SRCS += lib/system/number.scm
+SRCS += lib/system/bignum.scm
+SRCS += lib/system/logical.scm
 SRCS += lib/system/sys.scm
 SRCS += lib/system/sysparam.scm
 SRCS += lib/system/iosys.scm
@@ -17,6 +20,9 @@ SRCS += lib/system/fileio.scm
 SRCS += lib/system/bytevectorio.scm
 SRCS += lib/system/portio.scm
 SRCS += lib/system/stdio.scm
+SRCS += lib/system/print.scm
+SRCS += lib/system/format.scm
+
 SRCS += lib/system/main.scm
 
 

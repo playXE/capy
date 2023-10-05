@@ -55,6 +55,7 @@ pub struct ScmHashTable {
     pub handlers: Value,
     pub typ: HashTableType,
     pub rehash: bool,
+    pub immutable: bool,
 }
 
 impl ScmHashTable {
@@ -721,6 +722,7 @@ pub struct WeakHashtable {
     pub header: ScmCellHeader,
     pub lock: RawMutex,
     pub datum: *mut WeakHashTableRec,
+    pub immutable: bool,
 }
 
 pub fn lookup_weak_hashtable(ht: Value, key: Value) -> Value {

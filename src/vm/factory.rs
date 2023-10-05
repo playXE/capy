@@ -4,7 +4,7 @@ use std::ptr::null_mut;
 
 use crate::compiler::tree_il::IForm;
 use crate::runtime::hashtable::{lookup_hashtable_size, WeakHashTableRec, WeakHashtable};
-use crate::runtime::object::{ScmTuple, ScmWeakMapping, scm_bytevector_set_mapping};
+use crate::runtime::object::{scm_bytevector_set_mapping, ScmTuple, ScmWeakMapping};
 use crate::{
     compiler::{expand::define_syntax, P},
     gc_protect,
@@ -67,7 +67,11 @@ impl Thread {
             let semantics = if IMMORTAL {
                 AllocationSemantics::Immortal
             } else {
-                AllocationSemantics::Default
+                if size <= self.los_threshold {
+                    AllocationSemantics::Default
+                } else {
+                    AllocationSemantics::Los
+                }
             };
             let mutator = self.mutator();
             let mem = mutator.alloc(size, size_of::<usize>(), 0, semantics);
@@ -141,7 +145,11 @@ impl Thread {
         let semantics = if IMMORTAL {
             AllocationSemantics::Immortal
         } else {
-            AllocationSemantics::Default
+            if size <= self.los_threshold {
+                AllocationSemantics::Default
+            } else {
+                AllocationSemantics::Los
+            }
         };
         unsafe {
             let mutator = self.mutator.assume_init_mut();
@@ -175,7 +183,11 @@ impl Thread {
         let semantics = if IMMORTAL {
             AllocationSemantics::Immortal
         } else {
-            AllocationSemantics::Default
+            if size <= self.los_threshold {
+                AllocationSemantics::Default
+            } else {
+                AllocationSemantics::Los
+            }
         };
         unsafe {
             let mutator = self.mutator.assume_init_mut();
@@ -244,7 +256,7 @@ impl Thread {
 
             let val = Value::encode_object_value(ScmCellRef(transmute(reference)));
             scm_bytevector_set_mapping(val);
-            val 
+            val
         }
     }
 
@@ -253,7 +265,11 @@ impl Thread {
         let semantics = if IMMORTAL {
             AllocationSemantics::Immortal
         } else {
-            AllocationSemantics::Default
+            if size <= self.los_threshold {
+                AllocationSemantics::Default
+            } else {
+                AllocationSemantics::Los
+            }
         };
         unsafe {
             let mutator = self.mutator.assume_init_mut();
@@ -427,6 +443,12 @@ impl Thread {
         }
     }
 
+    pub fn make_hashtable_generic(&mut self, n: u32, mut vector: Value) -> Value {
+        let hashtable = gc_protect!(self => vector => self.make_hashtable(n, HashTableType::Generic));
+        hashtable.cast_as::<ScmHashTable>().handlers.assign(hashtable, vector);
+        hashtable
+    }
+
     pub fn make_hashtable(&mut self, n: u32, typ: HashTableType) -> Value {
         let n = lookup_hashtable_size(n);
         let size = round_up(size_of::<ScmHashTable>(), 8, 0);
@@ -444,18 +466,14 @@ impl Thread {
             _ => (dummy_hash, dummy_equiv),
         };
         unsafe {
-            let mutator = self.mutator();
-            let semantics = if datum_size >= 16*1024 {
+            let semantics = if datum_size > self.los_threshold {
                 AllocationSemantics::Los
             } else {
                 AllocationSemantics::Default
             };
-            let datum_addr = mutator.alloc(
-                datum_size,
-                size_of::<usize>(),
-                0,
-                semantics,
-            );
+            let mutator = self.mutator();
+
+            let datum_addr = mutator.alloc(datum_size, size_of::<usize>(), 0, semantics);
 
             datum_addr.store(HashTableRec {
                 capacity: n,
@@ -480,7 +498,7 @@ impl Thread {
             mutator.post_alloc(
                 transmute(datum_addr),
                 datum_size,
-                AllocationSemantics::Default,
+                semantics,
             );
 
             let mut datum = Value::encode_object_value(transmute(datum_addr));
@@ -503,6 +521,7 @@ impl Thread {
                 handlers: Value::encode_bool_value(false),
                 typ,
                 rehash: false,
+                immutable: false,
             });
 
             let reference = transmute::<_, ObjectReference>(mem);
@@ -522,11 +541,16 @@ impl Thread {
         );
 
         unsafe {
+            let semantics = if datum_size > self.los_threshold {
+                AllocationSemantics::Los
+            } else {
+                AllocationSemantics::Default
+            };
             let datum_addr = self.mutator().alloc(
                 datum_size,
                 size_of::<usize>(),
                 0,
-                AllocationSemantics::Default,
+                semantics,
             );
 
             datum_addr.store(WeakHashTableRec {
@@ -552,7 +576,7 @@ impl Thread {
             self.mutator().post_alloc(
                 transmute(datum_addr),
                 datum_size,
-                AllocationSemantics::Default,
+                semantics
             );
 
             let mut datum = Value::encode_object_value(transmute(datum_addr));
@@ -569,6 +593,7 @@ impl Thread {
                     },
                 },
                 lock: RawMutex::INIT,
+                immutable: false,
                 datum: transmute(datum),
             });
 

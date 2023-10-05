@@ -380,6 +380,10 @@ impl Value {
     pub fn syntax_expander<'a>(self) -> &'a mut ScmSyntaxExpander {
         self.cast_as()
     }
+
+    pub fn is_number(self) -> bool {
+        self.is_inline_number() || self.type_of() == TypeId::Bignum || self.type_of() == TypeId::Complex || self.type_of() == TypeId::Rational
+    }
 }
 
 impl std::fmt::Display for Value {

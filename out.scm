@@ -1,6 +1,0 @@
-    Finished dev [unoptimized + debuginfo] target(s) in 0.05s
-     Running `target/debug/capy-boot lib/system/usual.scm lib/system/exception.scm lib/system/records.scm lib/system/boot.scm lib/system/control.scm lib/system/eval.scm`
-Compiling lib/system/usual.scm...
-Compiling lib/system/exception.scm...
-Error compiling lib/system/exception.scm: illegal define: (define error (let ((err error))) (lambda (who message . irritants) (err
-"NYI")))

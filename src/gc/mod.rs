@@ -31,7 +31,6 @@ use crate::{
             WeakHashtable,
         },
         object::*,
-        struct_::ScmStruct,
         value::Value,
     },
     utils::round_up,
@@ -149,8 +148,9 @@ impl ObjectModel<CapyVM> for ScmObjectModel {
         unsafe {
             std::ptr::copy_nonoverlapping(src.to_ptr::<u8>(), dst.to_mut_ptr::<u8>(), size);
         }
-        copy_context.post_copy(ObjectReference::from_raw_address(dst), size, semantics);
-        ObjectReference::from_raw_address(dst)
+        let to_obj = ObjectReference::from_raw_address(dst);
+        copy_context.post_copy(to_obj, size, semantics);
+        to_obj
     }
     #[inline(always)]
     fn copy_to(
@@ -164,7 +164,7 @@ impl ObjectModel<CapyVM> for ScmObjectModel {
             let dst = to.to_raw_address();
             let src = from.to_raw_address();
 
-            unsafe {
+            unsafe { 
                 std::ptr::copy_nonoverlapping(src.to_ptr::<u8>(), dst.to_mut_ptr::<u8>(), bytes);
             }
         }
@@ -255,12 +255,6 @@ impl ObjectModel<CapyVM> for ScmObjectModel {
                 }
                 TypeId::Continuation => size_of::<ScmContinuation>(),
                 TypeId::WeakMapping => size_of::<ScmWeakMapping>(),
-
-                TypeId::Struct => {
-                    let s = reference.cast_as::<ScmStruct>();
-                    let sz = s.vtable.cast_as::<ScmStruct>().vtable_size() as usize;
-                    size_of::<ScmStruct>() + sz * size_of::<Value>()
-                }
                 _ => unreachable!(),
             },
             8,
@@ -549,6 +543,7 @@ impl Scanning<CapyVM> for ScmScanning {
                 let n = (*datum).capacity;
                 for i in 0..(n + n) {
                     let elt_ptr = (*datum).elts.as_mut_ptr().add(i as _);
+                  
                     if (*elt_ptr).is_object() {
                         let edge = ObjEdge::from_address(Address::from_mut_ptr(elt_ptr));
                         edge_visitor.visit_edge(edge);
@@ -561,7 +556,7 @@ impl Scanning<CapyVM> for ScmScanning {
                 if !hash_table.datum.is_null() {
                     let datum_edge =
                         ObjEdge::from_address(Address::from_mut_ptr(&mut hash_table.datum));
-
+                    
                     edge_visitor.visit_edge(datum_edge);
                 }
 
@@ -629,11 +624,6 @@ impl Scanning<CapyVM> for ScmScanning {
                     .weakhashtable_registry
                     .lock(false)
                     .push(object);
-            }
-
-            TypeId::Struct => {
-                let s = reference.cast_as::<ScmStruct>();
-                s.visit_edges(edge_visitor);
             }
 
             _ => (),
@@ -759,7 +749,7 @@ impl Scanning<CapyVM> for ScmScanning {
         }
 
         let ienv = vm.interaction_environment.get_object();
-        let iref = ObjectReference::from_raw_address(ienv.to_address());
+        let iref = ObjectReference::from_address::<CapyVM>(ienv.to_address());
         assert!(iref.is_reachable());
         false
     }

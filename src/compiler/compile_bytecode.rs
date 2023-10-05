@@ -8,12 +8,12 @@ use crate::bytecode::opcodes::OpCons;
 use crate::bytecode::opcodes::OpEq;
 use crate::bytecode::opcodes::OpEqual;
 use crate::bytecode::opcodes::OpEqv;
+use crate::bytecode::opcodes::OpNeg;
 use crate::bytecode::opcodes::OpVectorLength;
 use crate::bytecode::opcodes::OpVectorRef;
 use crate::bytecode::opcodes::OpVectorSet;
 use crate::bytecode::opcodes::CAPY_BYTECODE_MAGIC;
 use crate::bytecode::opcodes::OP_NOP;
-use crate::bytecode::u24::u24;
 use crate::bytecodeassembler::fasl::FASLPrinter;
 use crate::bytecodeassembler::*;
 use crate::compiler::sexpr::Sexpr;
@@ -181,11 +181,11 @@ fn compute_frame_size(lam: P<Lambda>) -> usize {
             IForm::LSet(lset) => 1 + visit(&lset.value),
 
             IForm::Call(call) => {
-                visit(&call.proc) + call.args.iter().map(|arg| visit(arg)).sum::<usize>() + 3
+                visit(&call.proc) + call.args.iter().map(|arg| visit(arg)).sum::<usize>() + 2
                 /* call frame size */
             }
 
-            IForm::PrimCall(_, _, args) => 3 + args.iter().map(|arg| visit(arg)).sum::<usize>(),
+            IForm::PrimCall(_, _, args) => 2 + args.iter().map(|arg| visit(arg)).sum::<usize>(),
 
             IForm::If(cond) => {
                 let test = visit(&cond.cond);
@@ -300,7 +300,7 @@ pub fn compile_closure(
     }
 
     fn push_frame(mut env: P<Env>) -> P<Env> {
-        for _ in 0..3 {
+        for _ in 0..2 {
             env = push_temp(env);
         }
         env
@@ -370,10 +370,10 @@ pub fn compile_closure(
             let idx = loc.idx;
             
             if loc.closure {
-                asm.emit_load_free_variable(tmp0 as _, u24::new(state.frame_size - 1), idx);
-                asm.emit_store_free_variable(u24::new(dst), tmp0 as _, free_idx);
+                asm.emit_load_free_variable(tmp0 as _, state.frame_size as u16 - 1, idx);
+                asm.emit_store_free_variable(dst as u16, tmp0 as _, free_idx);
             } else {
-                asm.emit_store_free_variable(u24::new(dst), idx as _, free_idx);
+                asm.emit_store_free_variable(dst as u16, idx as _, free_idx);
             }
             free_idx += 1;
         }
@@ -431,7 +431,7 @@ pub fn compile_closure(
             if lam.free_lvars.len() != 0 {
                 asm.emit_make_program(env.idx as _, lam.free_lvars.len() as _, *clos as _);
             } else {
-                asm.emit_static_program(u24::new(env.idx as _), *clos as _);
+                asm.emit_static_program(env.idx as _, *clos as _);
             }
         }
 
@@ -533,7 +533,7 @@ pub fn compile_closure(
                 for arg in call.args.iter() {
                     tmp = for_push(asm, arg, &tmp, state);
                 }
-                asm.emit_call(u24::new(from), 1 + call.args.len() as u32);
+                asm.emit_call(from as _, 1 + call.args.len() as u32);
                 if from != height {
                     asm.emit_shuffle_down(from, height);
                 }
@@ -559,7 +559,7 @@ pub fn compile_closure(
             }
             _ => {
                 for_value_at(asm, exp, env, state.frame_size - height - 1, state);
-                asm.emit_reset_frame(u24::new(height + 1));
+                asm.emit_reset_frame(height as u16 + 1);
             }
         }
     }
@@ -576,7 +576,7 @@ pub fn compile_closure(
                 let l = lookup_lexical(lref.lvar.clone(), env);
 
                 if l.closure {
-                    asm.emit_load_free_variable(dst as _, u24::new(state.frame_size - 1), l.idx)
+                    asm.emit_load_free_variable(dst as _, state.frame_size as u16 - 1, l.idx)
                 } else {
                     asm.emit_mov(dst as _, l.idx as _);
                 }
@@ -610,16 +610,16 @@ pub fn compile_closure(
                 }
 
                 _ => {
-                    asm.emit_make_non_immediate(u24::new(dst), cons.clone());
+                    asm.emit_make_non_immediate(dst as _, cons.clone());
                 }
             },
 
             IForm::GRef(gref) => {
-                asm.emit_global_ref(u24::new(dst as _), gref.name.unwrap_id());
+                asm.emit_global_ref(dst as _, gref.name.unwrap_id());
             }
 
             IForm::PrimRef(name) => {
-                asm.emit_global_ref(u24::new(dst as _), scm_intern(name));
+                asm.emit_global_ref(dst as _, scm_intern(name));
             }
 
             IForm::GSet(gset) => {
@@ -651,7 +651,7 @@ pub fn compile_closure(
                     })
                     .1;
                 if lam.free_lvars.is_empty() {
-                    asm.emit_static_program(u24::new(dst), label as _);
+                    asm.emit_static_program(dst as _, label as _);
                 } else {
                     asm.emit_make_program(0, lam.free_lvars.len() as _, label as _);
                     
@@ -699,11 +699,11 @@ pub fn compile_closure(
                 }
                 let proc_slot = stack_height(&env, state);
 
-                asm.emit_call(u24::new(proc_slot), call.args.len() as u32 + 1);
+                asm.emit_call(proc_slot as _, call.args.len() as u32 + 1);
                 asm.emit_receive(
                     stack_height_under_local(dst, state.frame_size) as _,
                     proc_slot as _,
-                    u24::new(state.frame_size),
+                    state.frame_size as _,
                 );
             }
 
@@ -752,6 +752,11 @@ pub fn compile_closure(
                         asm.emit_mov(dst as _, 0);
                     }
 
+                    "-" if args.len() == 1 => {
+                        let n = for_value(asm, &args[0], env, state);
+                        OpNeg::new(dst as _, n.idx as _).write(asm);
+                    }
+
                     _ => {
                         let prim = PRIMITIVES.get(name);
                         if let Some(prim) = prim {
@@ -770,11 +775,11 @@ pub fn compile_closure(
                                 }
                                 let proc_slot = stack_height(&env, state);
 
-                                asm.emit_call(u24::new(proc_slot), args.len() as u32 + 1);
+                                asm.emit_call(proc_slot as _, args.len() as u32 + 1);
                                 asm.emit_receive(
                                     stack_height_under_local(dst, state.frame_size) as _,
                                     proc_slot as _,
-                                    u24::new(state.frame_size),
+                                    state.frame_size as _,
                                 );
                             } else {
                                 if !prim.has_result {
@@ -806,11 +811,11 @@ pub fn compile_closure(
                             }
                             let proc_slot = stack_height(&env, state);
 
-                            asm.emit_call(u24::new(proc_slot), args.len() as u32 + 1);
+                            asm.emit_call(proc_slot as _, args.len() as u32 + 1);
                             asm.emit_receive(
                                 stack_height_under_local(dst, state.frame_size) as _,
                                 proc_slot as _,
-                                u24::new(state.frame_size),
+                                state.frame_size as _,
                             );
                         }
                     }
@@ -833,13 +838,13 @@ pub fn compile_closure(
         let proc_slot = stack_height(env, state);
         let nreq = lvars.len() as u32 - rest as u32;
         if !rest && nreq != 0 {
-            asm.emit_receive_values(proc_slot, rest, nreq);
+            asm.emit_receive_values(proc_slot as _, rest, nreq as _);
         }
         if rest {
-            asm.emit_bind_rest(u24::new(proc_slot + nreq));
+            asm.emit_bind_rest((proc_slot + nreq) as _);
         }
 
-        asm.emit_reset_frame(u24::new(state.frame_size));
+        asm.emit_reset_frame(state.frame_size as _);
 
         let env = lvars.iter().fold(env.clone(), |env, lvar| {
             let env = push_local(lvar.name.clone(), lvar.clone(), env);
@@ -894,7 +899,7 @@ pub fn compile_closure(
 
                     //if l.closure {
                     asm.emit_store_free_variable(
-                        u24::new(1 - state.frame_size as u32),
+                        1 - state.frame_size as u16,
                         env.idx as _,
                         l.idx,
                     );
@@ -909,14 +914,14 @@ pub fn compile_closure(
                 asm.maybe_source(def.src);
                 let env = for_value(asm, &def.value, env, state);
 
-                asm.emit_global_set(u24::new(env.idx), def.name.unwrap_id());
+                asm.emit_global_set(env.idx as _, def.name.unwrap_id());
                 None
             }
 
             IForm::GSet(gset) => {
                 asm.maybe_source(gset.src);
                 let env = for_value(asm, &gset.value, env, state);
-                asm.emit_global_set(u24::new(env.idx), gset.name.unwrap_id());
+                asm.emit_global_set(env.idx as _, gset.name.unwrap_id());
                 None
             }
 
@@ -951,8 +956,8 @@ pub fn compile_closure(
                 }
                 let proc_slot = stack_height(&env, state);
 
-                asm.emit_call(u24::new(proc_slot), call.args.len() as u32 + 1);
-                asm.emit_reset_frame(u24::new(state.frame_size));
+                asm.emit_call(proc_slot as _, call.args.len() as u32 + 1);
+                asm.emit_reset_frame(state.frame_size as _);
                 None
             }
 
@@ -995,8 +1000,8 @@ pub fn compile_closure(
                         }
                         let proc_slot = stack_height(&env, state);
 
-                        asm.emit_call(u24::new(proc_slot), args.len() as u32 + 1);
-                        asm.emit_reset_frame(u24::new(state.frame_size));
+                        asm.emit_call(proc_slot as _, args.len() as u32 + 1);
+                        asm.emit_reset_frame(state.frame_size as _);
                     } else {
                         let args = for_args(asm, state, args, env);
                         if prim.has_result {
@@ -1022,8 +1027,8 @@ pub fn compile_closure(
                     }
                     let proc_slot = stack_height(&env, state);
 
-                    asm.emit_call(u24::new(proc_slot), args.len() as u32 + 1);
-                    asm.emit_reset_frame(u24::new(state.frame_size));
+                    asm.emit_call(proc_slot as _, args.len() as u32 + 1);
+                    asm.emit_reset_frame(state.frame_size as _);
                 }
 
                 None
@@ -1102,7 +1107,7 @@ pub fn compile_closure(
                 }
 
                 parallel_moves(asm, &env, base, call.args.len() as i32);
-                asm.emit_reset_frame(u24::new(1 + call.args.len() as u32));
+                asm.emit_reset_frame(1 + call.args.len() as u16);
                 asm.emit_tail_call();
             }
             IForm::Goto(_) => {
@@ -1368,6 +1373,9 @@ static PRIMITIVES: Lazy<HashMap<&'static str, Primitive>> = Lazy::new(|| {
         ("-", 2, false, true, asm, args => {
             asm.emit_sub(args[0] as _, args[1] as _, args[2] as _);
         })
+        ("--", 1, false, true, asm, args => {
+            OpNeg::new(args[0] as _, args[1] as _).write(asm);
+        })
 
         ("*", 2, false, true, asm, args => {
             asm.emit_mul(args[0] as _, args[1] as _, args[2] as _);
@@ -1476,7 +1484,9 @@ static PRIMITIVES: Lazy<HashMap<&'static str, Primitive>> = Lazy::new(|| {
         (".cdr:pair", 1, false ,true, asm, args => {
             asm.emit_cdr(args[0] as _, args[1] as _)
         })
-
+        ("number?", 1, false, true, asm, args => {
+            asm.emit_is_number(args[0] as _, args[1] as _);
+        })
         ("car", 1, false, true, asm, args => {
             asm.emit_car(args[0] as _, args[1] as _)
         })

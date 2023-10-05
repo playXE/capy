@@ -6,7 +6,7 @@ use crate::{
 };
 
 use super::{
-    hashtable::{get_hashtable, hashtable_lock, hashtable_unlock, put_hashtable},
+    hashtable::{get_hashtable, hashtable_lock, hashtable_unlock, put_hashtable, ScmHashTable},
     object::*,
     value::Value, gsubr::{scm_make_subr, Subr, scm_define_subr}, symbol::scm_intern,
 };
@@ -135,7 +135,6 @@ pub fn environment_name(env: Value) -> Value {
 
 extern "C-unwind" fn interaction_environment_subr(_thread: &mut Thread, val: &mut Value) -> Value {
     if val.is_undefined() {
-       
         scm_virtual_machine().interaction_environment
     } else {
         if val.is_environment() {
@@ -166,10 +165,13 @@ extern "C-unwind" fn environment_get_cell_proc(_: &mut Thread, env: &mut Value, 
     if !key.is_symbol() {
         raise_exn!(Fail, &[], "environment-get-cell: expected symbol, but got {}", key);
     }
-
+    let might_rehash = env.cast_as::<ScmEnvironment>().ht.cast_as::<ScmHashTable>().rehash;
     let cell = environment_get_cell(*env, *key);
     match cell {
-        Ok(cell) => cell,
+        Ok(cell) => {
+            assert!(cell.type_of() == TypeId::GLOC, "'{}' why not GLOC?: {:?}, would rehash?={}", key, cell.type_of() as u8, might_rehash);
+            cell
+        }
         Err(err) => match err {
             EnvironmentError::Undefined => raise_exn!(Fail, &[], "environment-get-cell: undefined variable {}", key),
             EnvironmentError::DenotesMacro => raise_exn!(Fail, &[], "environment-get-cell: denotes macro {}", key),

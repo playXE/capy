@@ -1,9 +1,9 @@
-use crate::vm::thread::Thread;
+use crate::{vm::thread::Thread, gc_protect, runtime::list::scm_cons};
 
 use super::{
     control::{invalid_argument_violation, wrong_type_argument_violation},
     gsubr::{scm_define_subr, Subr},
-    object::{scm_bytevector_as_slice_mut, scm_symbol_str, scm_bytevector_length, scm_bytevector_as_slice, scm_string_str},
+    object::{scm_bytevector_as_slice_mut, scm_symbol_str, scm_bytevector_length, scm_bytevector_as_slice, scm_string_str, scm_bytevector_ref, scm_set_cdr},
     symbol::scm_intern,
     value::Value,
 };
@@ -1471,7 +1471,33 @@ extern "C-unwind" fn string_utf8(thread: &mut Thread, s: &mut Value) -> Value {
     }
 }
 
+extern "C-unwind" fn bytevector_to_list(thread: &mut Thread, bv: &mut Value) -> Value {
+    if bv.is_bytevector() {
+        let mut list = Value::encode_null_value();
+
+        for i in 0..scm_bytevector_length(*bv) {
+            let byte = scm_bytevector_ref(*bv, i);
+            let new = gc_protect!(thread => list => scm_cons(Value::encode_int32(byte as _), Value::encode_null_value()));
+            scm_set_cdr(new, thread, list);
+            list = new;
+        }
+
+        list
+    } else {
+        wrong_type_argument_violation(
+            thread,
+            "bytevector->list",
+            0,
+            "bytevector",
+            *bv,
+            1,
+            &[bv],
+        );
+    }
+}
+
 pub(crate) fn init() {
+    scm_define_subr("bytevector->list", 1, 0, 0, Subr::F1(bytevector_to_list));
     scm_define_subr("bytevector?", 1, 0, 0, Subr::F1(bytevector_p));
     scm_define_subr("native-endianess", 0, 0, 0, Subr::F0(native_endianess));
     scm_define_subr("make-bytevector", 1, 1, 0, Subr::F2(make_bytevector));

@@ -207,14 +207,14 @@
 
 ; Write-char has been re-coded in MAL for performance; see Lib/malcode.mal.
 ;
-;(define (write-char c . rest)
-;  (cond ((null? rest)
-;        (io/write-char c (current-output-port)))
-;       ((null? (cdr rest))
-;        (io/write-char c (car rest)))
-;       (else
-;        (error "write-char: too many arguments.")
-;        #t)))
+(define (write-char c . rest)
+  (cond ((null? rest)
+        (io/write-char c (current-output-port)))
+       ((null? (cdr rest))
+        (io/write-char c (car rest)))
+       (else
+        (error 'write-char "too many arguments")
+        #t)))
 
 (define (write-bytevector-like bvl . rest)
   (if (pair? rest)
@@ -454,5 +454,7 @@
   (file-io/delete-file filename))
 
 (define port-position io/port-position)
+
+(initialize-io-system)
 
 ; eof

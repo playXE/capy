@@ -28,7 +28,8 @@ pub enum ThreadKind {
 
 #[repr(C)]
 pub struct Thread {
-    interpreter: MaybeUninit<InterpreterState>,
+    pub interpreter: MaybeUninit<InterpreterState>,
+    pub los_threshold: usize,
     pub needs_wb: bool,
     pub mutator: MaybeUninit<Mutator<CapyVM>>,
     pub shadow_stack: ShadowStack,
@@ -176,6 +177,11 @@ impl Thread {
         self.local_finalization_queue = MaybeUninit::new(Vec::with_capacity(128));
         self.obj_handles = MaybeUninit::new(ObjStorage::new("thread-handles"));
         self.needs_wb = scm_virtual_machine().needs_wb;
+        self.los_threshold = self
+            .mutator()
+            .plan
+            .constraints()
+            .max_non_los_default_alloc_bytes;
     }
 
     pub(crate) fn deregister_mutator(&mut self) {
@@ -389,6 +395,7 @@ static mut SINK: u8 = 0;
 #[thread_local]
 static mut THREAD: Thread = Thread {
     id: 0,
+    los_threshold: 0,
     needs_wb: false,
     interpreter: MaybeUninit::uninit(),
     mutator: MaybeUninit::uninit(),

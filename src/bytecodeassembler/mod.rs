@@ -78,12 +78,12 @@ impl Assembler {
         if dst as u16 as u32 == dst && src as u16 as u32 == src {
             OpMov::new(dst as u16, src as u16).write(self);
         } else {
-            OpLongMov::new(u24::new(dst), u24::new(src)).write(self);
+            OpLongMov::new(dst as _, src as _).write(self);
         }
     }
 
     pub fn emit_fmov(&mut self, dst: u32, src: u32) {
-        OpLongFmov::new(u24::new(dst), u24::new(src)).write(self);
+        OpLongFmov::new(dst as _, src as _).write(self);
     }
 
     pub fn emit_box(&mut self, dst: u32, src: u32) {
@@ -120,19 +120,19 @@ impl Assembler {
         OpVectorSetImm::new(dst, imm, val).write(self);
     }
 
-    pub fn emit_global_ref(&mut self, dst: u24, name: Value) {
+    pub fn emit_global_ref(&mut self, dst: u32, name: Value) {
         let name = self.intern_constant(Sexpr::Global(name));
-        OpGlobalRef::new(dst, name as _).write(self);
+        OpGlobalRef::new(dst as _, name as _).write(self);
     }
 
-    pub fn emit_global_set(&mut self, src: u24, name: Value) {
+    pub fn emit_global_set(&mut self, src: u32, name: Value) {
         let name = self.intern_constant(Sexpr::Global(name));
-        OpGlobalSet::new(src, name as _).write(self);
+        OpGlobalSet::new(src as _, name as _).write(self);
     }
 
-    pub fn emit_make_non_immediate(&mut self, dst: u24, data: Sexpr) {
+    pub fn emit_make_non_immediate(&mut self, dst: u32, data: Sexpr) {
         let index = self.intern_constant(data);
-        OpMakeNonImmediate::new(dst, index).write(self);
+        OpMakeNonImmediate::new(dst as _, index).write(self);
     }
 
     pub fn emit_make_immediate(&mut self, dst: u16, imm: u64) {
@@ -159,18 +159,18 @@ impl Assembler {
         ix as u32
     }
 
-    pub fn emit_static_program(&mut self, dst: u24, closure_idx: u32) {
+    pub fn emit_static_program(&mut self, dst: u32, closure_idx: u32) {
         let index = self.intern_constant(Sexpr::Program(closure_idx));
         self.patch_programs.push((index, closure_idx));
-        OpMakeNonImmediate::new(dst, index).write(self);
+        OpMakeNonImmediate::new(dst as _, index).write(self);
     }
 
-    pub fn emit_load_free_variable(&mut self, dst: u16, src: u24, idx: u32) {
+    pub fn emit_load_free_variable(&mut self, dst: u16, src: u16, idx: u32) {
         OpProgramRefImm::new(dst, src, idx).write(self);
     }
 
-    pub fn emit_store_free_variable(&mut self, dst: u24, src: u16, idx: u32) {
-        OpProgramSetImm::new(dst, idx, src).write(self);
+    pub fn emit_store_free_variable(&mut self, dst: u16, src: u16, idx: u32) {
+        OpProgramSetImm::new(dst as _, idx, src).write(self);
     }
 
     pub fn emit_jnz(&mut self, src: u16) -> impl FnOnce(&mut Assembler) {
@@ -223,34 +223,34 @@ impl Assembler {
     }
 
     pub fn emit_alloc_frame(&mut self, size: usize) {
-        OpAllocFrame::new(u24::new(size as _)).write(self);
+        OpAllocFrame::new(size as _).write(self);
     }
 
     pub fn emit_prelude(&mut self, nreq: u32, nopt: bool, nlocals: usize) {
         if nopt {
-            OpAssertNargsGe::new(u24::new(nreq)).write(self);
+            OpAssertNargsGe::new(nreq as _).write(self);
 
-            OpBindRest::new(u24::new(nreq)).write(self);
+            OpBindRest::new(nreq as _).write(self);
         } else {
-            OpAssertNargsEe::new(u24::new(nreq)).write(self);
+            OpAssertNargsEe::new(nreq as _).write(self);
         }
 
         self.emit_alloc_frame(nlocals);
     }
 
-    pub fn emit_call(&mut self, proc: u24, nlocals: u32) {
-        OpCall::new(proc, u24::new(nlocals)).write(self);
+    pub fn emit_call(&mut self, proc: u16, nlocals: u32) {
+        OpCall::new(proc, nlocals as _).write(self);
     }
 
     pub fn emit_shuffle_down(&mut self, from: u32, to: u32) {
         OpShuffleDown::new(from as _, to as _).write(self);
     }
 
-    pub fn emit_reset_frame(&mut self, nlocals: u24) {
+    pub fn emit_reset_frame(&mut self, nlocals: u16) {
         OpResetFrame::new(nlocals).write(self);
     }
 
-    pub fn emit_receive(&mut self, dst: u16, proc: u16, nlocals: u24) {
+    pub fn emit_receive(&mut self, dst: u16, proc: u16, nlocals: u16) {
         OpReceive::new(dst, proc, nlocals).write(self);
     }
 
@@ -302,11 +302,11 @@ impl Assembler {
         OpEq::new(dst, src1, src2).write(self);
     }
 
-    pub fn emit_heap_tag_eq(&mut self, dst: u16, obj: u32, tag: u32) {
-        OpHeapTagEq::new(dst, u24::new(obj), tag).write(self);
+    pub fn emit_heap_tag_eq(&mut self, dst: u16, obj: u16, tag: u32) {
+        OpHeapTagEq::new(dst, obj, tag).write(self);
     }
 
-    pub fn emit_immediate_tag_eq(&mut self, dst: u16, obj: u24, tag: u32) {
+    pub fn emit_immediate_tag_eq(&mut self, dst: u16, obj: u16, tag: u32) {
         OpImmediateTagEq::new(dst, obj, tag).write(self);
     }
 
@@ -317,7 +317,9 @@ impl Assembler {
     pub fn emit_is_int32(&mut self, dst: u16, obj: u16) {
         OpIsInt32::new(dst, obj).write(self);
     }
-
+    pub fn emit_is_number(&mut self, dst: u16, obj: u16) {
+        OpIsNumber::new(dst, obj).write(self);
+    }
     pub fn emit_is_undefined(&mut self, dst: u16, obj: u16) {
         OpIsUndefined::new(dst, obj).write(self);
     }
@@ -346,12 +348,12 @@ impl Assembler {
         OpBoxRef::new(dst, obj).write(self);
     }
 
-    pub fn emit_bind_rest(&mut self, dst: u24) {
+    pub fn emit_bind_rest(&mut self, dst: u16) {
         OpBindRest::new(dst).write(self);
     }
 
-    pub fn emit_receive_values(&mut self, dst: u32, rest: bool, nreq: u32) {
-        OpReceiveValues::new(u24::new(dst), rest, u24::new(nreq)).write(self);
+    pub fn emit_receive_values(&mut self, dst: u16, rest: bool, nreq: u16) {
+        OpReceiveValues::new(dst as _, rest, nreq as _).write(self);
     }
 
     pub fn emit_car(&mut self, dst: u16, obj: u16) {
