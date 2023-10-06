@@ -1,7 +1,7 @@
 use std::{collections::HashMap, mem::size_of};
 
 use crate::{
-    bytecode::{encode::InstructionStream, encode::*, opcodes::*, u24::*},
+    bytecode::{encode::InstructionStream, encode::*, opcodes::*},
     compiler::sexpr::{Sexpr, SourceLoc},
     runtime::value::Value,
 };

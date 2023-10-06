@@ -91,16 +91,7 @@
 
     (loop s p 0 (string-length s)))
   (define (print-slashed-symbol x p)
-    (let* ((s (symbol->string x))
-           (n (string-length s)))
-      ;(cond ((vanilla-symbol? x s) FIXME: R7RS weirdness
-             (printstr s p)))
-         ;   ((io/port-allows-r7rs-weirdness? p)
-         ;    (write-char #\| p)
-         ;    (print-slashed-symbol-string s p #t)
-         ;    (write-char #\| p))
-         ;   (else
-         ;    (print-slashed-symbol-string s p #f)))))
+    (printstr (symbol->string x) p))
   (define (print-slashed-string s p)
     (define (loop i n)
       (if (< i n)
@@ -148,7 +139,7 @@
       [(not x)                (printstr "#f" p)]
       [(eq? x #t)             (printstr "#t" p)]
       [(symbol? x)
-        (printsym (symbol->string x p))]
+        (printsym (symbol->string x) p)]
       [(number? x)            (printstr (number->string x) p)]
       [(char? x)
         (if slashify 
@@ -167,9 +158,58 @@
       [(procedure? x) (printstr (.procedure->string x))]
       [(bytevector? x) (printbytevector x p slashify level)]
       [(eof-object? x) (printeof x p slashify)]
-      [(eq? (undefined)) (prinstr "#!undefined" p)]
+      [(eq? (undefined) x) (prinstr "#!undefined" p)]
       [(port? x) (printport x p slashify)]
-      [else (printstr "#<WEIRD>")]))
+      [(tuple? x) (printtuple x p slashify level)]
+      [else (print-raw x)]))
+
+  (define (printtuple x p slashify level)
+    (let (
+      [n (tuple-length x)])
+      (cond 
+        [(and 
+          (tuple? (tuple-ref x 0))
+          (eq? (tuple-ref (tuple-ref x 0) 0) 'type:record-type-descriptor))
+          (let* (
+            [rtd (tuple-ref x 0)]
+            [name (tuple-ref rtd 1)]
+            [opaque (tuple-ref rtd 2)])
+            (cond 
+              [opaque 
+                (printstr "#<opaque-record " p)
+                (print name p #t level)
+                (printstr ">" p)]
+              [else 
+                (printstr "#<record " p)
+                (print name p slashify level)
+                (let loop ([i 1])
+                  (when (< i n) 
+                    (write-char (integer->char **space**) p)
+                    (print (tuple-ref x i) p #t level)
+                    (loop (+ i 1))))
+                (printstr ">" p)]))]
+        [else 
+          (cond 
+            [(get-tuple-type-name x) => 
+              (lambda (name)
+                (printstr "#<" p)
+                (print name p slashify level)
+                (let loop ([i 1])
+                  (when (< i n) 
+                    (write-char (integer->char **space**) p)
+                    (print (tuple-ref x i) p #t level)
+                    (loop (+ i 1))))
+                (printstr ">" p))]
+            [else 
+              (printstr "#<tuple" p)
+              (let loop ([i 0])
+                (when (< i n) 
+                  (write-char (integer->char **space**) p)
+                  (print (tuple-ref x i) p #t level)
+                  (loop (+ i 1))))
+              (printstr ">" p)]
+          )
+        ])))
 
   (define (printcharacter c p)
     (write-char #\# p)
@@ -253,3 +293,4 @@
       (write-char #\newline p)
       (io/discretionary-flush p)
       (undefined))))
+

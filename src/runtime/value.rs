@@ -1,8 +1,8 @@
 use std::{hash::Hash, mem::transmute};
 
-use mmtk::{util::Address, vm::EdgeVisitor};
+use mmtk::{util::Address, vm::{EdgeVisitor, ObjectTracerContext, ObjectTracer}};
 
-use crate::{gc::ObjEdge, runtime::object::*, vm::thread::Thread};
+use crate::{gc::{ObjEdge, CapyVM}, runtime::object::*, vm::thread::Thread};
 
 use super::{
     object::TypeId,
@@ -351,6 +351,8 @@ impl Value {
                 TypeId::Undefined
             } else if self.is_null() {
                 TypeId::Null
+            } else if self.is_empty() {
+                panic!("Empty")
             } else {
                 unreachable!()
             }
@@ -383,6 +385,15 @@ impl Value {
 
     pub fn is_number(self) -> bool {
         self.is_inline_number() || self.type_of() == TypeId::Bignum || self.type_of() == TypeId::Complex || self.type_of() == TypeId::Rational
+    }
+
+    pub fn trace_value<T: ObjectTracerContext<CapyVM>>(self, context: &mut T::TracerType) -> Value {
+        if self.is_object() {
+            let obj = self.get_object();
+            Value::encode_object_value(ScmCellRef::from_address(context.trace_object(obj.object_reference()).to_address::<CapyVM>()))
+        } else {
+            self 
+        }
     }
 }
 

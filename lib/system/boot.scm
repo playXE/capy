@@ -214,7 +214,6 @@
 (define (boolean? x) (boolean? x))
 (define (symbol? x) (symbol? x))
 (define (char? x) (char? x))
-
 (define (-- x) (-- x))
 
 (define +
@@ -349,3 +348,14 @@
 (define **delete** 127)
 
 (define **newline** 10)
+
+(define (identifier? x) (symbol? x))
+(define (starts-with? s prefix)
+    (and (>= (string-length s) (string-length prefix))
+         (string=? (substring s 0 (string-length prefix)) prefix)))
+
+(define (get-tuple-type-name tuple)
+    (if (symbol? (tuple-ref tuple 0))
+        (if (starts-with? (symbol->string (tuple-ref tuple 0)) "type:")
+            (substring (symbol->string (tuple-ref tuple 0)) 5)
+            #f)))

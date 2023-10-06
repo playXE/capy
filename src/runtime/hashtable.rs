@@ -59,19 +59,19 @@ pub struct ScmHashTable {
 }
 
 impl ScmHashTable {
-    fn datum(&self) -> &HashTableRec {
+    pub fn datum(&self) -> &HashTableRec {
         unsafe { &*self.datum }
     }
 
-    fn datum_mut(&mut self) -> &mut HashTableRec {
+    pub fn datum_mut(&mut self) -> &mut HashTableRec {
         unsafe { &mut *self.datum }
     }
 
-    fn elt(&self, i: u32) -> Value {
+    pub fn elt(&self, i: u32) -> Value {
         unsafe { self.datum().elts.as_ptr().add(i as _).read() }
     }
 
-    fn elt_mut(&mut self, i: u32) -> &mut Value {
+    pub fn elt_mut(&mut self, i: u32) -> &mut Value {
         unsafe { &mut *self.datum_mut().elts.as_mut_ptr().add(i as _) }
     }
 }
@@ -527,6 +527,69 @@ pub fn remove_hashtable<const CHECK_REHASH: bool>(ht: Value, key: Value) -> u32 
     }
 }
 
+pub fn copy_hashtable(thread: &mut Thread, mut ht: Value) -> Value {
+    let hash = ht.cast_as::<ScmHashTable>();
+    let nelts = hash.datum().capacity;
+
+    let ht2 = gc_protect!(thread => ht => thread.make_hashtable(lookup_hashtable_size(nelts), hash.typ));
+
+    ht2.cast_as::<ScmHashTable>().lock.lock(true);
+    let hash = ht.cast_as::<ScmHashTable>();
+    for i in 0..(nelts as usize) {
+        unsafe {
+            if hash.datum().elts.as_ptr().add(i).read().is_empty() {
+                continue;
+            }
+
+            if hash.datum().elts.as_ptr().add(i).read().is_undefined() {
+                continue;
+            }
+            
+            put_hashtable::<false>(ht2, hash.datum().elts.as_ptr().add(i).read(), hash.datum().elts.as_ptr().add(i + nelts as usize).read());
+        }
+    }
+
+    if hash.immutable {
+        ht2.cast_as::<ScmHashTable>().immutable = true;
+    }
+
+    ht2.cast_as::<ScmHashTable>().lock.unlock();
+
+    ht2
+}
+
+pub fn copy_weak_hashtable(thread: &mut Thread, mut ht: Value) -> Value {
+    let hash = ht.cast_as::<WeakHashtable>();
+    let nelts = unsafe { (*hash.datum).capacity };
+
+    let ht2 = gc_protect!(thread => ht => thread.make_weak_hashtable(lookup_hashtable_size(nelts)));
+
+    ht2.cast_as::<WeakHashtable>().lock.lock(true);
+    let hash = ht.cast_as::<WeakHashtable>();
+    for i in 0..(nelts as usize) {
+        unsafe {
+            let elt = (*hash.datum).elts.as_ptr().add(i).read();
+            if elt.is_empty() {
+                continue;
+            }
+
+            if elt.is_undefined() {
+                continue;
+            }
+
+            assert!(elt.type_of() == TypeId::WeakMapping);
+            if !elt.cast_as::<ScmWeakMapping>().key.is_object() {
+                continue;
+            }
+            put_weak_hashtable(ht2, elt);
+        }
+    }
+
+    ht2.cast_as::<WeakHashtable>().lock.unlock();
+
+    ht2
+}
+
 pub(crate) fn inplace_rehash_hashtable(ht: Value) {
     let h = ht;
     let ht = ht.cast_as::<ScmHashTable>();
@@ -586,7 +649,9 @@ pub(crate) fn inplace_rehash_weak_hashtable(ht: Value) {
             if elt.is_undefined() {
                 continue;
             }
-            assert!(elt.type_of() == TypeId::WeakMapping);
+
+            println!("{:x} {}",elt.get_raw(), elt.is_undefined());
+            assert!(elt.type_of() == TypeId::WeakMapping, "weakmapping expected but got {:?}", elt.type_of());
             if !elt.cast_as::<ScmWeakMapping>().key.is_object() {
                 continue;
             }
@@ -595,6 +660,23 @@ pub(crate) fn inplace_rehash_weak_hashtable(ht: Value) {
 
         mmtk::memory_manager::free(Address::from_mut_ptr(save_datum));
     }
+}
+
+pub fn clear_hashtable(thread: &mut Thread, mut ht: Value, nsize: u32) {
+    let typ = ht.cast_as::<ScmHashTable>().typ;
+    let ht2 = gc_protect!(thread => ht => thread.make_hashtable(nsize, typ));
+    std::mem::swap(
+        &mut ht.cast_as::<ScmHashTable>().datum,
+        &mut ht2.cast_as::<ScmHashTable>().datum,
+    );
+}
+
+pub fn clear_weak_hashtable(thread: &mut Thread, mut ht: Value, nsize: u32) {
+    let ht2 = gc_protect!(thread => ht => thread.make_weak_hashtable(nsize));
+    std::mem::swap(
+        &mut ht.cast_as::<WeakHashtable>().datum,
+        &mut ht2.cast_as::<WeakHashtable>().datum,
+    );
 }
 
 pub(crate) fn clear_volatile_hashtable(ht: &mut ScmHashTable) {

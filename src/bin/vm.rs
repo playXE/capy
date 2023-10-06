@@ -1,7 +1,7 @@
 use capy::{
     bytecode::image::load_image_from_memory,
     interpreter::scm_call_n,
-    vm::{options::VMOptions, scm_init, thread::Thread}, runtime::{gsubr::{scm_define_subr, Subr}, value::Value},
+    vm::{options::VMOptions, scm_init, thread::Thread}, runtime::{gsubr::{scm_define_subr, Subr}, value::Value, object::{scm_car, scm_cdr}},
 };
 
 fn main() {
@@ -36,7 +36,12 @@ fn main() {
         1,
         Subr::F1({
             extern "C-unwind" fn print(_: &mut Thread, rest: &mut Value) -> Value {
-                println!("{}", rest);
+                while rest.is_pair() {
+                    let car = scm_car(*rest);
+                    print!("{} ", car);
+                    *rest = scm_cdr(*rest);
+                }
+                println!();
                 Value::encode_null_value()
             }
 

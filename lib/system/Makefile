@@ -21,6 +21,7 @@ SRCS += lib/system/bytevectorio.scm
 SRCS += lib/system/portio.scm
 SRCS += lib/system/stdio.scm
 SRCS += lib/system/print.scm
+SRCS += lib/system/printer.scm
 SRCS += lib/system/format.scm
 
 SRCS += lib/system/main.scm

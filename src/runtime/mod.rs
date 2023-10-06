@@ -11,9 +11,11 @@ pub mod gsubr;
 pub mod control;
 pub mod subr_fixnum;
 pub mod subr_core;
+pub mod coroutine;
 pub mod subr_hash;
 pub mod error;
 pub mod arith;
 pub mod fileio;
 pub mod bytevector;
+pub mod scheduler;
 

@@ -21,8 +21,9 @@ use super::{
     gsubr::{scm_define_subr, Subr},
     list::scm_length,
     object::{
-        scm_car, scm_cdr, scm_program_code, scm_string_mut_str, scm_string_str, scm_symbol_str,
-        scm_tuple_ref, scm_tuple_set, ScmTuple, ScmWeakMapping, TypeId, scm_program_num_free_vars, ScmProgram,
+        scm_car, scm_cdr, scm_program_code, scm_program_num_free_vars, scm_string_mut_str,
+        scm_string_str, scm_symbol_str, scm_tuple_ref, scm_tuple_set, ScmProgram, ScmTuple,
+        ScmWeakMapping, TypeId,
     },
     symbol::scm_intern,
     value::Value,
@@ -93,6 +94,90 @@ extern "C-unwind" fn string_to_symbol(thread: &mut Thread, string: &mut Value) -
         wrong_type_argument_violation(thread, "string->symbol", 0, "string", *string, 1, &[string])
     }
     scm_intern(scm_string_str(*string))
+}
+
+extern "C-unwind" fn substring(
+    thread: &mut Thread,
+    string: &mut Value,
+    start: &mut Value,
+    end: &mut Value,
+) -> Value {
+    if !string.is_string() {
+        wrong_type_argument_violation(
+            thread,
+            "substring",
+            0,
+            "string",
+            *string,
+            2,
+            &[string, start],
+        )
+    }
+
+    let length = scm_string_str(*string).chars().count() as u32;
+
+    let start_index = if start.is_int32() && start.get_int32() >= 0 {
+        start.get_int32() as u32
+    } else {
+        wrong_type_argument_violation(
+            thread,
+            "substring",
+            1,
+            "nonnegative fixnum",
+            *start,
+            2,
+            &[string, start],
+        )
+    };
+
+    let end_index = if end.is_undefined() {
+        length
+    } else if end.is_int32() && end.get_int32() >= 0 {
+        end.get_int32() as u32
+    } else {
+        wrong_type_argument_violation(
+            thread,
+            "substring",
+            2,
+            "nonnegative fixnum",
+            *end,
+            2,
+            &[string, start],
+        )
+    };
+
+    if end_index > length {
+        invalid_argument_violation(
+            thread,
+            "substring",
+            "end out of bounds",
+            *end,
+            2,
+            2,
+            &[string, start, end],
+        )
+    }
+
+    if start_index > end_index {
+        invalid_argument_violation(
+            thread,
+            "substring",
+            "start is greater than end",
+            *start,
+            1,
+            2,
+            &[string, start, end],
+        )
+    }
+
+    let s = scm_string_str(*string);
+    let s = s
+        .chars()
+        .skip(start_index as usize)
+        .take(end_index as usize - start_index as usize)
+        .collect::<String>();
+
+    thread.make_string::<false>(&s)
 }
 
 extern "C-unwind" fn string_to_bytevector(thread: &mut Thread, string: &mut Value) -> Value {
@@ -168,15 +253,7 @@ extern "C-unwind" fn list_to_string(thread: &mut Thread, list: &mut Value) -> Va
         let s: String = chars.into_iter().collect();
         thread.make_string::<false>(&s)
     } else {
-        wrong_type_argument_violation(
-            thread,
-            "list->string",
-            0,
-            "list",
-            *list,
-            1,
-            &[list],
-        );
+        wrong_type_argument_violation(thread, "list->string", 0, "list", *list, 1, &[list]);
     }
 }
 
@@ -186,15 +263,7 @@ extern "C-unwind" fn string_p(_thread: &mut Thread, obj: &mut Value) -> Value {
 
 extern "C-unwind" fn string_length(_thread: &mut Thread, obj: &mut Value) -> Value {
     if !obj.is_string() {
-        wrong_type_argument_violation(
-            _thread,
-            "string-length",
-            0,
-            "string",
-            *obj,
-            1,
-            &[obj],
-        )
+        wrong_type_argument_violation(_thread, "string-length", 0, "string", *obj, 1, &[obj])
     }
     Value::encode_int32(scm_string_str(*obj).len() as _)
 }
@@ -732,15 +801,27 @@ extern "C-unwind" fn integer_to_char(thread: &mut Thread, val: &mut Value) -> Va
     }
 }
 
-extern "C-unwind" fn number_to_string(thread: &mut Thread, val: &mut Value, radix: &mut Value) -> Value {
+extern "C-unwind" fn number_to_string(
+    thread: &mut Thread,
+    val: &mut Value,
+    radix: &mut Value,
+) -> Value {
     let radix = if radix.is_int32() {
         radix.get_int32()
     } else if radix.is_undefined() {
         10
     } else {
-        wrong_type_argument_violation(thread, "number->string", 1, "integer", *radix, 2, &[val, radix])
+        wrong_type_argument_violation(
+            thread,
+            "number->string",
+            1,
+            "integer",
+            *radix,
+            2,
+            &[val, radix],
+        )
     };
-    
+
     if val.is_int32() {
         let int = val.get_int32();
         match radix {
@@ -759,7 +840,15 @@ extern "C-unwind" fn number_to_string(thread: &mut Thread, val: &mut Value, radi
             ),
         }
     } else {
-        wrong_type_argument_violation(thread, "number->string", 0, "integer", *val, 2, &[val, &mut Value::encode_int32(radix)])
+        wrong_type_argument_violation(
+            thread,
+            "number->string",
+            0,
+            "integer",
+            *val,
+            2,
+            &[val, &mut Value::encode_int32(radix)],
+        )
     }
 }
 
@@ -777,63 +866,48 @@ extern "C-unwind" fn char_eq_p(_thread: &mut Thread, val: &mut Value, val2: &mut
         Value::encode_bool_value(val.get_char() == val2.get_char())
     } else {
         if !val.is_char() {
-            wrong_type_argument_violation(
-                _thread,
-                "char=?",
-                0,
-                "character",
-                *val,
-                2,
-                &[val, val2],
-            )
+            wrong_type_argument_violation(_thread, "char=?", 0, "character", *val, 2, &[val, val2])
         } else {
-            wrong_type_argument_violation(
-                _thread,
-                "char=?",
-                1,
-                "character",
-                *val2,
-                2,
-                &[val, val2],
-            )
+            wrong_type_argument_violation(_thread, "char=?", 1, "character", *val2, 2, &[val, val2])
         }
     }
 }
 
-static CATEGORY_MAP: Lazy<[Value; GeneralCategory::UppercaseLetter as usize + 1]> = Lazy::new(||{
-    [
-        scm_intern("Pe"),
-        scm_intern("Pc"),
-        scm_intern("Cc"),
-        scm_intern("Sc"),
-        scm_intern("Pd"),
-        scm_intern("Nd"),
-        scm_intern("Me"),
-        scm_intern("Pf"),
-        scm_intern("Cf"),
-        scm_intern("Pi"),
-        scm_intern("Nl"),
-        scm_intern("Zl"),
-        scm_intern("Ll"),
-        scm_intern("Sm"),
-        scm_intern("Lm"),
-        scm_intern("Sm"),
-        scm_intern("Mn"),
-        scm_intern("Ps"),
-        scm_intern("Lo"),
-        scm_intern("No"),
-        scm_intern("Po"),
-        scm_intern("So"),
-        scm_intern("Zp"),
-        scm_intern("Co"),
-        scm_intern("Zs"),
-        scm_intern("Mc"),
-        scm_intern("Cs"),
-        scm_intern("Lt"),
-        scm_intern("unassigned"),
-        scm_intern("Lu")
-    ]
-});
+static CATEGORY_MAP: Lazy<[Value; GeneralCategory::UppercaseLetter as usize + 1]> =
+    Lazy::new(|| {
+        [
+            scm_intern("Pe"),
+            scm_intern("Pc"),
+            scm_intern("Cc"),
+            scm_intern("Sc"),
+            scm_intern("Pd"),
+            scm_intern("Nd"),
+            scm_intern("Me"),
+            scm_intern("Pf"),
+            scm_intern("Cf"),
+            scm_intern("Pi"),
+            scm_intern("Nl"),
+            scm_intern("Zl"),
+            scm_intern("Ll"),
+            scm_intern("Sm"),
+            scm_intern("Lm"),
+            scm_intern("Sm"),
+            scm_intern("Mn"),
+            scm_intern("Ps"),
+            scm_intern("Lo"),
+            scm_intern("No"),
+            scm_intern("Po"),
+            scm_intern("So"),
+            scm_intern("Zp"),
+            scm_intern("Co"),
+            scm_intern("Zs"),
+            scm_intern("Mc"),
+            scm_intern("Cs"),
+            scm_intern("Lt"),
+            scm_intern("unassigned"),
+            scm_intern("Lu"),
+        ]
+    });
 
 extern "C-unwind" fn char_general_category(thread: &mut Thread, char: &mut Value) -> Value {
     if char.is_char() {
@@ -915,7 +989,15 @@ extern "C-unwind" fn procedure_to_string(thread: &mut Thread, proc: &mut Value) 
     }
 }
 
+extern "C-unwind" fn make_condition_uid(_thread: &mut Thread) -> Value {
+    let cuid = cuid2::create_id();
+    let sym = scm_intern(format!("<{}>", cuid));
+
+    sym
+}
+
 pub(crate) fn init() {
+    scm_define_subr("make-condition-uid", 0, 0, 0, Subr::F0(make_condition_uid));
     scm_define_subr(".procedure->string", 1, 0, 0, Subr::F1(procedure_to_string));
     scm_define_subr("make-weakmapping", 2, 0, 0, Subr::F2(make_weakmapping));
     scm_define_subr("weakmapping?", 1, 0, 0, Subr::F1(weakmapping_p));
@@ -947,6 +1029,7 @@ pub(crate) fn init() {
     scm_define_subr("make-string", 1, 1, 0, Subr::F2(make_string));
     scm_define_subr("string-ref", 2, 0, 0, Subr::F2(string_ref));
     scm_define_subr("string-set!", 3, 0, 0, Subr::F3(string_set));
+    scm_define_subr("substring", 2, 1, 0, Subr::F3(substring));
     scm_define_subr("string=?", 0, 0, 1, Subr::F1(string_eq));
     scm_define_subr("string<?", 0, 0, 1, Subr::F1(string_lt));
     scm_define_subr("string>?", 0, 0, 1, Subr::F1(string_gt));
@@ -965,7 +1048,13 @@ pub(crate) fn init() {
     scm_define_subr("number->string", 1, 1, 0, Subr::F2(number_to_string));
     scm_define_subr("char->integer", 1, 0, 0, Subr::F1(char_to_integer));
     scm_define_subr("char=?", 2, 0, 0, Subr::F2(char_eq_p));
-    scm_define_subr("char-general-category", 1, 0, 0, Subr::F1(char_general_category));
+    scm_define_subr(
+        "char-general-category",
+        1,
+        0,
+        0,
+        Subr::F1(char_general_category),
+    );
     scm_define_subr("procedure?", 1, 0, 0, Subr::F1(procedure_p));
     scm_define_subr("procedure=?", 2, 0, 0, Subr::F2(procedure_eq_p));
     super::subr_fixnum::init();

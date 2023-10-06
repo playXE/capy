@@ -514,8 +514,12 @@ pub fn pass2_optimize_closure(
             let (locals, recs, tail_recs) = pass2_classify_calls(&lam.calls, lam.clone());
 
             if recs.is_empty() && tail_recs.is_empty() {
-                ctx.changed = true;
-                local_call_inliner(lvar.clone(), lam.clone(), &locals)
+                if ctx.inline {
+                    ctx.changed = true;
+                    local_call_inliner(lvar.clone(), lam.clone(), &locals)
+                } else {
+                    Ok(())
+                }
             } else {
                 let args_to_add = compute_added_arguments(lam.clone());
                 if ctx.lambda_lift && !args_to_add.is_empty() && args_to_add.len() < 8 {
@@ -670,7 +674,7 @@ fn local_call_inliner(
 
     lvar.ref_count = 0;
     lambda_node.flag = LambdaFlag::Dissolved;
-
+    
     for call in calls.iter() {
         inline_it(call.clone(), lambda_node.clone())?;
     }
@@ -756,7 +760,7 @@ fn pass2_call(
             Ok(iform)
         };
         match &*proc {
-            IForm::Lambda(_) => {
+            IForm::Lambda(_) if ctx.inline => {
                 return pass2_rec(expand_inline_procedure(proc, &call.args)?, penv, tail, ctx)
             }
 
@@ -863,7 +867,7 @@ pub fn pass2(mut iform: P<IForm>, recover_loops: bool) -> Result<P<IForm>, Strin
     iform = resolve_primitives(iform.clone());
     if recover_loops {
         ctx.changed = false;
-        ctx.inline = !true;
+        ctx.inline = true;
         ctx.lambda_lift = false;
         iform = pass2_rec(iform.clone(), &mut Vec::with_capacity(4), true, &mut ctx)?;
         // TODO: recover loops here

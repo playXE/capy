@@ -1,16 +1,85 @@
-(define (assertion-violation who message . irritants)
-    (error 'nyi message))
+(define assertion-violation
+  (lambda (who message . irritants)
+    (if (or (not who) (string? who) (symbol? who) (identifier? who))
+        (if (string? message)
+            (raise
+              (apply
+                condition
+                (filter
+                  values
+                  (list
+                    (make-assertion-violation)
+                    (and who (make-who-condition who))
+                    (make-message-condition message)
+                    (make-irritants-condition irritants)))))
+            (assertion-violation 'assertion-violation (wrong-type-argument-message "string" message 2)))
+        (assertion-violation 'assertion-violation (wrong-type-argument-message "string, symbol, or #f" who 1)))))
 
-(define (undefined-violation who . message)
-    (error 'nyi "NYI"))
 
-(define (lexical-violation who . message)
-    (error 'nyi message))
+(define undefined-violation
+  (lambda (who . message)
+    (raise
+      (apply
+        condition
+        (filter
+          values
+          (list
+            (make-undefined-violation)
+            (and who (make-who-condition who))
+            (and (pair? message) (make-message-condition (car message)))))))))
 
-(define (syntax-violation who message from . subform)
-    (error 'nyi message))
 
-(define error 
-    (let ([err error])
-        (lambda (who message . irritants)
-            (err message))))
+(define lexical-violation
+  (lambda (who . message)
+    (raise
+      (apply
+        condition
+        (filter
+          values
+          (list
+            (make-lexical-violation)
+            (and who (make-who-condition who))
+            (and (pair? message) (make-message-condition (car message)))))))))
+
+(define syntax-violation
+  (lambda (who message form . subform)
+    (if (or (not who) (string? who) (symbol? who) (identifier? who))
+        (if (string? message)
+            (raise
+              (apply
+                condition
+                (filter
+                  values
+                  (list
+                    (make-syntax-violation form (and (pair? subform) (car subform)))
+                    (if who
+                        (make-who-condition who)
+                        (cond ((let ((obj (if (wrapped-syntax-object? form) (unwrap-syntax form) form)))
+                                 (cond ((identifier? obj) (original-id (syntax-object-expr obj)))
+                                       ((and (pair? obj) (identifier? (car obj)))
+                                        (original-id (syntax-object-expr (car obj))))
+                                       (else #f)))
+                               =>
+                               make-who-condition)
+                              (else #f)))
+                    (make-message-condition message)))))
+            (assertion-violation 'syntax-violation (wrong-type-argument-message "string" message 2)))
+        (assertion-violation 'syntax-violation (wrong-type-argument-message "string, symbol, or #f" who 1)))))
+
+
+(define error
+  (lambda (who message . irritants)
+    (if (or (not who) (string? who) (symbol? who) (identifier? who))
+        (if (string? message)
+            (raise
+              (apply
+                condition
+                (filter
+                  values
+                  (list
+                    (make-error)
+                    (and who (make-who-condition who))
+                    (make-message-condition message)
+                    (make-irritants-condition irritants)))))
+            (assertion-violation 'error (wrong-type-argument-message "string" message 2)))
+        (assertion-violation 'error (wrong-type-argument-message "string, symbol, or #f" who 1)))))

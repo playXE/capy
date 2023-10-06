@@ -17,6 +17,7 @@ use crate::{
         BOOT_CONTINUATION_CODE, scm_virtual_machine, options::GCPlan,
     },
 };
+
 use mmtk::{util::{Address, ObjectReference}, vm::RootsWorkFactory, Mutator};
 use rsetjmp::{setjmp, JumpBuf};
 use std::{

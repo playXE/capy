@@ -1300,6 +1300,7 @@ pub fn compile_bytecode(exp: P<IForm>, output: &mut Vec<u8>) {
         .collect::<Vec<_>>();
     let label = actual_locations[&toplevel_ix];
     let entrypoint = Sexpr::Program(label as _);
+    let mut filededup_table: HashMap<String, P<String>> = HashMap::new();
     asm.sources.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
     let debug_offsets = asm
         .sources
@@ -1308,7 +1309,16 @@ pub fn compile_bytecode(exp: P<IForm>, output: &mut Vec<u8>) {
             Sexpr::Pair(P((
                 Sexpr::Fixnum(*off as i32),
                 Sexpr::Vector(P(vec![
-                    Sexpr::String(P(loc.file.to_string())),
+                    Sexpr::String({
+                        if let Some(s) = filededup_table.get(&loc.file.to_string()) {
+                            s.clone()
+                        } else {
+                            let str = loc.file.to_string();
+                            let s = P(str.clone());
+                            filededup_table.insert(str, s.clone());
+                            s
+                        }
+                    }),
                     Sexpr::Fixnum(loc.line as _),
                     Sexpr::Fixnum(loc.column as _),
                 ])),

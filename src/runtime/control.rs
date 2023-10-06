@@ -379,6 +379,13 @@ pub fn invalid_argument_violation(
     argc: usize,
     argv: &[&mut Value],
 ) -> ! {
+    println!(
+        "invalid argument violation: {} {} {}\n{}",
+        who,
+        description,
+        value,
+        unsafe { capture_stacktrace(thread) }
+    );
     todo!()
 }
 

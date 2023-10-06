@@ -143,7 +143,6 @@ static VALUES_CODE: &'static [u8] = &[OP_SHUFFLE_DOWN, 1, 0, 0, 0, OP_RETURN_VAL
 static APPLY_CODE: &'static [u8] = &[
     OP_ASSERT_NARGS_GE,
     3,
-    0,
     0, /* (assert-nargs-ge 3) */
     OP_SHUFFLE_DOWN,
     1,
