@@ -4,14 +4,8 @@ use std::{
 };
 
 use mmtk::{util::ObjectReference, AllocationSemantics, MutatorContext};
-use num_traits::FromPrimitive;
 
-use crate::{
-    gc::{self, CapyVM},
-    gc_protect, raise_exn,
-    utils::round_up,
-    vm::thread::Thread,
-};
+use crate::{gc::CapyVM, gc_protect, raise_exn, utils::round_up, vm::thread::Thread};
 
 use super::{
     object::{ScmCellHeader, ScmComplex, ScmRational, TypeId},
@@ -374,7 +368,6 @@ impl ScmBigInteger {
         }
 
         for i in 1..=self.digits().len() {
-            let ix = self.digits().len() - i;
             let a = self.digits()[self.digits().len() - i];
             let b = rhs.digits()[self.digits().len() - i];
             if a != b {
@@ -1112,7 +1105,7 @@ impl ScmBigInteger {
     pub fn shift_left(&self, thread: &mut Thread, x: i32) -> Value {
         let swords = x.wrapping_div(32);
         let sbits = x.wrapping_rem(32);
-       
+
         let mut res = Vec::with_capacity(self.digits().len() + swords as usize);
 
         for _ in 0..swords {
@@ -1701,7 +1694,6 @@ pub fn rational_to_double(obj: Value) -> Value {
         unreachable!()
     };
 
-
     Value::encode_f64_value(nume / deno)
 }
 
@@ -1741,6 +1733,7 @@ pub fn decode_double(n: f64) -> (i64, i32, i32) {
     (mant_bits, exp as i32, sign)
 }
 
+#[allow(dead_code)]
 fn pow10n(mut value: f64, mut n: i32) -> f64 {
     const BIGTENS: [f64; 5] = [1.0e+16, 1.0e+32, 1.0e+64, 1.0e+128, 1.0e+256];
     const TENS: [f64; 23] = [
@@ -1795,7 +1788,7 @@ fn pow10n(mut value: f64, mut n: i32) -> f64 {
     value
 }
 
-fn oprtr_inexact_negate(thread: &mut Thread, obj: Value) -> Value {
+fn oprtr_inexact_negate(_thread: &mut Thread, obj: Value) -> Value {
     if obj.is_int32() {
         return Value::encode_f64_value(-(obj.get_int32() as f64));
     }
@@ -2079,7 +2072,7 @@ fn oprtr_reduce(thread: &mut Thread, mut numerator: Value, mut denominator: Valu
     };
 
     let mut divisor = gc_protect!(thread => n1, n2, denominator, numerator => thread.make_bignum_from_u64(if n1_count > n2_count {
-        n1_count as _ 
+        n1_count as _
     } else { n2_count as _ }));
 
     let mut shift = 0;
@@ -2137,7 +2130,7 @@ fn oprtr_reduce(thread: &mut Thread, mut numerator: Value, mut denominator: Valu
         let x = denominator.get_int32();
         n2 = gc_protect!(thread => divisor, n1 => thread.make_bignum_from_i64(if x < 0 { -x } else { x } as i64));
     }
-    
+
     n1 = gc_protect!(thread => divisor, n2 => n1.get_bignum().shift_right(thread, shift));
     n1 = gc_protect!(thread => divisor, n2 => ScmBigInteger::divided(n1, divisor, thread).0);
     n1.get_bignum().negative = ans_sign;
@@ -2145,7 +2138,7 @@ fn oprtr_reduce(thread: &mut Thread, mut numerator: Value, mut denominator: Valu
     n2 = gc_protect!(thread => divisor, n1 => n2.get_bignum().shift_right(thread, shift));
     n2 = gc_protect!(thread => divisor, n1 => ScmBigInteger::divided(n2, divisor, thread).0);
     n2.get_bignum().negative = false;
-  
+
     let ans_numerator = oprtr_norm_integer(thread, n1);
     let ans_denominator = oprtr_norm_integer(thread, n2);
     if ans_denominator == Value::encode_int32(1) {
@@ -2255,7 +2248,7 @@ pub fn integer_value_p(obj: Value) -> bool {
         return n_zero_p(obj.get_complex().imag) && integer_value_p(obj.get_complex().real);
     }
 
-    false 
+    false
 }
 
 pub fn n_zero_p(obj: Value) -> bool {
@@ -2563,7 +2556,7 @@ pub fn n_equal_p(_thread: &mut Thread, mut lhs: Value, mut rhs: Value) -> bool {
                 }
 
                 if rhs.is_bignum() {
-                    return lhs.get_bignum().compare(rhs.get_bignum()) == Ordering::Equal
+                    return lhs.get_bignum().compare(rhs.get_bignum()) == Ordering::Equal;
                 }
 
                 if rhs.is_rational() {
@@ -2597,8 +2590,16 @@ pub fn n_equal_p(_thread: &mut Thread, mut lhs: Value, mut rhs: Value) -> bool {
                 }
 
                 if rhs.is_rational() {
-                    if n_equal_p(_thread, lhs.get_rational().numerator, rhs.get_rational().numerator) {
-                        return n_equal_p(_thread, lhs.get_rational().denominator, rhs.get_rational().denominator);
+                    if n_equal_p(
+                        _thread,
+                        lhs.get_rational().numerator,
+                        rhs.get_rational().numerator,
+                    ) {
+                        return n_equal_p(
+                            _thread,
+                            lhs.get_rational().denominator,
+                            rhs.get_rational().denominator,
+                        );
                     }
 
                     return false;
@@ -2636,14 +2637,12 @@ pub fn n_equal_p(_thread: &mut Thread, mut lhs: Value, mut rhs: Value) -> bool {
             }
 
             if rhs.is_complex() {
-                
                 if n_equal_p(_thread, lhs.get_complex().real, rhs.get_complex().real) {
                     return n_equal_p(_thread, lhs.get_complex().imag, rhs.get_complex().imag);
                 }
 
                 return false;
             }
-            
         }
 
         break;
@@ -2987,7 +2986,7 @@ pub fn arith_negate(thread: &mut Thread, obj: Value) -> Value {
     unreachable!("arith_negate")
 }
 
-pub fn arith_bit_count(thread: &mut Thread, obj: Value) -> Value {
+pub fn arith_bit_count(_thread: &mut Thread, obj: Value) -> Value {
     if obj.is_int32() {
         let n = obj.get_int32();
 
@@ -3717,7 +3716,7 @@ pub fn arith_remainder(thread: &mut Thread, mut lhs: Value, mut rhs: Value) -> V
                         unreachable!("arith_remainder: divide by zero")
                     }
 
-                    let (quo, rem) = ScmBigInteger::divide_digit(lhs, rhs as _, thread);
+                    let (_quo, rem) = ScmBigInteger::divide_digit(lhs, rhs as _, thread);
 
                     return rem
                         .get_bignum()
@@ -3731,7 +3730,7 @@ pub fn arith_remainder(thread: &mut Thread, mut lhs: Value, mut rhs: Value) -> V
                 }
 
                 if rhs.is_bignum() {
-                    let (quo, rem) = ScmBigInteger::divided(lhs, rhs, thread);
+                    let (_quo, rem) = ScmBigInteger::divided(lhs, rhs, thread);
 
                     return rem
                         .get_bignum()
@@ -4126,7 +4125,7 @@ pub fn arith_modulo(thread: &mut Thread, mut lhs: Value, mut rhs: Value) -> Valu
                         return Value::encode_undefined_value();
                     }
 
-                    let (quo, rem) = ScmBigInteger::divide_digit(lhs, rhs as _, thread);
+                    let (_quo, rem) = ScmBigInteger::divide_digit(lhs, rhs as _, thread);
 
                     return rem
                         .get_bignum()
@@ -4750,7 +4749,7 @@ pub fn arith_expt(thread: &mut Thread, lhs: Value, mut rhs: Value) -> Value {
             let mul = arith_mul(thread, log, rhs);
 
             return arith_exp(thread, mul);
-        } 
+        }
     } else {
         if rhs.is_double() {
             if real_value_p(lhs) && !n_negative_p(lhs) {
@@ -4764,7 +4763,7 @@ pub fn arith_expt(thread: &mut Thread, lhs: Value, mut rhs: Value) -> Value {
 
             return arith_exp(thread, mul);
         }
-        
+
         let log = gc_protect!(thread => rhs => arith_log(thread, lhs));
         let mul = arith_mul(thread, log, rhs);
 

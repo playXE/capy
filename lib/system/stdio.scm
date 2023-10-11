@@ -242,11 +242,11 @@
 
 (define (input-port? p)
   (and (port? p)
-       (io/r7rs-input-port? p)))
+       (io/input-port? p)))
 
 (define (output-port? p)
   (and (port? p)
-       (io/r7rs-output-port? p)))
+       (io/output-port? p)))
 
 ;;; The next two procedures still require a port as their argument,
 ;;; but no great harm should come from generalizing that.

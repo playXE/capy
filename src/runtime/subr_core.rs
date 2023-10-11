@@ -10,14 +10,16 @@ use crate::{
         tree_il::il_to_core_form,
         Cenv,
     },
-    raise_exn,
     runtime::{environment::ScmEnvironment, object::scm_bytevector_as_slice},
     vm::{scm_virtual_machine, thread::Thread},
 };
 
 use super::{
-    arith::{scm_to_u32, ScmBigInteger},
-    control::{invalid_argument_violation, wrong_type_argument_violation},
+    arith::{self, scm_to_u32},
+    control::{
+        invalid_argument_violation, wrong_number_of_arguments_violation,
+        wrong_type_argument_violation,
+    },
     gsubr::{scm_define_subr, Subr},
     list::scm_length,
     object::{
@@ -59,19 +61,24 @@ extern "C-unwind" fn weakmapping_live_p(_thread: &mut Thread, obj: &mut Value) -
 
 extern "C-unwind" fn string_append(thread: &mut Thread, rest: &mut Value) -> Value {
     let mut result = String::new();
-
+    let mut pos = 0;
+    let length = scm_length(*rest).unwrap();
     while !rest.is_null() {
-        let s = scm_car(*rest);
+        let mut s = scm_car(*rest);
         if !s.is_string() {
-            raise_exn!(
-                FailContract,
-                &[],
-                "string-append: argument {} is not a string",
-                s
+            wrong_type_argument_violation::<1>(
+                thread,
+                "string-append",
+                pos,
+                "string",
+                s,
+                length,
+                &[&mut s, rest],
             );
         }
         result.push_str(scm_string_str(s));
         *rest = scm_cdr(*rest);
+        pos += 1;
     }
 
     thread.make_string::<false>(&result)
@@ -79,11 +86,14 @@ extern "C-unwind" fn string_append(thread: &mut Thread, rest: &mut Value) -> Val
 
 extern "C-unwind" fn symbol_to_string(thread: &mut Thread, symbol: &mut Value) -> Value {
     if !symbol.is_symbol() {
-        raise_exn!(
-            FailContract,
-            &[],
-            "symbol->string: argument {} is not a symbol",
-            symbol
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "symbol->string",
+            0,
+            "symbol",
+            *symbol,
+            1,
+            &[symbol],
         );
     }
     thread.make_string::<false>(scm_symbol_str(*symbol))
@@ -91,7 +101,15 @@ extern "C-unwind" fn symbol_to_string(thread: &mut Thread, symbol: &mut Value) -
 
 extern "C-unwind" fn string_to_symbol(thread: &mut Thread, string: &mut Value) -> Value {
     if !string.is_string() {
-        wrong_type_argument_violation(thread, "string->symbol", 0, "string", *string, 1, &[string])
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "string->symbol",
+            0,
+            "string",
+            *string,
+            1,
+            &[string],
+        )
     }
     scm_intern(scm_string_str(*string))
 }
@@ -103,7 +121,7 @@ extern "C-unwind" fn substring(
     end: &mut Value,
 ) -> Value {
     if !string.is_string() {
-        wrong_type_argument_violation(
+        wrong_type_argument_violation::<{ usize::MAX }>(
             thread,
             "substring",
             0,
@@ -119,7 +137,7 @@ extern "C-unwind" fn substring(
     let start_index = if start.is_int32() && start.get_int32() >= 0 {
         start.get_int32() as u32
     } else {
-        wrong_type_argument_violation(
+        wrong_type_argument_violation::<{ usize::MAX }>(
             thread,
             "substring",
             1,
@@ -135,7 +153,7 @@ extern "C-unwind" fn substring(
     } else if end.is_int32() && end.get_int32() >= 0 {
         end.get_int32() as u32
     } else {
-        wrong_type_argument_violation(
+        wrong_type_argument_violation::<{ usize::MAX }>(
             thread,
             "substring",
             2,
@@ -182,7 +200,7 @@ extern "C-unwind" fn substring(
 
 extern "C-unwind" fn string_to_bytevector(thread: &mut Thread, string: &mut Value) -> Value {
     if !string.is_string() {
-        wrong_type_argument_violation(
+        wrong_type_argument_violation::<{ usize::MAX }>(
             thread,
             "string->bytevector",
             0,
@@ -199,7 +217,7 @@ extern "C-unwind" fn string_to_bytevector(thread: &mut Thread, string: &mut Valu
 
 extern "C-unwind" fn bytevector_to_string(thread: &mut Thread, bytevector: &mut Value) -> Value {
     if !bytevector.is_bytevector() {
-        wrong_type_argument_violation(
+        wrong_type_argument_violation::<{ usize::MAX }>(
             thread,
             "bytevector->string",
             0,
@@ -236,7 +254,7 @@ extern "C-unwind" fn list_to_string(thread: &mut Thread, list: &mut Value) -> Va
         while xs.is_pair() {
             let x = scm_car(xs);
             if !x.is_char() {
-                wrong_type_argument_violation(
+                wrong_type_argument_violation::<{ usize::MAX }>(
                     thread,
                     "list->string",
                     0,
@@ -253,7 +271,15 @@ extern "C-unwind" fn list_to_string(thread: &mut Thread, list: &mut Value) -> Va
         let s: String = chars.into_iter().collect();
         thread.make_string::<false>(&s)
     } else {
-        wrong_type_argument_violation(thread, "list->string", 0, "list", *list, 1, &[list]);
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "list->string",
+            0,
+            "list",
+            *list,
+            1,
+            &[list],
+        );
     }
 }
 
@@ -263,7 +289,15 @@ extern "C-unwind" fn string_p(_thread: &mut Thread, obj: &mut Value) -> Value {
 
 extern "C-unwind" fn string_length(_thread: &mut Thread, obj: &mut Value) -> Value {
     if !obj.is_string() {
-        wrong_type_argument_violation(_thread, "string-length", 0, "string", *obj, 1, &[obj])
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            _thread,
+            "string-length",
+            0,
+            "string",
+            *obj,
+            1,
+            &[obj],
+        )
     }
     Value::encode_int32(scm_string_str(*obj).len() as _)
 }
@@ -278,13 +312,29 @@ extern "C-unwind" fn make_string(thread: &mut Thread, n: &mut Value, char: &mut 
     } else if char.is_char() {
         char.get_char()
     } else {
-        wrong_type_argument_violation(thread, "make-string", 1, "character", *char, 2, &[n, char])
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "make-string",
+            1,
+            "character",
+            *char,
+            2,
+            &[n, char],
+        )
     };
 
     let _n = if n.is_int32() {
         n.get_int32()
     } else {
-        wrong_type_argument_violation(thread, "make-string", 0, "fixnum", *n, 2, &[n, char])
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "make-string",
+            0,
+            "fixnum",
+            *n,
+            2,
+            &[n, char],
+        )
     };
 
     if _n < 0 {
@@ -304,24 +354,53 @@ extern "C-unwind" fn make_string(thread: &mut Thread, n: &mut Value, char: &mut 
 
 extern "C-unwind" fn string_ref(_thread: &mut Thread, obj: &mut Value, index: &mut Value) -> Value {
     if !obj.is_string() {
-        raise_exn!(
-            FailContract,
-            &[],
-            "string-ref: argument {} is not a string",
-            obj
-        );
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            _thread,
+            "string-ref",
+            0,
+            "string",
+            *obj,
+            2,
+            &[obj, index],
+        )
     }
-    let index = scm_to_u32(*index) as usize;
+
+    if !arith::exact_nonnegative_integer_p(*index) {
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            _thread,
+            "string-ref",
+            1,
+            "exact nonnegative integer",
+            *index,
+            2,
+            &[obj, index],
+        )
+    }
+
+    let idx = arith::exact_integer_to_uint32(*index).unwrap_or_else(|| {
+        invalid_argument_violation(
+            _thread,
+            "string-ref",
+            "32 bit integer expred",
+            *index,
+            1,
+            2,
+            &[obj, index],
+        )
+    }) as usize;
     let s = scm_string_str(*obj);
-    if index >= s.len() {
-        raise_exn!(
-            FailContract,
-            &[],
-            "string-ref: index {} out of bounds",
-            index
+    if idx >= s.len() {
+        invalid_argument_violation(
+            _thread,
+            "string-ref",
+            "index out of bounds",
+            *index,
+            1,
+            2,
+            &[obj, index],
         );
     }
-    Value::encode_char(s.chars().nth(index as usize).unwrap())
+    Value::encode_char(s.chars().nth(idx as usize).unwrap())
 }
 
 extern "C-unwind" fn string_set(
@@ -331,31 +410,52 @@ extern "C-unwind" fn string_set(
     ch: &mut Value,
 ) -> Value {
     if !obj.is_string() {
-        raise_exn!(
-            FailContract,
-            &[],
-            "string-set!: argument {} is not a string",
-            obj
-        );
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            _thread,
+            "string-set!",
+            0,
+            "string",
+            *obj,
+            3,
+            &[obj, index, ch],
+        )
     }
     if !ch.is_char() {
-        raise_exn!(
-            FailContract,
-            &[],
-            "string-set!: argument {} is not a character",
-            ch
-        );
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            _thread,
+            "string-set!",
+            2,
+            "character",
+            *ch,
+            3,
+            &[obj, index, ch],
+        )
     }
 
-    let ch = ch.get_char();
-    let index = scm_to_u32(*index) as usize;
+    if !(arith::exact_nonnegative_integer_p(*index) && index.is_int32()) {
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            _thread,
+            "string-set!",
+            1,
+            "exact nonnegative fixnum",
+            *index,
+            3,
+            &[obj, index, ch],
+        )
+    }
+
+    let char = ch.get_char();
+    let idx = index.get_int32() as usize;
     let s = scm_string_str(*obj);
-    if index >= s.len() {
-        raise_exn!(
-            FailContract,
-            &[],
-            "string-set!: index {} out of bounds",
-            index
+    if idx >= s.len() {
+        invalid_argument_violation(
+            _thread,
+            "string-set!",
+            "index out of bounds",
+            *index,
+            1,
+            3,
+            &[obj, index, ch],
         );
     }
 
@@ -363,72 +463,70 @@ extern "C-unwind" fn string_set(
     let mut start = 0;
     let mut end = 0;
     for (i, ch) in s.chars().enumerate() {
-        if i == index as usize {
+        if i == idx as usize {
             start = end;
         }
         end += ch.len_utf8();
-        if i == index as usize {
+        if i == idx as usize {
             break;
         }
     }
 
     if end >= s.len() {
-        raise_exn!(
-            FailContract,
-            &[],
-            "string-set!: index {} out of bounds",
-            index
+        invalid_argument_violation(
+            _thread,
+            "string-set!",
+            "index out of bounds",
+            *index,
+            1,
+            3,
+            &[obj, index, ch],
         );
     } else {
         let s = scm_string_mut_str(*obj);
         unsafe {
-            s.as_bytes_mut()[start..end].copy_from_slice(ch.encode_utf8(&mut [0; 4]).as_bytes());
+            s.as_bytes_mut()[start..end].copy_from_slice(char.encode_utf8(&mut [0; 4]).as_bytes());
         }
         Value::encode_undefined_value()
     }
 }
 
-extern "C-unwind" fn string_eq(_thread: &mut Thread, rest: &mut Value) -> Value {
-    let len = scm_length(*rest).unwrap_or_else(|| {
-        raise_exn!(
-            Fail,
-            &[],
-            "string=?: wrong number of arguments (given {}, expected at least 2)",
-            rest
-        )
-    });
+extern "C-unwind" fn string_eq(thread: &mut Thread, rest: &mut Value) -> Value {
+    let len = scm_length(*rest).unwrap();
 
     if len < 2 {
-        raise_exn!(
-            Fail,
-            &[],
-            "string<?: wrong number of arguments (given {}, expected at least 2)",
-            rest
-        );
+        wrong_number_of_arguments_violation::<0>(thread, "string=?", 2, -1, len, &[rest]);
     }
 
-    let first = scm_car(*rest);
+    let mut first = scm_car(*rest);
     if !first.is_string() {
-        raise_exn!(
-            FailContract,
-            &[],
-            "string=?: argument {} is not a string",
-            first
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "string=?",
+            0,
+            "string",
+            first,
+            len,
+            &[&mut first, rest],
         );
     }
 
     *rest = scm_cdr(*rest);
-
+    let mut position = 0;
     while rest.is_pair() {
         let s = scm_car(*rest);
         if !s.is_string() {
-            raise_exn!(
-                FailContract,
-                &[],
-                "string=?: argument {} is not a string",
-                s
+            wrong_type_argument_violation::<{ usize::MAX }>(
+                thread,
+                "string=?",
+                position + 1,
+                "string",
+                s,
+                len,
+                &[&mut first, rest],
             );
         }
+        position += 1;
         if scm_string_str(first) != scm_string_str(s) {
             return Value::encode_bool_value(false);
         }
@@ -438,47 +536,42 @@ extern "C-unwind" fn string_eq(_thread: &mut Thread, rest: &mut Value) -> Value 
     Value::encode_bool_value(true)
 }
 
-extern "C-unwind" fn string_lt(_thread: &mut Thread, rest: &mut Value) -> Value {
-    let len = scm_length(*rest).unwrap_or_else(|| {
-        raise_exn!(
-            Fail,
-            &[],
-            "string<?: wrong number of arguments (given {}, expected at least 2)",
-            rest
-        )
-    });
+extern "C-unwind" fn string_lt(thread: &mut Thread, rest: &mut Value) -> Value {
+    let len = scm_length(*rest).unwrap();
 
     if len < 2 {
-        raise_exn!(
-            Fail,
-            &[],
-            "string<?: wrong number of arguments (given {}, expected at least 2)",
-            rest
-        );
+        wrong_number_of_arguments_violation::<0>(thread, "string<?", 2, -1, len, &[rest]);
     }
 
-    let first = scm_car(*rest);
+    let mut first = scm_car(*rest);
     if !first.is_string() {
-        raise_exn!(
-            FailContract,
-            &[],
-            "string<?: argument {} is not a string",
-            first
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "string<?",
+            0,
+            "string",
+            first,
+            len,
+            &[&mut first, rest],
         );
     }
 
     *rest = scm_cdr(*rest);
-
+    let mut position = 0;
     while rest.is_pair() {
         let s = scm_car(*rest);
         if !s.is_string() {
-            raise_exn!(
-                FailContract,
-                &[],
-                "string<?: argument {} is not a string",
-                s
+            wrong_type_argument_violation::<{ usize::MAX }>(
+                thread,
+                "string<?",
+                position + 1,
+                "string",
+                s,
+                len,
+                &[&mut first, rest],
             );
         }
+        position += 1;
         if scm_string_str(first) >= scm_string_str(s) {
             return Value::encode_bool_value(false);
         }
@@ -488,47 +581,42 @@ extern "C-unwind" fn string_lt(_thread: &mut Thread, rest: &mut Value) -> Value 
     Value::encode_bool_value(true)
 }
 
-extern "C-unwind" fn string_gt(_thread: &mut Thread, rest: &mut Value) -> Value {
-    let len = scm_length(*rest).unwrap_or_else(|| {
-        raise_exn!(
-            Fail,
-            &[],
-            "string>?: wrong number of arguments (given {}, expected at least 2)",
-            rest
-        )
-    });
+extern "C-unwind" fn string_gt(thread: &mut Thread, rest: &mut Value) -> Value {
+    let len = scm_length(*rest).unwrap();
 
     if len < 2 {
-        raise_exn!(
-            Fail,
-            &[],
-            "string>?: wrong number of arguments (given {}, expected at least 2)",
-            rest
-        );
+        wrong_number_of_arguments_violation::<0>(thread, "string>?", 2, -1, len, &[rest]);
     }
 
-    let first = scm_car(*rest);
+    let mut first = scm_car(*rest);
     if !first.is_string() {
-        raise_exn!(
-            FailContract,
-            &[],
-            "string>?: argument {} is not a string",
-            first
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "string>?",
+            0,
+            "string",
+            first,
+            2,
+            &[&mut first, rest],
         );
     }
 
     *rest = scm_cdr(*rest);
-
+    let mut position = 0;
     while rest.is_pair() {
         let s = scm_car(*rest);
         if !s.is_string() {
-            raise_exn!(
-                FailContract,
-                &[],
-                "string>?: argument {} is not a string",
-                s
+            wrong_type_argument_violation::<{ usize::MAX }>(
+                thread,
+                "string>?",
+                position + 1,
+                "string",
+                s,
+                2,
+                &[&mut first, rest],
             );
         }
+        position += 1;
         if scm_string_str(first) <= scm_string_str(s) {
             return Value::encode_bool_value(false);
         }
@@ -538,47 +626,42 @@ extern "C-unwind" fn string_gt(_thread: &mut Thread, rest: &mut Value) -> Value 
     Value::encode_bool_value(true)
 }
 
-extern "C-unwind" fn string_le(_thread: &mut Thread, rest: &mut Value) -> Value {
-    let len = scm_length(*rest).unwrap_or_else(|| {
-        raise_exn!(
-            Fail,
-            &[],
-            "string<=?: wrong number of arguments (given {}, expected at least 2)",
-            rest
-        )
-    });
+extern "C-unwind" fn string_le(thread: &mut Thread, rest: &mut Value) -> Value {
+    let len = scm_length(*rest).unwrap();
 
     if len < 2 {
-        raise_exn!(
-            Fail,
-            &[],
-            "string<=?: wrong number of arguments (given {}, expected at least 2)",
-            rest
-        );
+        wrong_number_of_arguments_violation::<0>(thread, "string<=?", 2, -1, len, &[rest]);
     }
 
-    let first = scm_car(*rest);
+    let mut first = scm_car(*rest);
     if !first.is_string() {
-        raise_exn!(
-            FailContract,
-            &[],
-            "string<=?: argument {} is not a string",
-            first
+        wrong_type_argument_violation::<1>(
+            thread,
+            "string<=?",
+            0,
+            "string",
+            first,
+            2,
+            &[&mut first, rest],
         );
     }
 
     *rest = scm_cdr(*rest);
-
+    let mut position = 0;
     while rest.is_pair() {
         let s = scm_car(*rest);
         if !s.is_string() {
-            raise_exn!(
-                FailContract,
-                &[],
-                "string<=?: argument {} is not a string",
-                s
+            wrong_type_argument_violation::<1>(
+                thread,
+                "string<=?",
+                position + 1,
+                "string",
+                s,
+                2,
+                &[&mut first, rest],
             );
         }
+        position += 1;
         if scm_string_str(first) > scm_string_str(s) {
             return Value::encode_bool_value(false);
         }
@@ -588,47 +671,42 @@ extern "C-unwind" fn string_le(_thread: &mut Thread, rest: &mut Value) -> Value 
     Value::encode_bool_value(true)
 }
 
-extern "C-unwind" fn string_ge(_thread: &mut Thread, rest: &mut Value) -> Value {
-    let len = scm_length(*rest).unwrap_or_else(|| {
-        raise_exn!(
-            Fail,
-            &[],
-            "string>=?: wrong number of arguments (given {}, expected at least 2)",
-            rest
-        )
-    });
+extern "C-unwind" fn string_ge(thread: &mut Thread, rest: &mut Value) -> Value {
+    let len = scm_length(*rest).unwrap();
 
     if len < 2 {
-        raise_exn!(
-            Fail,
-            &[],
-            "string>=?: wrong number of arguments (given {}, expected at least 2)",
-            rest
-        );
+        wrong_number_of_arguments_violation::<0>(thread, "string>=?", 2, -1, len, &[rest]);
     }
 
-    let first = scm_car(*rest);
+    let mut first = scm_car(*rest);
     if !first.is_string() {
-        raise_exn!(
-            FailContract,
-            &[],
-            "string>=?: argument {} is not a string",
-            first
+        wrong_type_argument_violation::<1>(
+            thread,
+            "string>=?",
+            0,
+            "string",
+            first,
+            2,
+            &[&mut first, rest],
         );
     }
 
     *rest = scm_cdr(*rest);
-
+    let mut position = 0;
     while rest.is_pair() {
         let s = scm_car(*rest);
         if !s.is_string() {
-            raise_exn!(
-                FailContract,
-                &[],
-                "string>=?: argument {} is not a string",
-                s
+            wrong_type_argument_violation::<1>(
+                thread,
+                "string>=?",
+                position + 1,
+                "string",
+                s,
+                2,
+                &[&mut first, rest],
             );
         }
+        position += 1;
         if scm_string_str(first) < scm_string_str(s) {
             return Value::encode_bool_value(false);
         }
@@ -644,7 +722,15 @@ extern "C-unwind" fn raw_raise(_thread: &mut Thread, val: &mut Value) -> Value {
 
 extern "C-unwind" fn core_preprocess(thread: &mut Thread, code: &mut Value) -> Value {
     let Some(sexpr) = value_to_sexpr(*code) else {
-        raise_exn!(Fail, &[], "%core-preprocess: invalid source code")
+        invalid_argument_violation(
+            thread,
+            "%core-preprocess",
+            "invalid source code",
+            *code,
+            0,
+            1,
+            &[code],
+        )
     };
     let synenv = scm_virtual_machine()
         .interaction_environment
@@ -659,9 +745,17 @@ extern "C-unwind" fn core_preprocess(thread: &mut Thread, code: &mut Value) -> V
     };
     let il = match expand::pass1(&sexpr, &cenv) {
         Ok(il) => il,
-        Err(err) => {
+        Err(_) => {
             drop(synenv);
-            raise_exn!(Fail, &[], "failed to expand source code: {}", err)
+            invalid_argument_violation(
+                thread,
+                "%core-preprocess",
+                "failed to convet Scheme to Tree-IL",
+                *code,
+                0,
+                1,
+                &[code],
+            )
         }
     };
     let fixed = fix_letrec::pass_fix_letrec(il);
@@ -686,7 +780,15 @@ extern "C-unwind" fn tuple(thread: &mut Thread, args: &mut Value) -> Value {
 
 extern "C-unwind" fn make_tuple(thread: &mut Thread, len: &mut Value) -> Value {
     if !len.is_int32() {
-        wrong_type_argument_violation(thread, "make-tuple", 0, "fixnum", *len, 1, &[len]);
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "make-tuple",
+            0,
+            "fixnum",
+            *len,
+            1,
+            &[len],
+        );
     }
 
     let length = len.get_int32();
@@ -709,26 +811,32 @@ extern "C-unwind" fn tuple_pred(_thread: &mut Thread, obj: &mut Value) -> Value 
     Value::encode_bool_value(obj.is_tuple())
 }
 
-extern "C-unwind" fn tuple_ref(_: &mut Thread, obj: &mut Value, index: &mut Value) -> Value {
+extern "C-unwind" fn tuple_ref(_thread: &mut Thread, obj: &mut Value, index: &mut Value) -> Value {
     if !obj.is_tuple() {
-        raise_exn!(
-            FailContract,
-            &[],
-            "tuple-ref: argument {} is not a tuple",
-            obj
-        );
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            _thread,
+            "tuple-ref",
+            0,
+            "tuple",
+            *obj,
+            2,
+            &[obj, index],
+        )
     }
-    let index = scm_to_u32(*index) as usize;
+    let idx = scm_to_u32(*index) as usize;
     let len = obj.cast_as::<ScmTuple>().length;
-    if index >= len {
-        raise_exn!(
-            FailContract,
-            &[],
-            "tuple-ref: index {} out of bounds",
-            index
+    if idx >= len {
+        invalid_argument_violation(
+            _thread,
+            "tuple-ref",
+            "index out of bounds",
+            *index,
+            1,
+            2,
+            &[obj, index],
         );
     }
-    scm_tuple_ref(*obj, index as _)
+    scm_tuple_ref(*obj, idx as _)
 }
 
 extern "C-unwind" fn tuple_set(
@@ -738,35 +846,44 @@ extern "C-unwind" fn tuple_set(
     value: &mut Value,
 ) -> Value {
     if !obj.is_tuple() {
-        raise_exn!(
-            FailContract,
-            &[],
-            "tuple-set!: argument {} is not a tuple",
-            obj
-        );
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "tuple-set!",
+            0,
+            "tuple",
+            *obj,
+            3,
+            &[obj, index, value],
+        )
     }
-    let index = scm_to_u32(*index) as usize;
+    let idx = scm_to_u32(*index) as usize;
     let len = obj.cast_as::<ScmTuple>().length;
-    if index >= len {
-        raise_exn!(
-            FailContract,
-            &[],
-            "tuple-set!: index {} out of bounds",
-            index
+    if idx >= len {
+        invalid_argument_violation(
+            thread,
+            "tuple-set!",
+            "index out of bounds",
+            *index,
+            1,
+            3,
+            &[obj, index, value],
         );
     }
-    scm_tuple_set(*obj, thread, index as _, *value);
+    scm_tuple_set(*obj, thread, idx as _, *value);
     *value
 }
 
 extern "C-unwind" fn tuple_length(_thread: &mut Thread, obj: &mut Value) -> Value {
     if !obj.is_tuple() {
-        raise_exn!(
-            FailContract,
-            &[],
-            "tuple-length: argument {} is not a tuple",
-            obj
-        );
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            _thread,
+            "tuple-length",
+            0,
+            "tuple",
+            *obj,
+            1,
+            &[obj],
+        )
     }
     Value::encode_int32(obj.cast_as::<ScmTuple>().length as _)
 }
@@ -797,7 +914,15 @@ extern "C-unwind" fn integer_to_char(thread: &mut Thread, val: &mut Value) -> Va
             );
         }
     } else {
-        wrong_type_argument_violation(thread, "integer->char", 0, "integer", *val, 1, &[val])
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "integer->char",
+            0,
+            "integer",
+            *val,
+            1,
+            &[val],
+        )
     }
 }
 
@@ -806,19 +931,240 @@ extern "C-unwind" fn char_to_integer(thread: &mut Thread, val: &mut Value) -> Va
         let ch = val.get_char();
         Value::encode_int32(ch as u32 as i32)
     } else {
-        wrong_type_argument_violation(thread, "char->integer", 0, "character", *val, 1, &[val])
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "char->integer",
+            0,
+            "character",
+            *val,
+            1,
+            &[val],
+        )
     }
 }
 
-extern "C-unwind" fn char_eq_p(_thread: &mut Thread, val: &mut Value, val2: &mut Value) -> Value {
-    if val.is_char() && val2.is_char() {
-        Value::encode_bool_value(val.get_char() == val2.get_char())
-    } else {
-        if !val.is_char() {
-            wrong_type_argument_violation(_thread, "char=?", 0, "character", *val, 2, &[val, val2])
-        } else {
-            wrong_type_argument_violation(_thread, "char=?", 1, "character", *val2, 2, &[val, val2])
+extern "C-unwind" fn char_eq_p(thread: &mut Thread, rest: &mut Value) -> Value {
+    let length = scm_length(*rest).unwrap();
+
+    if length < 2 {
+        wrong_number_of_arguments_violation::<0>(thread, "char=?", 2, -1, 1, &[rest]);
+    }
+
+    let mut xs = *rest;
+    let mut pos = 0;
+    while xs.is_pair() {
+        if !scm_car(xs).is_char() {
+            wrong_type_argument_violation::<1>(
+                thread,
+                "char=?",
+                pos,
+                "char",
+                scm_car(xs),
+                2,
+                &[&mut scm_car(xs), rest],
+            );
         }
+        pos += 1;
+
+        xs = scm_cdr(xs);
+    }
+
+    let first = scm_car(*rest);
+    xs = scm_cdr(*rest);
+
+    while xs.is_pair() {
+        let x = scm_car(xs);
+        if first.get_char() != x.get_char() {
+            return Value::encode_bool_value(false);
+        }
+
+        xs = scm_cdr(xs);
+    }
+
+    Value::encode_bool_value(true)
+}
+
+extern "C-unwind" fn char_lt_p(thread: &mut Thread, rest: &mut Value) -> Value {
+    let length = scm_length(*rest).unwrap();
+
+    if length < 2 {
+        wrong_number_of_arguments_violation::<0>(thread, "char<?", 2, -1, 1, &[rest]);
+    }
+
+    let mut xs = *rest;
+    let mut pos = 0;
+    while xs.is_pair() {
+        if !scm_car(xs).is_char() {
+            wrong_type_argument_violation::<1>(
+                thread,
+                "char<?",
+                pos,
+                "char",
+                scm_car(xs),
+                2,
+                &[&mut scm_car(xs), rest],
+            );
+        }
+        pos += 1;
+
+        xs = scm_cdr(xs);
+    }
+
+    let first = scm_car(*rest);
+
+    xs = scm_cdr(*rest);
+
+    while xs.is_pair() {
+        let x = scm_car(xs);
+        if first.get_char() >= x.get_char() {
+            return Value::encode_bool_value(false);
+        }
+
+        xs = scm_cdr(xs);
+    }
+
+    Value::encode_bool_value(true)
+}
+
+extern "C-unwind" fn char_le_p(thread: &mut Thread, rest: &mut Value) -> Value {
+    let length = scm_length(*rest).unwrap();
+
+    if length < 2 {
+        wrong_number_of_arguments_violation::<0>(thread, "char<=?", 2, -1, 1, &[rest]);
+    }
+
+    let mut xs = *rest;
+    let mut pos = 0;
+    while xs.is_pair() {
+        if !scm_car(xs).is_char() {
+            wrong_type_argument_violation::<1>(
+                thread,
+                "char<=?",
+                pos,
+                "char",
+                scm_car(xs),
+                2,
+                &[&mut scm_car(xs), rest],
+            );
+        }
+        pos += 1;
+
+        xs = scm_cdr(xs);
+    }
+
+    let first = scm_car(*rest);
+
+    xs = scm_cdr(*rest);
+
+    while xs.is_pair() {
+        let x = scm_car(xs);
+        if first.get_char() > x.get_char() {
+            return Value::encode_bool_value(false);
+        }
+
+        xs = scm_cdr(xs);
+    }
+
+    Value::encode_bool_value(true)
+}
+
+extern "C-unwind" fn char_gt_p(thread: &mut Thread, rest: &mut Value) -> Value {
+    let length = scm_length(*rest).unwrap();
+
+    if length < 2 {
+        wrong_number_of_arguments_violation::<0>(thread, "char>?", 2, -1, 1, &[rest]);
+    }
+
+    let mut xs = *rest;
+    let mut pos = 0;
+    while xs.is_pair() {
+        if !scm_car(xs).is_char() {
+            wrong_type_argument_violation::<1>(
+                thread,
+                "char>?",
+                pos,
+                "char",
+                scm_car(xs),
+                2,
+                &[&mut scm_car(xs), rest],
+            );
+        }
+        pos += 1;
+
+        xs = scm_cdr(xs);
+    }
+
+    let first = scm_car(*rest);
+
+    xs = scm_cdr(*rest);
+
+    while xs.is_pair() {
+        let x = scm_car(xs);
+        if first.get_char() <= x.get_char() {
+            return Value::encode_bool_value(false);
+        }
+
+        xs = scm_cdr(xs);
+    }
+
+    Value::encode_bool_value(true)
+}
+
+extern "C-unwind" fn char_ge_p(thread: &mut Thread, rest: &mut Value) -> Value {
+    let length = scm_length(*rest).unwrap();
+
+    if length < 2 {
+        wrong_number_of_arguments_violation::<0>(thread, "char>=?", 2, -1, 1, &[rest]);
+    }
+
+    let mut xs = *rest;
+    let mut pos = 0;
+    while xs.is_pair() {
+        if !scm_car(xs).is_char() {
+            wrong_type_argument_violation::<1>(
+                thread,
+                "char>=?",
+                pos,
+                "char",
+                scm_car(xs),
+                2,
+                &[&mut scm_car(xs), rest],
+            );
+        }
+        pos += 1;
+
+        xs = scm_cdr(xs);
+    }
+
+    let first = scm_car(*rest);
+
+    xs = scm_cdr(*rest);
+
+    while xs.is_pair() {
+        let x = scm_car(xs);
+        if first.get_char() < x.get_char() {
+            return Value::encode_bool_value(false);
+        }
+
+        xs = scm_cdr(xs);
+    }
+
+    Value::encode_bool_value(true)
+}
+
+extern "C-unwind" fn char_whitespace_p(thread: &mut Thread, val: &mut Value) -> Value {
+    if val.is_char() {
+        return Value::encode_bool_value(val.get_char().is_whitespace());
+    } else {
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "char-whitespace?",
+            0,
+            "char",
+            *val,
+            1,
+            &[val],
+        )
     }
 }
 
@@ -864,7 +1210,7 @@ extern "C-unwind" fn char_general_category(thread: &mut Thread, char: &mut Value
         let category = unicode_general_category::get_general_category(ch);
         CATEGORY_MAP[category as usize]
     } else {
-        wrong_type_argument_violation(
+        wrong_type_argument_violation::<{ usize::MAX }>(
             thread,
             "char-general-category",
             0,
@@ -889,7 +1235,7 @@ extern "C-unwind" fn procedure_eq_p(
         Value::encode_bool_value(scm_program_code(*val) == scm_program_code(*val2))
     } else {
         if !val.is_program() {
-            wrong_type_argument_violation(
+            wrong_type_argument_violation::<{ usize::MAX }>(
                 thread,
                 "procedure=?",
                 0,
@@ -899,7 +1245,7 @@ extern "C-unwind" fn procedure_eq_p(
                 &[val, val2],
             )
         } else {
-            wrong_type_argument_violation(
+            wrong_type_argument_violation::<{ usize::MAX }>(
                 thread,
                 "procedure=?",
                 1,
@@ -914,7 +1260,7 @@ extern "C-unwind" fn procedure_eq_p(
 
 extern "C-unwind" fn procedure_to_string(thread: &mut Thread, proc: &mut Value) -> Value {
     if !proc.is_program() {
-        wrong_type_argument_violation(
+        wrong_type_argument_violation::<{ usize::MAX }>(
             thread,
             "procedure->string",
             0,
@@ -995,7 +1341,12 @@ pub(crate) fn init() {
     scm_define_subr("current-millis", 0, 0, 0, Subr::F0(current_millis));
     scm_define_subr("integer->char", 1, 0, 0, Subr::F1(integer_to_char));
     scm_define_subr("char->integer", 1, 0, 0, Subr::F1(char_to_integer));
-    scm_define_subr("char=?", 2, 0, 0, Subr::F2(char_eq_p));
+    scm_define_subr("char=?", 0, 0, 1, Subr::F1(char_eq_p));
+    scm_define_subr("char<?", 0, 0, 1, Subr::F1(char_lt_p));
+    scm_define_subr("char<=?", 0, 0, 1, Subr::F1(char_le_p));
+    scm_define_subr("char>?", 0, 0, 1, Subr::F1(char_gt_p));
+    scm_define_subr("char>=?", 0, 0, 1, Subr::F1(char_ge_p));
+    scm_define_subr("char-whitespace?", 1, 0, 0, Subr::F1(char_whitespace_p));
     scm_define_subr(
         "char-general-category",
         1,

@@ -262,7 +262,11 @@ fn allocate_stack(mut size: usize) -> VirtualMemory {
     .expect("Failed to allocate stack")
 }
 
-pub fn scm_call_n(thread: &mut Thread, proc: Value, args: &[Value]) -> Result<Value, Value> {
+pub fn scm_call_n<const PROTECT: bool>(
+    thread: &mut Thread,
+    proc: Value,
+    args: &[Value],
+) -> Result<Value, Value> {
     let return_nlocals = 0;
     let call_nlocals = args.len() + 1;
     let frame_size = 2;
@@ -276,7 +280,9 @@ pub fn scm_call_n(thread: &mut Thread, proc: Value, args: &[Value]) -> Result<Va
         let off = thread.shadow_stack.offset_for_save();
 
         let prev_id = thread.interpreter().entry_id;
-        thread.interpreter().entry_id = ENTRY.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if PROTECT {
+            thread.interpreter().entry_id = ENTRY.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
         let new_sp = thread.interpreter().sp.sub(stack_reserve_words);
         thread.interpreter().push_sp(new_sp);
         let call_fp = thread.interpreter().sp.add(call_nlocals);
@@ -311,7 +317,11 @@ pub fn scm_call_n(thread: &mut Thread, proc: Value, args: &[Value]) -> Result<Va
                 (thread.interpreter().engines[0])(thread)
             });
 
-            let result = std::panic::catch_unwind(|| call());
+            let result = if PROTECT {
+                std::panic::catch_unwind(|| call())
+            } else {
+                Ok(call())
+            };
 
             let result = match result {
                 Ok(val) => Ok(val),

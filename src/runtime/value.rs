@@ -419,7 +419,12 @@ impl std::fmt::Display for Value {
         } else if self.is_double() {
             write!(f, "{}", self.get_double())
         } else if self.is_rational() {
-            write!(f, "{}/{}", self.get_rational().numerator, self.get_rational().denominator)
+            write!(
+                f,
+                "{}/{}",
+                self.get_rational().numerator,
+                self.get_rational().denominator
+            )
         } else if self.is_pair() {
             let mut lst = *self;
 

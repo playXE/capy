@@ -23,6 +23,7 @@ SRCS += lib/system/stdio.scm
 SRCS += lib/system/print.scm
 SRCS += lib/system/printer.scm
 SRCS += lib/system/format.scm
+SRCS += lib/system/reader.scm
 
 SRCS += lib/system/main.scm
 

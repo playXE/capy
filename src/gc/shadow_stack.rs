@@ -176,7 +176,9 @@ macro_rules! gc_protect {
             )*
 
             let result = {
+                #[allow(unused_variables)]
                 let mut guard = $crate::gc::shadow_stack::DropGuard::new(|| {
+
                     let t = $crate::vm::thread::Thread::current();
                     $(
                         stringify!($var);

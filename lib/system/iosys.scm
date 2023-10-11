@@ -1145,7 +1145,7 @@
            (error 'get-char "Read attempted on closed port " p))
           ((> mainlim 0)
            (let* ((bv (make-bytevector mainlim))
-                  (s  (begin (r6rs:bytevector-copy! mainbuf 0 bv 0 mainlim)
+                  (s  (begin (bytevector-copy! mainbuf 0 bv 0 mainlim)
                              (utf8->string bv))))
              (if (not lookahead?)
                  (let ((mainpos (tuple-ref p port.mainpos)))
@@ -1156,7 +1156,7 @@
            (let ((n ((ioproc 'read) iodata mainbuf)))
              (cond ((and (fixnum? n) (> n 0))
                     (let* ((bv (make-bytevector n))
-                           (s  (begin (r6rs:bytevector-copy! mainbuf 0 bv 0 n)
+                           (s  (begin (bytevector-copy! mainbuf 0 bv 0 n)
                                       (utf8->string bv))))
                       (if (not lookahead?)
                           (let ((mainpos (tuple-ref p port.mainpos)))
@@ -1880,7 +1880,7 @@
              (tuple-set! p port.mainptr (+ mainptr 1)))
             ((eq? state 'auxend)
              (assert (fx< auxptr auxlim))
-             (r6rs:bytevector-copy! auxbuf auxptr mainbuf 0 (- auxlim auxptr))
+             (bytevector-copy! auxbuf auxptr mainbuf 0 (- auxlim auxptr))
              (bytevector-u8-set! mainbuf (- auxlim auxptr) port.sentinel)
              (tuple-set! p
                                port.mainpos

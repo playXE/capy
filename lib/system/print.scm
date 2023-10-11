@@ -246,8 +246,8 @@
     (print (bytevector->list x) p slashify (- level 1)))
   (define (printport x p slashify)
     (cond 
-      [(input-port?) (printstr "#<input-port>" p)]
-      [(output-port?) (printstr "#<output-port>" p)]
+      [(input-port? x) (printstr "#<input-port>" p)]
+      [(output-port? x) (printstr "#<output-port>" p)]
       [else (printstr "#<port>" p)]))
   (define (printeof x p slashify)
     (printstr "#<eof>" p))
@@ -294,3 +294,8 @@
       (io/discretionary-flush p)
       (undefined))))
 
+
+(define (->string x)
+  (call-with-string-output-port 
+    (lambda (p)
+      (print x p #f))))

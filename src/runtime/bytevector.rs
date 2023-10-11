@@ -40,7 +40,7 @@ impl MutatorParam {
                                 return this;
                             }
                         }
-                        wrong_type_argument_violation(
+                        wrong_type_argument_violation::<{ usize::MAX }>(
                             thread,
                             subr,
                             3,
@@ -75,7 +75,7 @@ impl MutatorParam {
                 );
             }
 
-            wrong_type_argument_violation(
+            wrong_type_argument_violation::<{ usize::MAX }>(
                 thread,
                 subr,
                 0,
@@ -135,7 +135,7 @@ impl NativeMutatorParam {
                 );
             }
 
-            wrong_type_argument_violation(
+            wrong_type_argument_violation::<{ usize::MAX }>(
                 thread,
                 subr,
                 0,
@@ -179,7 +179,7 @@ impl AccessorParam {
                                 return this;
                             }
                         }
-                        wrong_type_argument_violation(
+                        wrong_type_argument_violation::<{ usize::MAX }>(
                             thread,
                             subr,
                             2,
@@ -214,7 +214,7 @@ impl AccessorParam {
                 );
             }
 
-            wrong_type_argument_violation(
+            wrong_type_argument_violation::<{ usize::MAX }>(
                 thread,
                 subr,
                 0,
@@ -274,7 +274,7 @@ impl NativeAccessorParam {
                 );
             }
 
-            wrong_type_argument_violation(
+            wrong_type_argument_violation::<{ usize::MAX }>(
                 thread,
                 subr,
                 0,
@@ -346,7 +346,7 @@ extern "C-unwind" fn bytevector_s8_set(
             );
         }
     } else {
-        wrong_type_argument_violation(
+        wrong_type_argument_violation::<{ usize::MAX }>(
             thread,
             "bytevector-s8-set!",
             2,
@@ -393,7 +393,7 @@ extern "C-unwind" fn bytevector_u8_set(
             );
         }
     } else {
-        wrong_type_argument_violation(
+        wrong_type_argument_violation::<{ usize::MAX }>(
             thread,
             "bytevector-u8-set!",
             2,
@@ -597,7 +597,7 @@ extern "C-unwind" fn bytevector_s16_set(
             );
         }
     } else {
-        wrong_type_argument_violation(
+        wrong_type_argument_violation::<{ usize::MAX }>(
             thread,
             "bytevector-s16-set!",
             2,
@@ -651,7 +651,7 @@ extern "C-unwind" fn bytevector_u16_set(
             );
         }
     } else {
-        wrong_type_argument_violation(
+        wrong_type_argument_violation::<{ usize::MAX }>(
             thread,
             "bytevector-u16-set!",
             2,
@@ -709,7 +709,7 @@ extern "C-unwind" fn bytevector_s32_set(
             );
         }
     } else {
-        wrong_type_argument_violation(
+        wrong_type_argument_violation::<{ usize::MAX }>(
             thread,
             "bytevector-s32-set!",
             2,
@@ -767,7 +767,7 @@ extern "C-unwind" fn bytevector_u32_set(
             );
         }
     } else {
-        wrong_type_argument_violation(
+        wrong_type_argument_violation::<{ usize::MAX }>(
             thread,
             "bytevector-u32-set!",
             2,
@@ -813,7 +813,7 @@ extern "C-unwind" fn bytevector_char_set(
         }
         return Value::encode_undefined_value();
     } else {
-        wrong_type_argument_violation(
+        wrong_type_argument_violation::<{ usize::MAX }>(
             thread,
             "bytevector-char-set!",
             2,
@@ -922,7 +922,7 @@ extern "C-unwind" fn bytevector_u16_native_set(
             );
         }
     } else {
-        wrong_type_argument_violation(
+        wrong_type_argument_violation::<{ usize::MAX }>(
             thread,
             "bytevector-u16-native-set!",
             2,
@@ -969,7 +969,7 @@ extern "C-unwind" fn bytevector_s16_native_set(
             );
         }
     } else {
-        wrong_type_argument_violation(
+        wrong_type_argument_violation::<{ usize::MAX }>(
             thread,
             "bytevector-s16-native-set!",
             2,
@@ -1018,7 +1018,7 @@ extern "C-unwind" fn bytevector_u32_native_set(
             );
         }
     } else {
-        wrong_type_argument_violation(
+        wrong_type_argument_violation::<{ usize::MAX }>(
             thread,
             "bytevector-u32-native-set!",
             2,
@@ -1067,7 +1067,7 @@ extern "C-unwind" fn bytevector_s32_native_set(
             );
         }
     } else {
-        wrong_type_argument_violation(
+        wrong_type_argument_violation::<{ usize::MAX }>(
             thread,
             "bytevector-s32-native-set!",
             2,
@@ -1114,7 +1114,7 @@ extern "C-unwind" fn make_bytevector(
             );
         }
     } else {
-        wrong_type_argument_violation(
+        wrong_type_argument_violation::<{ usize::MAX }>(
             thread,
             "make-bytevector",
             2,
@@ -1143,7 +1143,7 @@ extern "C-unwind" fn make_bytevector(
             );
         }
     } else {
-        wrong_type_argument_violation(
+        wrong_type_argument_violation::<{ usize::MAX }>(
             thread,
             "make-bytevector",
             1,
@@ -1160,7 +1160,7 @@ extern "C-unwind" fn bytevector_length(thread: &mut Thread, bvector: &mut Value)
         let length = scm_bytevector_length(*bvector);
         return Value::encode_int32(length as _);
     } else {
-        wrong_type_argument_violation(
+        wrong_type_argument_violation::<{ usize::MAX }>(
             thread,
             "bytevector-length",
             0,
@@ -1188,7 +1188,7 @@ extern "C-unwind" fn bytevector_eq(thread: &mut Thread, bv1: &mut Value, bv2: &m
             return Value::encode_bool_value(false);
         }
     } else {
-        wrong_type_argument_violation(
+        wrong_type_argument_violation::<{ usize::MAX }>(
             thread,
             "bytevector=?",
             0,
@@ -1225,7 +1225,7 @@ extern "C-unwind" fn bytevector_fill(
                 );
             }
         } else {
-            wrong_type_argument_violation(
+            wrong_type_argument_violation::<{ usize::MAX }>(
                 thread,
                 "bytevector-fill!",
                 2,
@@ -1241,7 +1241,7 @@ extern "C-unwind" fn bytevector_fill(
         }
         return Value::encode_undefined_value();
     } else {
-        wrong_type_argument_violation(
+        wrong_type_argument_violation::<{ usize::MAX }>(
             thread,
             "bytevector-fill!",
             0,
@@ -1263,7 +1263,7 @@ extern "C-unwind" fn bytevector_destructive_copy(
     size: &mut Value,
 ) -> Value {
     if !bv1.is_bytevector() {
-        wrong_type_argument_violation(
+        wrong_type_argument_violation::<{ usize::MAX }>(
             thread,
             "bytevector-copy!",
             0,
@@ -1275,7 +1275,7 @@ extern "C-unwind" fn bytevector_destructive_copy(
     }
 
     if !source.is_int32() {
-        wrong_type_argument_violation(
+        wrong_type_argument_violation::<{ usize::MAX }>(
             thread,
             "bytevector-copy!",
             1,
@@ -1287,7 +1287,7 @@ extern "C-unwind" fn bytevector_destructive_copy(
     }
 
     if !bv2.is_bytevector() {
-        wrong_type_argument_violation(
+        wrong_type_argument_violation::<{ usize::MAX }>(
             thread,
             "bytevector-copy!",
             2,
@@ -1299,7 +1299,7 @@ extern "C-unwind" fn bytevector_destructive_copy(
     }
 
     if !target.is_int32() {
-        wrong_type_argument_violation(
+        wrong_type_argument_violation::<{ usize::MAX }>(
             thread,
             "bytevector-copy!",
             3,
@@ -1311,7 +1311,7 @@ extern "C-unwind" fn bytevector_destructive_copy(
     }
 
     if !size.is_int32() {
-        wrong_type_argument_violation(
+        wrong_type_argument_violation::<{ usize::MAX }>(
             thread,
             "bytevector-copy!",
             4,
@@ -1381,7 +1381,15 @@ extern "C-unwind" fn bytevector_destructive_copy(
 /// `(bytevector-copy <source>) -> <bytevector>`
 extern "C-unwind" fn bytevector_copy(thread: &mut Thread, bv: &mut Value) -> Value {
     if !bv.is_bytevector() {
-        wrong_type_argument_violation(thread, "bytevector-copy", 0, "bytevector", *bv, 1, &[bv]);
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "bytevector-copy",
+            0,
+            "bytevector",
+            *bv,
+            1,
+            &[bv],
+        );
     }
 
     let bvs = scm_bytevector_as_slice(*bv);
@@ -1402,7 +1410,7 @@ extern "C-unwind" fn utf8_string(thread: &mut Thread, bvector: &mut Value) -> Va
         let s = thread.make_string::<false>(&s);
         s
     } else {
-        wrong_type_argument_violation(
+        wrong_type_argument_violation::<{ usize::MAX }>(
             thread,
             "utf8-string",
             0,
@@ -1423,7 +1431,15 @@ extern "C-unwind" fn string_utf8_nul(thread: &mut Thread, s: &mut Value) -> Valu
         bvs.copy_from_slice(scm_string_str(*s).as_bytes());
         bv
     } else {
-        wrong_type_argument_violation(thread, "string->utf8/nul", 0, "string", *s, 1, &[s]);
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "string->utf8/nul",
+            0,
+            "string",
+            *s,
+            1,
+            &[s],
+        );
     }
 }
 
@@ -1434,7 +1450,15 @@ extern "C-unwind" fn string_utf8(thread: &mut Thread, s: &mut Value) -> Value {
         bvs.copy_from_slice(scm_string_str(*s).as_bytes());
         bv
     } else {
-        wrong_type_argument_violation(thread, "string->utf8", 0, "string", *s, 1, &[s]);
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "string->utf8",
+            0,
+            "string",
+            *s,
+            1,
+            &[s],
+        );
     }
 }
 
@@ -1451,7 +1475,15 @@ extern "C-unwind" fn bytevector_to_list(thread: &mut Thread, bv: &mut Value) -> 
 
         list
     } else {
-        wrong_type_argument_violation(thread, "bytevector->list", 0, "bytevector", *bv, 1, &[bv]);
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "bytevector->list",
+            0,
+            "bytevector",
+            *bv,
+            1,
+            &[bv],
+        );
     }
 }
 

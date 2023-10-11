@@ -29,7 +29,7 @@ fn main() {
     );
     mmtk.set_option("threads", "4");
 
-    let vm = capy::vm::scm_init(mmtk.build(), opts.gc_plan);
+    let _vm = capy::vm::scm_init(mmtk.build(), opts.gc_plan);
 
     let thread = Thread::current();
     println!("{:b}", 42i64);

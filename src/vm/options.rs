@@ -131,3 +131,14 @@ pub fn parse() -> Result<VMOptions, String> {
 
     Ok(options)
 }
+
+pub fn pretty_print_bytes(size: f64) -> String {
+    let units = ["B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"];
+    let mut size = size;
+    let mut index = 0;
+    while size >= 1024.0 && index < units.len() - 1 {
+        size /= 1024.0;
+        index += 1;
+    }
+    format!("{:.2}{}", size, units[index])
+}

@@ -149,7 +149,7 @@ impl ObjectModel<CapyVM> for ScmObjectModel {
         unsafe {
             std::ptr::copy_nonoverlapping(src.to_ptr::<u8>(), dst.to_mut_ptr::<u8>(), size);
         }
-        println!("COPY {:p}->{:p}", src.to_ptr::<u8>(), dst.to_ptr::<u8>());
+
         let to_obj = ObjectReference::from_raw_address(dst);
         copy_context.post_copy(to_obj, size, semantics);
         to_obj
@@ -762,7 +762,7 @@ impl Scanning<CapyVM> for ScmScanning {
         // Process weak reference queue. Objects are appended here if we see `WeakMapping` in `scan_object`.
         let mut enqueued = false;
         let mut weaks = vm.weakmapping_registry.lock(false);
-        println!("WEAK REFS");
+
         tracer_context.with_tracer(worker, |tracer| {
             while let Some(mapping_ref) = weaks.pop() {
                 unsafe {
@@ -775,15 +775,9 @@ impl Scanning<CapyVM> for ScmScanning {
                     let keyref = ObjectReference::from_address::<CapyVM>(key);
 
                     if keyref.is_reachable() {
-                        println!(
-                            "key {:p} is reachable, forwarded to {:?}",
-                            key.to_ptr::<u8>(),
-                            keyref.get_forwarded_object()
-                        );
-                        mapping.key = Value::encode_object_value(ScmCellRef::from_address(
-                            tracer.trace_object(keyref).to_address::<CapyVM>(),
-                        ));
-                        //println!("{}", mapping.key);
+                        let fwd = tracer.trace_object(keyref).to_address::<CapyVM>();
+
+                        mapping.key = Value::encode_object_value(ScmCellRef::from_address(fwd));
                         enqueued = true;
                         if mapping.value.is_object() {
                             mapping.value = Value::encode_object_value(ScmCellRef::from_address(

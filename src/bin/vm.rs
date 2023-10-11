@@ -6,7 +6,11 @@ use capy::{
         object::{scm_car, scm_cdr},
         value::Value,
     },
-    vm::{options::VMOptions, scm_init, thread::Thread},
+    vm::{
+        options::{pretty_print_bytes, VMOptions},
+        scm_init,
+        thread::Thread,
+    },
 };
 
 fn main() {
@@ -29,9 +33,9 @@ fn main() {
         ),
     );
     println!(
-        "GC size: {}..{}M",
-        opts.gc_min_heap_size / 1024,
-        opts.gc_max_heap_size / 1024
+        "GC size: {}..{}",
+        pretty_print_bytes(opts.gc_min_heap_size as _),
+        pretty_print_bytes(opts.gc_max_heap_size as _)
     );
     mmtk.set_option("threads", "4");
 
@@ -66,7 +70,7 @@ fn main() {
                 std::process::exit(1);
             }
         };
-        let result = scm_call_n(Thread::current(), image.entry_program, &[]);
+        let result = scm_call_n::<true>(Thread::current(), image.entry_program, &[]);
         match result {
             Ok(val) => {
                 println!("Ok: {}", val);

@@ -8,11 +8,11 @@ use super::{
 
 extern "C-unwind" fn fx_eq(thread: &mut Thread, a: &mut Value, b: &mut Value) -> Value {
     if !a.is_int32() {
-        wrong_type_argument_violation(thread, "fx=", 0, "fixnum", *a, 2, &[a, b]);
+        wrong_type_argument_violation::<{ usize::MAX }>(thread, "fx=", 0, "fixnum", *a, 2, &[a, b]);
     }
 
     if !b.is_int32() {
-        wrong_type_argument_violation(thread, "fx=", 1, "fixnum", *b, 2, &[a, b]);
+        wrong_type_argument_violation::<{ usize::MAX }>(thread, "fx=", 1, "fixnum", *b, 2, &[a, b]);
     }
 
     Value::encode_bool_value(a == b)
@@ -20,11 +20,11 @@ extern "C-unwind" fn fx_eq(thread: &mut Thread, a: &mut Value, b: &mut Value) ->
 
 extern "C-unwind" fn fx_lt(thread: &mut Thread, a: &mut Value, b: &mut Value) -> Value {
     if !a.is_int32() {
-        wrong_type_argument_violation(thread, "fx<", 0, "fixnum", *a, 2, &[a, b]);
+        wrong_type_argument_violation::<{ usize::MAX }>(thread, "fx<", 0, "fixnum", *a, 2, &[a, b]);
     }
 
     if !b.is_int32() {
-        wrong_type_argument_violation(thread, "fx<", 1, "fixnum", *b, 2, &[a, b]);
+        wrong_type_argument_violation::<{ usize::MAX }>(thread, "fx<", 1, "fixnum", *b, 2, &[a, b]);
     }
 
     Value::encode_bool_value(a.get_int32() < b.get_int32())
@@ -32,11 +32,11 @@ extern "C-unwind" fn fx_lt(thread: &mut Thread, a: &mut Value, b: &mut Value) ->
 
 extern "C-unwind" fn fx_gt(thread: &mut Thread, a: &mut Value, b: &mut Value) -> Value {
     if !a.is_int32() {
-        wrong_type_argument_violation(thread, "fx>", 0, "fixnum", *a, 2, &[a, b]);
+        wrong_type_argument_violation::<{ usize::MAX }>(thread, "fx>", 0, "fixnum", *a, 2, &[a, b]);
     }
 
     if !b.is_int32() {
-        wrong_type_argument_violation(thread, "fx>", 1, "fixnum", *b, 2, &[a, b]);
+        wrong_type_argument_violation::<{ usize::MAX }>(thread, "fx>", 1, "fixnum", *b, 2, &[a, b]);
     }
 
     Value::encode_bool_value(a.get_int32() > b.get_int32())
@@ -44,11 +44,27 @@ extern "C-unwind" fn fx_gt(thread: &mut Thread, a: &mut Value, b: &mut Value) ->
 
 extern "C-unwind" fn fx_le(thread: &mut Thread, a: &mut Value, b: &mut Value) -> Value {
     if !a.is_int32() {
-        wrong_type_argument_violation(thread, "fx<=", 0, "fixnum", *a, 2, &[a, b]);
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "fx<=",
+            0,
+            "fixnum",
+            *a,
+            2,
+            &[a, b],
+        );
     }
 
     if !b.is_int32() {
-        wrong_type_argument_violation(thread, "fx<=", 1, "fixnum", *b, 2, &[a, b]);
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "fx<=",
+            1,
+            "fixnum",
+            *b,
+            2,
+            &[a, b],
+        );
     }
 
     Value::encode_bool_value(a.get_int32() <= b.get_int32())
@@ -56,11 +72,27 @@ extern "C-unwind" fn fx_le(thread: &mut Thread, a: &mut Value, b: &mut Value) ->
 
 extern "C-unwind" fn fx_ge(thread: &mut Thread, a: &mut Value, b: &mut Value) -> Value {
     if !a.is_int32() {
-        wrong_type_argument_violation(thread, "fx>=", 0, "fixnum", *a, 2, &[a, b]);
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "fx>=",
+            0,
+            "fixnum",
+            *a,
+            2,
+            &[a, b],
+        );
     }
 
     if !b.is_int32() {
-        wrong_type_argument_violation(thread, "fx>=", 1, "fixnum", *b, 2, &[a, b]);
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "fx>=",
+            1,
+            "fixnum",
+            *b,
+            2,
+            &[a, b],
+        );
     }
 
     Value::encode_bool_value(a.get_int32() >= b.get_int32())
@@ -68,11 +100,11 @@ extern "C-unwind" fn fx_ge(thread: &mut Thread, a: &mut Value, b: &mut Value) ->
 
 extern "C-unwind" fn fx_add(thread: &mut Thread, a: &mut Value, b: &mut Value) -> Value {
     if !a.is_int32() {
-        wrong_type_argument_violation(thread, "fx+", 0, "fixnum", *a, 2, &[a, b]);
+        wrong_type_argument_violation::<{ usize::MAX }>(thread, "fx+", 0, "fixnum", *a, 2, &[a, b]);
     }
 
     if !b.is_int32() {
-        wrong_type_argument_violation(thread, "fx+", 1, "fixnum", *b, 2, &[a, b]);
+        wrong_type_argument_violation::<{ usize::MAX }>(thread, "fx+", 1, "fixnum", *b, 2, &[a, b]);
     }
 
     Value::encode_int32(a.get_int32().wrapping_add(b.get_int32()))
@@ -80,11 +112,11 @@ extern "C-unwind" fn fx_add(thread: &mut Thread, a: &mut Value, b: &mut Value) -
 
 extern "C-unwind" fn fx_sub(thread: &mut Thread, a: &mut Value, b: &mut Value) -> Value {
     if !a.is_int32() {
-        wrong_type_argument_violation(thread, "fx-", 0, "fixnum", *a, 2, &[a, b]);
+        wrong_type_argument_violation::<{ usize::MAX }>(thread, "fx-", 0, "fixnum", *a, 2, &[a, b]);
     }
 
     if !b.is_int32() {
-        wrong_type_argument_violation(thread, "fx-", 1, "fixnum", *b, 2, &[a, b]);
+        wrong_type_argument_violation::<{ usize::MAX }>(thread, "fx-", 1, "fixnum", *b, 2, &[a, b]);
     }
 
     Value::encode_int32(a.get_int32().wrapping_sub(b.get_int32()))
@@ -92,11 +124,11 @@ extern "C-unwind" fn fx_sub(thread: &mut Thread, a: &mut Value, b: &mut Value) -
 
 extern "C-unwind" fn fx_mul(thread: &mut Thread, a: &mut Value, b: &mut Value) -> Value {
     if !a.is_int32() {
-        wrong_type_argument_violation(thread, "fx*", 0, "fixnum", *a, 2, &[a, b]);
+        wrong_type_argument_violation::<{ usize::MAX }>(thread, "fx*", 0, "fixnum", *a, 2, &[a, b]);
     }
 
     if !b.is_int32() {
-        wrong_type_argument_violation(thread, "fx*", 1, "fixnum", *b, 2, &[a, b]);
+        wrong_type_argument_violation::<{ usize::MAX }>(thread, "fx*", 1, "fixnum", *b, 2, &[a, b]);
     }
 
     Value::encode_int32(a.get_int32().wrapping_mul(b.get_int32()))
@@ -104,11 +136,11 @@ extern "C-unwind" fn fx_mul(thread: &mut Thread, a: &mut Value, b: &mut Value) -
 
 extern "C-unwind" fn fx_div(thread: &mut Thread, a: &mut Value, b: &mut Value) -> Value {
     if !a.is_int32() {
-        wrong_type_argument_violation(thread, "fx/", 0, "fixnum", *a, 2, &[a, b]);
+        wrong_type_argument_violation::<{ usize::MAX }>(thread, "fx/", 0, "fixnum", *a, 2, &[a, b]);
     }
 
     if !b.is_int32() {
-        wrong_type_argument_violation(thread, "fx/", 1, "fixnum", *b, 2, &[a, b]);
+        wrong_type_argument_violation::<{ usize::MAX }>(thread, "fx/", 1, "fixnum", *b, 2, &[a, b]);
     }
 
     Value::encode_int32(a.get_int32().wrapping_div(b.get_int32()))
@@ -116,11 +148,27 @@ extern "C-unwind" fn fx_div(thread: &mut Thread, a: &mut Value, b: &mut Value) -
 
 extern "C-unwind" fn fx_logand(thread: &mut Thread, a: &mut Value, b: &mut Value) -> Value {
     if !a.is_int32() {
-        wrong_type_argument_violation(thread, "fxlogand", 0, "fixnum", *a, 2, &[a, b]);
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "fxlogand",
+            0,
+            "fixnum",
+            *a,
+            2,
+            &[a, b],
+        );
     }
 
     if !b.is_int32() {
-        wrong_type_argument_violation(thread, "fxlogand", 1, "fixnum", *b, 2, &[a, b]);
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "fxlogand",
+            1,
+            "fixnum",
+            *b,
+            2,
+            &[a, b],
+        );
     }
 
     Value::encode_int32(a.get_int32() & b.get_int32())
@@ -128,11 +176,27 @@ extern "C-unwind" fn fx_logand(thread: &mut Thread, a: &mut Value, b: &mut Value
 
 extern "C-unwind" fn fx_logior(thread: &mut Thread, a: &mut Value, b: &mut Value) -> Value {
     if !a.is_int32() {
-        wrong_type_argument_violation(thread, "fxlogior", 0, "fixnum", *a, 2, &[a, b]);
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "fxlogior",
+            0,
+            "fixnum",
+            *a,
+            2,
+            &[a, b],
+        );
     }
 
     if !b.is_int32() {
-        wrong_type_argument_violation(thread, "fxlogior", 1, "fixnum", *b, 2, &[a, b]);
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "fxlogior",
+            1,
+            "fixnum",
+            *b,
+            2,
+            &[a, b],
+        );
     }
 
     Value::encode_int32(a.get_int32() | b.get_int32())
@@ -140,11 +204,27 @@ extern "C-unwind" fn fx_logior(thread: &mut Thread, a: &mut Value, b: &mut Value
 
 extern "C-unwind" fn fx_logxor(thread: &mut Thread, a: &mut Value, b: &mut Value) -> Value {
     if !a.is_int32() {
-        wrong_type_argument_violation(thread, "fxlogxor", 0, "fixnum", *a, 2, &[a, b]);
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "fxlogxor",
+            0,
+            "fixnum",
+            *a,
+            2,
+            &[a, b],
+        );
     }
 
     if !b.is_int32() {
-        wrong_type_argument_violation(thread, "fxlogxor", 1, "fixnum", *b, 2, &[a, b]);
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "fxlogxor",
+            1,
+            "fixnum",
+            *b,
+            2,
+            &[a, b],
+        );
     }
 
     Value::encode_int32(a.get_int32() ^ b.get_int32())
@@ -152,11 +232,27 @@ extern "C-unwind" fn fx_logxor(thread: &mut Thread, a: &mut Value, b: &mut Value
 
 extern "C-unwind" fn fx_lsh(thread: &mut Thread, a: &mut Value, b: &mut Value) -> Value {
     if !a.is_int32() {
-        wrong_type_argument_violation(thread, "fxlsh", 0, "fixnum", *a, 2, &[a, b]);
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "fxlsh",
+            0,
+            "fixnum",
+            *a,
+            2,
+            &[a, b],
+        );
     }
 
     if !b.is_int32() {
-        wrong_type_argument_violation(thread, "fxlsh", 1, "fixnum", *b, 2, &[a, b]);
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "fxlsh",
+            1,
+            "fixnum",
+            *b,
+            2,
+            &[a, b],
+        );
     }
 
     Value::encode_int32(a.get_int32().wrapping_shl(b.get_int32() as _))
@@ -164,11 +260,27 @@ extern "C-unwind" fn fx_lsh(thread: &mut Thread, a: &mut Value, b: &mut Value) -
 
 extern "C-unwind" fn fx_sha(thread: &mut Thread, a: &mut Value, b: &mut Value) -> Value {
     if !a.is_int32() {
-        wrong_type_argument_violation(thread, "fxash", 0, "fixnum", *a, 2, &[a, b]);
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "fxash",
+            0,
+            "fixnum",
+            *a,
+            2,
+            &[a, b],
+        );
     }
 
     if !b.is_int32() {
-        wrong_type_argument_violation(thread, "fxash", 1, "fixnum", *b, 2, &[a, b]);
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "fxash",
+            1,
+            "fixnum",
+            *b,
+            2,
+            &[a, b],
+        );
     }
 
     Value::encode_int32(a.get_int32().wrapping_shr(b.get_int32() as _))
@@ -180,11 +292,27 @@ extern "C-unwind" fn fixnum_p(_thread: &mut Thread, a: &mut Value) -> Value {
 
 extern "C-unwind" fn fxrshl(thread: &mut Thread, a: &mut Value, b: &mut Value) -> Value {
     if !a.is_int32() {
-        wrong_type_argument_violation(thread, "fxrshl", 0, "fixnum", *a, 2, &[a, b]);
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "fxrshl",
+            0,
+            "fixnum",
+            *a,
+            2,
+            &[a, b],
+        );
     }
 
     if !b.is_int32() {
-        wrong_type_argument_violation(thread, "fxrshl", 1, "fixnum", *b, 2, &[a, b]);
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "fxrshl",
+            1,
+            "fixnum",
+            *b,
+            2,
+            &[a, b],
+        );
     }
 
     Value::encode_int32(a.get_int32().wrapping_shl(b.get_int32() as _))

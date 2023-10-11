@@ -30,7 +30,7 @@ use crate::{
             frame_dynamic_link, frame_previous_sp, frame_virtual_return_address, StackElement,
         },
     },
-    runtime::error::capture_stacktrace,
+    runtime::{error::capture_stacktrace, to_string},
     utils::round_up,
     vm::thread::Thread,
 };
@@ -233,7 +233,6 @@ static GOTO_CONTINUATION_CODE: &'static [u8] = &[OP_CONTINUATION_CALL, 0];
 static CALL_WITH_CURRENT_CONTINUATION_CODE: &'static [u8] = &[
     OP_ASSERT_NARGS_EE,
     2,
-    0,
     0, // (assert-nargs-ee 2)
     OP_MOV,
     1,
@@ -319,12 +318,12 @@ pub fn raise_assertion_violation(
     match proc {
         Ok(proc) => {
             let _ = match irritant {
-                Some(irritant) => scm_call_n(thread, proc, &[who, message, irritant]),
-                None => scm_call_n(thread, proc, &[who, message]),
+                Some(irritant) => scm_call_n::<false>(thread, proc, &[who, message, irritant]),
+                None => scm_call_n::<false>(thread, proc, &[who, message]),
             };
-            unsafe {
-                std::hint::unreachable_unchecked();
-            }
+
+            eprintln!("raise returned");
+            std::process::abort();
         }
 
         Err(_) => {
@@ -338,20 +337,120 @@ pub fn raise_assertion_violation(
     }
 }
 
-pub fn wrong_number_of_arguments_violation(
+pub fn raise_implementation_restriction_violation(
     thread: &mut Thread,
-    proc: Value,
+    who: Value,
+    message: Value,
+    irritant: Option<Value>,
+) -> ! {
+    let proc = environment_get(
+        scm_virtual_machine().interaction_environment,
+        scm_intern("implementation-restriction-violation"),
+    );
+    match proc {
+        Ok(proc) => {
+            let _ = match irritant {
+                Some(irritant) => scm_call_n::<false>(thread, proc, &[who, message, irritant]),
+                None => scm_call_n::<false>(thread, proc, &[who, message]),
+            };
+
+            eprintln!("raise returned");
+            std::process::abort();
+        }
+
+        Err(_) => {
+            let message = match irritant {
+                Some(irritant) => format!("{}: {}: {}", who, message, irritant),
+                None => format!("{}: {}", who, message),
+            };
+            eprintln!("Pre-boot error: {}", message);
+            std::process::abort();
+        }
+    }
+}
+
+pub fn undefined_violation(thread: &mut Thread, who: Value, message: Value) -> ! {
+    let proc = environment_get(
+        scm_virtual_machine().interaction_environment,
+        scm_intern("undefined-violation"),
+    );
+
+    match proc {
+        Ok(proc) => {
+            let _ = scm_call_n::<false>(thread, proc, &[who, message]);
+            eprintln!("raise returned");
+            std::process::abort();
+        }
+
+        Err(_) => {
+            let message = format!("{}: {}", who, message);
+            eprintln!("Pre-boot error: {}", message);
+            std::process::abort();
+        }
+    }
+}
+
+#[cold]
+#[inline(never)]
+pub fn wrong_number_of_arguments_violation<const REST_AT: usize>(
+    thread: &mut Thread,
+    proc: &str,
     required_min: i32,
     required_max: i32,
     argc: usize,
     argv: &[&mut Value],
 ) -> ! {
-    todo!()
+    let plural = if argc < 2 { "" } else { "s" };
+    let fmt = if required_max < 0 {
+        format!(
+            "required at least {}, but {} argument{} given",
+            required_min, argc, plural
+        )
+    } else if required_min == required_max {
+        format!(
+            "required {}, but {} argument{} given",
+            required_min, argc, plural
+        )
+    } else {
+        if required_max == required_min + 1 {
+            format!(
+                "required {} or {}, but {} argument{} given",
+                required_min, required_max, argc, plural
+            )
+        } else {
+            format!(
+                "required between {} to {}, but {} argument{} given",
+                required_min, required_max, argc, plural
+            )
+        }
+    };
+    let who = scm_intern(proc);
+    let mut message = thread.make_string::<false>(&fmt);
+    if argc == 0 {
+        raise_assertion_violation(thread, who, message, None)
+    } else {
+        let mut irritants = if REST_AT == usize::MAX {
+            Value::encode_null_value()
+        } else {
+            *argv[REST_AT]
+        };
+        let mut last = if REST_AT == usize::MAX {
+            argc as isize
+        } else {
+            REST_AT as isize
+        };
+        while last >= 0 {
+            last -= 1;
+            irritants = gc_protect!(thread => message => thread.make_cons::<false>(*argv[last as usize], irritants));
+        }
+
+        raise_assertion_violation(thread, who, message, Some(irritants))
+    }
 }
 
 #[inline(never)]
 #[cold]
-pub fn wrong_type_argument_violation(
+pub fn wrong_type_argument_violation<const REST_AT: usize>(
     thread: &mut Thread,
     who: &str,
     position: usize,
@@ -360,14 +459,53 @@ pub fn wrong_type_argument_violation(
     argc: usize,
     argv: &[&mut Value],
 ) -> ! {
-    println!(
-        "wrong type argument violation: {} expected {}, got {}\n{}",
-        who,
-        expected,
-        got,
-        unsafe { capture_stacktrace(thread) }
-    );
-    todo!()
+    let fmt;
+
+    if argc < 2 {
+        fmt = if got.is_undefined() {
+            format!("expected {}, but missing", expected)
+        } else {
+            format!("expected {}, but got {}", expected, to_string(thread, got))
+        };
+    } else {
+        fmt = if got.is_undefined() {
+            format!(
+                "expected {}, but missing for argument {}",
+                expected,
+                position + 1
+            )
+        } else {
+            format!(
+                "expected {}, but got {}, as argument {}",
+                expected,
+                got,
+                position + 1
+            )
+        };
+    }
+
+    let who = scm_intern(who);
+    let mut message = thread.make_string::<false>(&fmt);
+    if argc < 2 {
+        raise_assertion_violation(thread, who, message, None);
+    } else {
+        let mut irritants = if REST_AT == usize::MAX {
+            Value::encode_null_value()
+        } else {
+            *argv[REST_AT]
+        };
+        let mut last = if REST_AT == usize::MAX {
+            argc as isize
+        } else {
+            REST_AT as isize
+        };
+        while last > 0 {
+            last -= 1;
+            irritants = gc_protect!(thread => message => thread.make_cons::<false>(*argv[last as usize], irritants));
+        }
+
+        raise_assertion_violation(thread, who, message, Some(irritants))
+    }
 }
 
 pub fn invalid_argument_violation(
@@ -410,7 +548,7 @@ pub fn scheme_raise(thread: &mut Thread, value: Value) -> ! {
         scm_intern("raise"),
     )
     .unwrap();
-    let _ = scm_call_n(thread, raise_proc, &[value]);
+    let _ = scm_call_n::<false>(thread, raise_proc, &[value]);
 
     unreachable!("raise returned")
 }

@@ -69,18 +69,18 @@
   (if (not (bytevector-output-port? port))
       (assertion-violation 'get-output-bytevector "illegal argument" port))
   (flush-output-port port)
-  (let* ((data  (vector-like-ref port port.iodata))
+  (let* ((data  (tuple-ref port port.iodata))
          (bv    (vector-ref data bytevector-io.bv))
          (limit (vector-ref data bytevector-io.limit))
          (r     (make-bytevector limit)))
-    (r6rs:bytevector-copy! bv 0 r 0 limit)
+    (bytevector-copy! bv 0 r 0 limit)
     r))
 
 (define (bytevector-io/reset-output-bytevector port)
   (if (not (bytevector-output-port? port))
       (assertion-violation 'reset-output-bytevector "illegal argument" port))
   (flush-output-port port)
-  (let ((data (vector-like-ref port port.iodata)))
+  (let ((data (tuple-ref port port.iodata)))
     (vector-set! data
                  bytevector-io.bv
                  (make-bytevector bytevector-io:headroom 0))
@@ -121,8 +121,8 @@
          (count (max (min n (- limit i)))))
     (if (<= count 0)
         'eof
-        (begin (r6rs:bytevector-copy! b i buffer 0 count)
-               (vector-like-set! data bytevector-io.i (+ i count))
+        (begin (bytevector-copy! b i buffer 0 count)
+               (tuple-set! data bytevector-io.i (+ i count))
                count))))
 
 ; For input/output bytevector ports.  Notice the definition of n.
@@ -135,8 +135,8 @@
          (count (max 0 (min n (- limit i)))))
     (if (<= count 0)
         'eof
-        (begin (r6rs:bytevector-copy! b i buffer 0 count)
-               (vector-like-set! data bytevector-io.i (+ i count))
+        (begin (bytevector-copy! b i buffer 0 count)
+               (tuple-set! data bytevector-io.i (+ i count))
                count))))
 
 (define (bytevector-io/flush-buffer data buffer count)
@@ -148,7 +148,7 @@
     (if (< n new-i)
         (begin (bytevector-io/expand-buffer! data count)
                (bytevector-io/flush-buffer data buffer count))
-        (begin (r6rs:bytevector-copy! buffer 0 bv i count)
+        (begin (bytevector-copy! buffer 0 bv i count)
                (vector-set! data bytevector-io.i new-i)
                (if (< limit new-i)
                    (vector-set! data bytevector-io.limit new-i))
@@ -178,18 +178,18 @@
          (n     (bytevector-length bv))
          (new-i (+ i count)))
     (let ((bv2 (make-bytevector (+ (* 2 new-i) bytevector-io:headroom) 0)))
-      (r6rs:bytevector-copy! bv 0 bv2 0 limit)
+      (bytevector-copy! bv 0 bv2 0 limit)
       (vector-set! data bytevector-io.bv bv2))))
 
 (define (bytevector-input-port? port)
-  (let ((d (vector-like-ref port port.iodata)))
+  (let ((d (tuple-ref port port.iodata)))
     (and (vector? d)
 	 (> (vector-length d) 0)
          (memq (vector-ref d 0)
                '(bytevector-input-port bytevector-input/output-port)))))
 
 (define (bytevector-output-port? port)
-  (let ((d (vector-like-ref port port.iodata)))
+  (let ((d (tuple-ref port port.iodata)))
     (and (vector? d)
 	 (> (vector-length d) 0)
          (memq (vector-ref d 0)

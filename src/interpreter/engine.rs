@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::intrinsics::unlikely;
 use std::mem::{size_of, transmute};
 
@@ -7,9 +8,12 @@ use crate::raise_exn;
 use crate::runtime::control::wrong_type_argument_violation;
 use crate::runtime::equality::{equal, eqv};
 use crate::runtime::gsubr::scm_apply_subr;
-use crate::runtime::object::*;
-use crate::runtime::subr_arith::{intrinsic_quotient, intrinsic_remainder};
+use crate::runtime::subr_arith::{
+    intrinsic_add, intrinsic_div, intrinsic_mul, intrinsic_quotient, intrinsic_remainder,
+    intrinsic_sub, scm_n_compare,
+};
 use crate::runtime::value::Value;
+use crate::runtime::{arith, object::*};
 use crate::vm::intrinsics::{self, cons_rest, get_callee_vcode, reinstate_continuation_x};
 use crate::vm::thread::Thread;
 use mmtk::util::metadata::side_metadata::GLOBAL_SIDE_METADATA_VM_BASE_ADDRESS;
@@ -804,205 +808,136 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
 
             OP_ADD => {
                 let add = OpAdd::read(ip);
-                ip = ip.add(size_of::<OpAdd>());
 
-                let mut a = sp_ref!(add.a());
-                let mut b = sp_ref!(add.b());
+                let a = sp_ref!(add.a());
+                let b = sp_ref!(add.b());
 
                 if a.is_int32() && b.is_int32() {
-                    sp_set!(
-                        add.dst(),
-                        Value::encode_int32(a.get_int32().wrapping_add(b.get_int32()))
-                    );
-                } else {
-                    if a.is_double() || b.is_double() {
+                    if let Some(res) = a.get_int32().checked_add(b.get_int32()) {
+                        sp_set!(add.dst(), Value::encode_int32(res));
+                        ip = ip.add(size_of::<OpAdd>());
+
+                        continue;
+                    }
+                }
+                {
+                    if a.is_inline_number() && b.is_inline_number() {
                         let lhs = a.get_number();
                         let rhs = b.get_number();
 
                         sp_set!(add.dst(), Value::encode_f64_value(lhs + rhs));
                     } else {
-                        if !a.is_number() {
-                            wrong_type_argument_violation(
-                                thread,
-                                "+",
-                                0,
-                                "number",
-                                a,
-                                2,
-                                &[&mut a, &mut b],
-                            );
-                        }
-
-                        if !b.is_number() {
-                            wrong_type_argument_violation(
-                                thread,
-                                "+",
-                                1,
-                                "number",
-                                b,
-                                2,
-                                &[&mut a, &mut b],
-                            );
-                        }
+                        sync_ip!();
+                        sync_sp!();
+                        sp_set!(add.dst(), intrinsic_add(thread, a, b));
                     }
                 }
+
+                ip = ip.add(size_of::<OpAdd>());
             }
 
             OP_SUB => {
                 let sub = OpSub::read(ip);
-                ip = ip.add(size_of::<OpSub>());
 
-                let mut a = sp_ref!(sub.a());
-                let mut b = sp_ref!(sub.b());
+                let a = sp_ref!(sub.a());
+                let b = sp_ref!(sub.b());
 
                 if a.is_int32() && b.is_int32() {
-                    sp_set!(
-                        sub.dst(),
-                        Value::encode_int32(a.get_int32().wrapping_sub(b.get_int32()))
-                    );
-                } else {
-                    if a.is_double() || b.is_double() {
+                    if let Some(res) = a.get_int32().checked_sub(b.get_int32()) {
+                        sp_set!(sub.dst(), Value::encode_int32(res));
+                        ip = ip.add(size_of::<OpSub>());
+                        continue;
+                    }
+                }
+                {
+                    if a.is_inline_number() && b.is_inline_number() {
                         let lhs = a.get_number();
                         let rhs = b.get_number();
 
                         sp_set!(sub.dst(), Value::encode_f64_value(lhs - rhs));
                     } else {
-                        if !a.is_number() {
-                            wrong_type_argument_violation(
-                                thread,
-                                "-",
-                                0,
-                                "number",
-                                a,
-                                2,
-                                &[&mut a, &mut b],
-                            );
-                        }
+                        sync_sp!();
+                        sync_ip!();
 
-                        if !b.is_number() {
-                            wrong_type_argument_violation(
-                                thread,
-                                "-",
-                                1,
-                                "number",
-                                b,
-                                2,
-                                &[&mut a, &mut b],
-                            );
-                        }
+                        sp_set!(sub.dst(), intrinsic_sub(thread, a, b));
                     }
                 }
+
+                ip = ip.add(size_of::<OpSub>());
             }
 
             OP_NEG => {
                 let neg = OpNeg::read(ip);
-                ip = ip.add(size_of::<OpNeg>());
 
                 let mut src = sp_ref!(neg.src());
 
-                if src.is_int32() {
+                if src.is_int32() && src.get_int32().checked_neg().is_some() {
                     sp_set!(neg.dst(), Value::encode_int32(-src.get_int32()));
+                    ip = ip.add(size_of::<OpNeg>());
                 } else if src.is_double() {
                     sp_set!(neg.dst(), Value::encode_f64_value(-src.get_double()));
+                    ip = ip.add(size_of::<OpNeg>());
+                } else if src.is_number() {
+                    sync_ip!();
+                    sync_sp!();
+                    sp_set!(neg.dst(), arith::arith_negate(thread, src));
+                    ip = ip.add(size_of::<OpNeg>());
                 } else {
-                    wrong_type_argument_violation(thread, "--", 0, "number", src, 1, &[&mut src])
+                    sync_ip!();
+                    sync_sp!();
+                    wrong_type_argument_violation::<{ usize::MAX }>(
+                        thread,
+                        "--",
+                        0,
+                        "number",
+                        src,
+                        1,
+                        &[&mut src],
+                    )
                 }
             }
 
             OP_MUL => {
                 let mul = OpMul::read(ip);
-                ip = ip.add(size_of::<OpMul>());
 
-                let mut a = sp_ref!(mul.a());
-                let mut b = sp_ref!(mul.b());
+                let a = sp_ref!(mul.a());
+                let b = sp_ref!(mul.b());
                 if a.is_int32() && b.is_int32() {
-                    sp_set!(
-                        mul.dst(),
-                        Value::encode_int32(a.get_int32().wrapping_mul(b.get_int32()))
-                    );
-                } else {
-                    if a.is_double() || b.is_double() {
+                    if let Some(res) = a.get_int32().checked_mul(b.get_int32()) {
+                        sp_set!(mul.dst(), Value::encode_int32(res));
+                        ip = ip.add(size_of::<OpMul>());
+                        continue;
+                    }
+                }
+                {
+                    if a.is_inline_number() && b.is_inline_number() {
                         let lhs = a.get_number();
                         let rhs = b.get_number();
 
                         sp_set!(mul.dst(), Value::encode_f64_value(lhs * rhs));
                     } else {
-                        if !a.is_number() {
-                            wrong_type_argument_violation(
-                                thread,
-                                "*",
-                                0,
-                                "number",
-                                a,
-                                2,
-                                &[&mut a, &mut b],
-                            );
-                        }
-
-                        if !b.is_number() {
-                            wrong_type_argument_violation(
-                                thread,
-                                "*",
-                                1,
-                                "number",
-                                b,
-                                2,
-                                &[&mut a, &mut b],
-                            );
-                        }
+                        sync_sp!();
+                        sync_ip!();
+                        sp_set!(mul.dst(), intrinsic_mul(thread, a, b));
                     }
                 }
+
+                ip = ip.add(size_of::<OpMul>());
             }
 
             OP_DIV => {
                 let div = OpDiv::read(ip);
+
+                let a = sp_ref!(div.a());
+                let b = sp_ref!(div.b());
+                sync_sp!();
+                sync_ip!();
+                sp_set!(div.dst(), intrinsic_div(thread, a, b));
                 ip = ip.add(size_of::<OpDiv>());
-
-                let mut a = sp_ref!(div.a());
-                let mut b = sp_ref!(div.b());
-
-                if a.is_int32() && b.is_int32() {
-                    sp_set!(
-                        div.dst(),
-                        Value::encode_int32(a.get_int32().wrapping_div(b.get_int32()))
-                    );
-                } else {
-                    if a.is_double() || b.is_double() {
-                        let lhs = a.get_number();
-                        let rhs = b.get_number();
-
-                        sp_set!(div.dst(), Value::encode_f64_value(lhs / rhs));
-                    } else {
-                        if !a.is_number() {
-                            wrong_type_argument_violation(
-                                thread,
-                                "/",
-                                0,
-                                "number",
-                                a,
-                                2,
-                                &[&mut a, &mut b],
-                            );
-                        }
-
-                        if !b.is_number() {
-                            wrong_type_argument_violation(
-                                thread,
-                                "/",
-                                1,
-                                "number",
-                                b,
-                                2,
-                                &[&mut a, &mut b],
-                            );
-                        }
-                    }
-                }
             }
 
             OP_QUOTIENT => {
                 let quotient = OpQuotient::read(ip);
-                ip = ip.add(size_of::<OpQuotient>());
 
                 let a = sp_ref!(quotient.a());
                 let b = sp_ref!(quotient.b());
@@ -1017,11 +952,12 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                     sync_sp!();
                     sp_set!(quotient.dst(), intrinsic_quotient(thread, a, b));
                 }
+
+                ip = ip.add(size_of::<OpQuotient>());
             }
 
             OP_REMAINDER => {
                 let remainder = OpRemainder::read(ip);
-                ip = ip.add(size_of::<OpRemainder>());
 
                 let a = sp_ref!(remainder.a());
                 let b = sp_ref!(remainder.b());
@@ -1036,250 +972,130 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                     sync_sp!();
                     sp_set!(remainder.dst(), intrinsic_remainder(thread, a, b));
                 }
-            }
 
-           
+                ip = ip.add(size_of::<OpRemainder>());
+            }
 
             OP_LESS => {
                 let less = OpLess::read(ip);
-                ip = ip.add(size_of::<OpLess>());
 
-                let mut a = sp_ref!(less.a());
-                let mut b = sp_ref!(less.b());
+                let a = sp_ref!(less.a());
+                let b = sp_ref!(less.b());
 
                 if a.is_int32() && b.is_int32() {
                     sp_set!(
                         less.dst(),
                         Value::encode_bool_value(a.get_int32() < b.get_int32())
                     );
+                    ip = ip.add(size_of::<OpLess>());
                     continue;
                 }
-
-                if a.is_double() || b.is_double() {
-                    let lhs = a.get_number();
-                    let rhs = b.get_number();
-
-                    sp_set!(less.dst(), Value::encode_bool_value(lhs < rhs));
-                    continue;
-                }
-
-                if !a.is_number() {
-                    wrong_type_argument_violation(
-                        thread,
-                        "<",
-                        0,
-                        "number",
-                        a,
-                        2,
-                        &[&mut a, &mut b],
-                    );
-                }
-
-                if !b.is_number() {
-                    wrong_type_argument_violation(
-                        thread,
-                        "<",
-                        1,
-                        "number",
-                        b,
-                        2,
-                        &[&mut a, &mut b],
-                    );
-                }
+                sync_ip!();
+                sync_sp!();
+                let ord = scm_n_compare(thread, a, b, "<");
+                sp_set!(less.dst(), Value::encode_bool_value(ord == Ordering::Less));
+                ip = ip.add(size_of::<OpLess>());
             }
 
             OP_GREATER => {
                 let greater = OpGreater::read(ip);
-                ip = ip.add(size_of::<OpGreater>());
 
-                let mut a = sp_ref!(greater.a());
-                let mut b = sp_ref!(greater.b());
+                let a = sp_ref!(greater.a());
+                let b = sp_ref!(greater.b());
 
                 if a.is_int32() && b.is_int32() {
                     sp_set!(
                         greater.dst(),
                         Value::encode_bool_value(a.get_int32() > b.get_int32())
                     );
+                    ip = ip.add(size_of::<OpGreater>());
                     continue;
                 }
-
-                if a.is_double() || b.is_double() {
-                    let lhs = a.get_number();
-                    let rhs = b.get_number();
-
-                    sp_set!(greater.dst(), Value::encode_bool_value(lhs > rhs));
-                    continue;
-                }
-
-                if !a.is_number() {
-                    wrong_type_argument_violation(
-                        thread,
-                        ">",
-                        0,
-                        "number",
-                        a,
-                        2,
-                        &[&mut a, &mut b],
-                    );
-                }
-
-                if !b.is_number() {
-                    wrong_type_argument_violation(
-                        thread,
-                        ">",
-                        1,
-                        "number",
-                        b,
-                        2,
-                        &[&mut a, &mut b],
-                    );
-                }
+                sync_ip!();
+                sync_sp!();
+                let ord = scm_n_compare(thread, a, b, ">");
+                sp_set!(
+                    greater.dst(),
+                    Value::encode_bool_value(ord == Ordering::Greater)
+                );
+                ip = ip.add(size_of::<OpGreater>());
             }
 
             OP_LESS_EQUAL => {
                 let less_equal = OpLessEqual::read(ip);
-                ip = ip.add(size_of::<OpLessEqual>());
 
-                let mut a = sp_ref!(less_equal.a());
-                let mut b = sp_ref!(less_equal.b());
+                let a = sp_ref!(less_equal.a());
+                let b = sp_ref!(less_equal.b());
 
                 if a.is_int32() && b.is_int32() {
                     sp_set!(
                         less_equal.dst(),
                         Value::encode_bool_value(a.get_int32() <= b.get_int32())
                     );
+                    ip = ip.add(size_of::<OpLessEqual>());
+
                     continue;
                 }
-
-                if a.is_double() || b.is_double() {
-                    let lhs = a.get_number();
-                    let rhs = b.get_number();
-
-                    sp_set!(less_equal.dst(), Value::encode_bool_value(lhs <= rhs));
-                    continue;
-                }
-
-                if !a.is_number() {
-                    wrong_type_argument_violation(
-                        thread,
-                        "<=",
-                        0,
-                        "number",
-                        a,
-                        2,
-                        &[&mut a, &mut b],
-                    );
-                }
-
-                if !b.is_number() {
-                    wrong_type_argument_violation(
-                        thread,
-                        "<=",
-                        1,
-                        "number",
-                        b,
-                        2,
-                        &[&mut a, &mut b],
-                    );
-                }
+                sync_ip!();
+                sync_sp!();
+                let ord = scm_n_compare(thread, a, b, "<=");
+                sp_set!(
+                    less_equal.dst(),
+                    Value::encode_bool_value(ord != Ordering::Greater)
+                );
+                ip = ip.add(size_of::<OpLessEqual>());
             }
 
             OP_GREATER_EQUAL => {
                 let greater_equal = OpGreaterEqual::read(ip);
-                ip = ip.add(size_of::<OpGreaterEqual>());
 
-                let mut a = sp_ref!(greater_equal.a());
-                let mut b = sp_ref!(greater_equal.b());
+                let a = sp_ref!(greater_equal.a());
+                let b = sp_ref!(greater_equal.b());
 
                 if a.is_int32() && b.is_int32() {
                     sp_set!(
                         greater_equal.dst(),
                         Value::encode_bool_value(a.get_int32() >= b.get_int32())
                     );
+                    ip = ip.add(size_of::<OpGreaterEqual>());
                     continue;
                 }
+                sync_ip!();
+                sync_sp!();
+                let ord = scm_n_compare(thread, a, b, ">=");
 
-                if a.is_double() || b.is_double() {
-                    let lhs = a.get_number();
-                    let rhs = b.get_number();
+                sp_set!(
+                    greater_equal.dst(),
+                    Value::encode_bool_value(ord != Ordering::Less)
+                );
 
-                    sp_set!(greater_equal.dst(), Value::encode_bool_value(lhs >= rhs));
-                    continue;
-                }
-
-                if !a.is_number() {
-                    wrong_type_argument_violation(
-                        thread,
-                        ">=",
-                        0,
-                        "number",
-                        a,
-                        2,
-                        &[&mut a, &mut b],
-                    );
-                }
-
-                if !b.is_number() {
-                    wrong_type_argument_violation(
-                        thread,
-                        ">=",
-                        1,
-                        "number",
-                        b,
-                        2,
-                        &[&mut a, &mut b],
-                    );
-                }
+                ip = ip.add(size_of::<OpGreaterEqual>());
             }
             OP_NUMERICALLY_EQUAL => {
                 let numerically_equal = OpNumericallyEqual::read(ip);
-                ip = ip.add(size_of::<OpNumericallyEqual>());
 
-                let mut a = sp_ref!(numerically_equal.a());
-                let mut b = sp_ref!(numerically_equal.b());
+                let a = sp_ref!(numerically_equal.a());
+                let b = sp_ref!(numerically_equal.b());
 
                 if a.is_int32() && b.is_int32() {
                     sp_set!(
                         numerically_equal.dst(),
                         Value::encode_bool_value(a.get_int32() == b.get_int32())
                     );
+                    ip = ip.add(size_of::<OpNumericallyEqual>());
                     continue;
                 }
 
-                if a.is_double() || b.is_double() {
-                    let lhs = a.get_number();
-                    let rhs = b.get_number();
+                sync_ip!();
+                sync_sp!();
+                let ord = scm_n_compare(thread, a, b, "==");
 
-                    sp_set!(
-                        numerically_equal.dst(),
-                        Value::encode_bool_value(lhs == rhs)
-                    );
-                    continue;
-                }
+                sp_set!(
+                    numerically_equal.dst(),
+                    Value::encode_bool_value(ord == Ordering::Equal)
+                );
 
-                if !a.is_number() {
-                    wrong_type_argument_violation(
-                        thread,
-                        "==",
-                        0,
-                        "number",
-                        a,
-                        2,
-                        &[&mut a, &mut b],
-                    );
-                }
-
-                if !b.is_number() {
-                    wrong_type_argument_violation(
-                        thread,
-                        "==",
-                        1,
-                        "number",
-                        b,
-                        2,
-                        &[&mut a, &mut b],
-                    );
-                }
+                ip = ip.add(size_of::<OpNumericallyEqual>());
             }
 
             OP_EQ => {

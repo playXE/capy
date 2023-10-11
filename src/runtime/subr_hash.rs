@@ -120,7 +120,7 @@ extern "C-unwind" fn make_core_hashtable(
                     );
                 }
             } else {
-                wrong_type_argument_violation(
+                wrong_type_argument_violation::<{ usize::MAX }>(
                     thread,
                     "make-core-hashtable",
                     1,
@@ -136,7 +136,7 @@ extern "C-unwind" fn make_core_hashtable(
             if size.is_int32() {
                 nsize = lookup_hashtable_size(size.get_int32() as _);
             } else {
-                wrong_type_argument_violation(
+                wrong_type_argument_violation::<{ usize::MAX }>(
                     thread,
                     "make-core-hashtable",
                     1,
@@ -165,7 +165,7 @@ extern "C-unwind" fn make_core_hashtable(
         }
     }
 
-    wrong_type_argument_violation(
+    wrong_type_argument_violation::<{ usize::MAX }>(
         thread,
         "make-core-hashtable",
         0,
@@ -190,7 +190,7 @@ extern "C-unwind" fn core_hashtable_mutable_p(_thread: &mut Thread, obj: &mut Va
     } else if typ == TypeId::WeakHashTable {
         Value::encode_bool_value(!obj.cast_as::<WeakHashtable>().immutable)
     } else {
-        wrong_type_argument_violation(
+        wrong_type_argument_violation::<{ usize::MAX }>(
             _thread,
             "core-hashtable-mutable?",
             0,
@@ -259,7 +259,7 @@ extern "C-unwind" fn core_hashtable_equivalence_function(
 
         let vector = ht.handlers;
 
-        match scm_call_n(
+        match scm_call_n::<false>(
             thread,
             scm_vector_ref(vector, SCM_HASHTABLE_HANDLER_EQUIV_FUNC as _),
             &[orig],
@@ -270,7 +270,7 @@ extern "C-unwind" fn core_hashtable_equivalence_function(
             }
         }
     } else {
-        wrong_type_argument_violation(
+        wrong_type_argument_violation::<{ usize::MAX }>(
             thread,
             "core-hashtable-equivalence-function",
             0,
@@ -298,7 +298,7 @@ extern "C-unwind" fn core_hashtable_hash_function(thread: &mut Thread, ht: &mut 
 
         let vector = hash.handlers;
 
-        match scm_call_n(
+        match scm_call_n::<false>(
             thread,
             scm_vector_ref(vector, SCM_HASHTABLE_HANDLER_HASH_FUNC as _),
             &[],
@@ -309,7 +309,7 @@ extern "C-unwind" fn core_hashtable_hash_function(thread: &mut Thread, ht: &mut 
             }
         }
     } else {
-        wrong_type_argument_violation(
+        wrong_type_argument_violation::<{ usize::MAX }>(
             thread,
             "core-hashtable-hash-function",
             0,
@@ -337,7 +337,7 @@ extern "C-unwind" fn core_hashtable_set(
                 hash.lock.lock(true);
                 if hash.typ == HashTableType::String && !key.is_string() {
                     hash.lock.unlock();
-                    wrong_type_argument_violation(
+                    wrong_type_argument_violation::<{ usize::MAX }>(
                         thread,
                         "core-hashtable-set!",
                         1,
@@ -379,7 +379,7 @@ extern "C-unwind" fn core_hashtable_set(
         hash.lock.unlock();
         Value::encode_undefined_value()
     } else {
-        wrong_type_argument_violation(
+        wrong_type_argument_violation::<{ usize::MAX }>(
             thread,
             "core-hashtable-set!",
             0,
@@ -418,7 +418,7 @@ extern "C-unwind" fn core_hashtable_ref(
             }
         }
     } else {
-        wrong_type_argument_violation(
+        wrong_type_argument_violation::<{ usize::MAX }>(
             thread,
             "core-hashtable-ref",
             0,
@@ -476,7 +476,7 @@ extern "C-unwind" fn core_hashtable_delete(
         hash.lock.unlock();
         Value::encode_undefined_value()
     } else {
-        wrong_type_argument_violation(
+        wrong_type_argument_violation::<{ usize::MAX }>(
             thread,
             "core-hashtable-delete!",
             0,
@@ -501,7 +501,7 @@ extern "C-unwind" fn core_hashtable_clear(
         } else if nsize.is_int32() && nsize.get_int32() >= 0 {
             lookup_hashtable_size(nsize.get_int32() as u32)
         } else {
-            wrong_type_argument_violation(
+            wrong_type_argument_violation::<{ usize::MAX }>(
                 thread,
                 "core-hashtable-clear!",
                 1,
@@ -540,7 +540,7 @@ extern "C-unwind" fn core_hashtable_clear(
 
         Value::encode_undefined_value()
     } else {
-        wrong_type_argument_violation(
+        wrong_type_argument_violation::<{ usize::MAX }>(
             thread,
             "core-hashtable-clear!",
             0,
@@ -570,7 +570,7 @@ extern "C-unwind" fn core_hashtable_size(thread: &mut Thread, ht: &mut Value) ->
             Value::encode_int32(size as _)
         }
     } else {
-        wrong_type_argument_violation(
+        wrong_type_argument_violation::<{ usize::MAX }>(
             thread,
             "core-hashtable-size",
             0,
@@ -604,7 +604,7 @@ extern "C-unwind" fn core_hashtable_contains_p(
             Value::encode_bool_value(!val.is_undefined())
         }
     } else {
-        wrong_type_argument_violation(
+        wrong_type_argument_violation::<{ usize::MAX }>(
             thread,
             "core-hashtable-contains?",
             0,
@@ -648,7 +648,7 @@ extern "C-unwind" fn core_hashtable_copy(
             new_copy
         }
     } else {
-        wrong_type_argument_violation(
+        wrong_type_argument_violation::<{ usize::MAX }>(
             thread,
             "core-hashtable-copy",
             0,
@@ -717,7 +717,7 @@ extern "C-unwind" fn core_hashtable_to_alist(thread: &mut Thread, ht: &mut Value
             ans
         }
     } else {
-        wrong_type_argument_violation(
+        wrong_type_argument_violation::<{ usize::MAX }>(
             thread,
             "core-hashtable->alist",
             0,

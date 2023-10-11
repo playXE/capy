@@ -161,7 +161,15 @@ extern "C-unwind" fn pollinput(_: &mut Thread, fd: &mut Value) -> Value {
 
 extern "C-unwind" fn unlink(thread: &mut Thread, filename: &mut Value) -> Value {
     if !filename.is_string() {
-        wrong_type_argument_violation(thread, "unlink", 0, "string", *filename, 1, &[filename])
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "unlink",
+            0,
+            "string",
+            *filename,
+            1,
+            &[filename],
+        )
     }
     let filename = scm_string_str(*filename);
     let cstr = std::ffi::CString::new(filename).unwrap();
@@ -171,10 +179,26 @@ extern "C-unwind" fn unlink(thread: &mut Thread, filename: &mut Value) -> Value 
 
 extern "C-unwind" fn rename(thread: &mut Thread, old: &mut Value, new: &mut Value) -> Value {
     if !old.is_string() {
-        wrong_type_argument_violation(thread, "rename", 0, "string", *old, 1, &[old, new])
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "rename",
+            0,
+            "string",
+            *old,
+            1,
+            &[old, new],
+        )
     }
     if !new.is_string() {
-        wrong_type_argument_violation(thread, "rename", 1, "string", *new, 1, &[old, new])
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "rename",
+            1,
+            "string",
+            *new,
+            1,
+            &[old, new],
+        )
     }
     let old = scm_string_str(*old);
     let new = scm_string_str(*new);
@@ -187,11 +211,27 @@ extern "C-unwind" fn rename(thread: &mut Thread, old: &mut Value, new: &mut Valu
 // `(mtime <filename> <vector len=6>)`
 extern "C-unwind" fn mtime(thread: &mut Thread, filename: &mut Value, vec: &mut Value) -> Value {
     if !filename.is_string() {
-        wrong_type_argument_violation(thread, "mtime", 0, "string", *filename, 1, &[filename, vec])
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "mtime",
+            0,
+            "string",
+            *filename,
+            1,
+            &[filename, vec],
+        )
     }
 
     if !vec.is_vector() {
-        wrong_type_argument_violation(thread, "mtime", 1, "vector", *vec, 1, &[filename, vec])
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "mtime",
+            1,
+            "vector",
+            *vec,
+            1,
+            &[filename, vec],
+        )
     }
 
     let stats = match std::fs::metadata(scm_string_str(*filename)) {
@@ -224,7 +264,7 @@ extern "C-unwind" fn mtime(thread: &mut Thread, filename: &mut Value, vec: &mut 
 
 extern "C-unwind" fn file_exists_p(thread: &mut Thread, filename: &mut Value) -> Value {
     if !filename.is_string() {
-        wrong_type_argument_violation(
+        wrong_type_argument_violation::<{ usize::MAX }>(
             thread,
             "file-exists?",
             0,
@@ -243,7 +283,7 @@ extern "C-unwind" fn file_exists_p(thread: &mut Thread, filename: &mut Value) ->
 
 extern "C-unwind" fn relative_path_string_p(thread: &mut Thread, path: &mut Value) -> Value {
     if !path.is_string() {
-        wrong_type_argument_violation(
+        wrong_type_argument_violation::<{ usize::MAX }>(
             thread,
             "relative-path-string?",
             0,
@@ -262,7 +302,7 @@ extern "C-unwind" fn relative_path_string_p(thread: &mut Thread, path: &mut Valu
 
 extern "C-unwind" fn absolute_path_string_p(thread: &mut Thread, path: &mut Value) -> Value {
     if !path.is_string() {
-        wrong_type_argument_violation(
+        wrong_type_argument_violation::<{ usize::MAX }>(
             thread,
             "absolute-path-string?",
             0,
