@@ -848,6 +848,8 @@ impl LLIntGenerator {
     }
 
     pub fn llint_entry(&mut self) {
+        let label = self.label();
+        self.llint_entry = label;
         self.function_prologue();
         // allocate slot for `nlocals` from `OP_CALL`
         self.reset_frame(ARGUMENT_GPR2);
@@ -863,15 +865,25 @@ impl LLIntGenerator {
 
     pub fn op_receive(&mut self) {
         let proc = T0;
-        self.load16(Address::new(PC, offset_of!(OpReceive, proc) as i32 + 1), proc);
+        self.load16(
+            Address::new(PC, offset_of!(OpReceive, proc) as i32 + 1),
+            proc,
+        );
         self.frame_locals_count(T1);
 
         let check = self.branch64(RelationalCondition::LessThanOrEqual, T1, T0);
         self.load_fp_slot(proc, T1);
         self.load16(Address::new(PC, offset_of!(OpReceive, dest) as i32 + 1), T0);
         self.store_fp_slot(T1, T0, T0);
-        self.load16(Address::new(PC, offset_of!(OpReceive, nlocals) as i32 + 1), T0);
+        self.load16(
+            Address::new(PC, offset_of!(OpReceive, nlocals) as i32 + 1),
+            T0,
+        );
         self.reset_frame(T0);
+    }
 
+    pub fn op_ret(&mut self) {
+        self.function_epilogue();
+        self.masm.ret();
     }
 }

@@ -15,7 +15,7 @@ use mmtk::{
         Address, ObjectReference,
     },
     vm::{
-        edge_shape::{Edge, SimpleEdge, UnimplementedMemorySlice},
+        edge_shape::{SimpleEdge, UnimplementedMemorySlice},
         *,
     },
     AllocationSemantics, Mutator, MutatorContext,
@@ -24,6 +24,7 @@ use mmtk::{
 use crate::{
     interpreter::stackframe::StackElement,
     runtime::{
+        arith::ScmBigInteger,
         control::{ScmContinuation, VMCont},
         environment::ScmEnvironment,
         hashtable::{
@@ -257,6 +258,13 @@ impl ObjectModel<CapyVM> for ScmObjectModel {
 
                     base + reference.cast_as::<VMCont>().stack_size * size_of::<StackElement>()
                 }
+                TypeId::Bignum => {
+                    let base = size_of::<ScmBigInteger>();
+                    base + (reference.cast_as::<ScmBigInteger>().count as usize - 1)
+                        * size_of::<u32>()
+                }
+                TypeId::Rational => size_of::<ScmRational>(),
+                TypeId::Complex => size_of::<ScmComplex>(),
                 TypeId::Continuation => size_of::<ScmContinuation>(),
                 TypeId::WeakMapping => size_of::<ScmWeakMapping>(),
                 _ => unreachable!(),
@@ -483,11 +491,10 @@ impl Scanning<CapyVM> for ScmScanning {
         edge_visitor: &mut EV,
     ) {
         let mut reference = ScmCellRef(unsafe { transmute(object) });
-        println!("SCAN 0x{:x}", reference.0);
         match reference.header().type_id() {
             TypeId::Pair => {
                 let pair = reference.cast_as::<ScmPair>();
-                
+
                 if pair.car.is_object() {
                     let edge = ObjEdge::from_address(Address::from_mut_ptr(&mut pair.car));
                     edge_visitor.visit_edge(edge);
@@ -653,10 +660,6 @@ impl Scanning<CapyVM> for ScmScanning {
                 if !weakhashtable.datum.is_null() {
                     let datum_edge =
                         ObjEdge::from_address(Address::from_mut_ptr(&mut weakhashtable.datum));
-                    println!(
-                        "datum {:p}",
-                        datum_edge.load().to_raw_address().to_ptr::<u8>()
-                    );
                     edge_visitor.visit_edge(datum_edge);
 
                     unsafe {
@@ -666,14 +669,11 @@ impl Scanning<CapyVM> for ScmScanning {
                                 continue;
                             }
                             let key = elt.cast_as::<ScmWeakMapping>().key;
-                            assert!(key.is_object() && mmtk::memory_manager::is_in_mmtk_spaces::<CapyVM>(transmute(key)));
-                            println!(
-                                "will trace weakhashtable entry {}: {:p} {:x}->{:x}",
-                                i,
-                                elt.get_raw() as *mut u8,
-                                key.get_raw(),
-                                elt.cast_as::<ScmWeakMapping>().value.get_raw()
-                                
+                            assert!(
+                                key.is_object()
+                                    && mmtk::memory_manager::is_in_mmtk_spaces::<CapyVM>(
+                                        transmute(key)
+                                    )
                             );
                         }
                     }
@@ -685,14 +685,31 @@ impl Scanning<CapyVM> for ScmScanning {
                     .push(object);
             }
 
-            TypeId::String => {
-                println!(
-                    "scan string {:p}: {}",
-                    object.to_raw_address().to_ptr::<u8>(),
-                    unsafe { transmute::<_, Value>(object) }
-                );
+            TypeId::Rational => {
+                let rat = reference.cast_as::<ScmRational>();
+                if rat.numerator.is_object() {
+                    let edge = ObjEdge::from_address(Address::from_mut_ptr(&mut rat.numerator));
+                    edge_visitor.visit_edge(edge);
+                }
+
+                if rat.denominator.is_object() {
+                    let edge = ObjEdge::from_address(Address::from_mut_ptr(&mut rat.denominator));
+                    edge_visitor.visit_edge(edge);
+                }
             }
 
+            TypeId::Complex => {
+                let cmplx = reference.cast_as::<ScmComplex>();
+                if cmplx.real.is_object() {
+                    let edge = ObjEdge::from_address(Address::from_mut_ptr(&mut cmplx.real));
+                    edge_visitor.visit_edge(edge);
+                }
+
+                if cmplx.imag.is_object() {
+                    let edge = ObjEdge::from_address(Address::from_mut_ptr(&mut cmplx.imag));
+                    edge_visitor.visit_edge(edge);
+                }
+            }
             _ => (),
         }
     }
@@ -749,9 +766,8 @@ impl Scanning<CapyVM> for ScmScanning {
         tracer_context.with_tracer(worker, |tracer| {
             while let Some(mapping_ref) = weaks.pop() {
                 unsafe {
-                    let mapping = &mut *mapping_ref
-                        .get_forwarded_object()
-                        .unwrap_or(mapping_ref)
+                    let mapping = &mut *tracer
+                        .trace_object(mapping_ref)
                         .to_address::<CapyVM>()
                         .to_mut_ptr::<ScmWeakMapping>();
                     debug_assert!(mapping.key.is_object());
@@ -759,12 +775,13 @@ impl Scanning<CapyVM> for ScmScanning {
                     let keyref = ObjectReference::from_address::<CapyVM>(key);
 
                     if keyref.is_reachable() {
-                        println!("key {:p} is reachable, forwarded to {:?}", key.to_ptr::<u8>(), keyref.get_forwarded_object());
+                        println!(
+                            "key {:p} is reachable, forwarded to {:?}",
+                            key.to_ptr::<u8>(),
+                            keyref.get_forwarded_object()
+                        );
                         mapping.key = Value::encode_object_value(ScmCellRef::from_address(
-                            keyref
-                                .get_forwarded_object()
-                                .unwrap_or(keyref)
-                                .to_raw_address(),
+                            tracer.trace_object(keyref).to_address::<CapyVM>(),
                         ));
                         //println!("{}", mapping.key);
                         enqueued = true;

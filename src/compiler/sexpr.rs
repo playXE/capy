@@ -795,7 +795,7 @@ pub fn r7rs_expr_to_sexpr<I: Interner>(
         }
         Expr::Null => Sexpr::Null,
         Expr::Symbol(x) => Sexpr::Symbol(scm_intern(interner.description(x))),
-
+        Expr::BigInt(_) => panic!("bigint"),
         _ => todo!(),
     }
 }

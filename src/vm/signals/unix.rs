@@ -24,7 +24,7 @@ pub unsafe extern "C" fn handle_sigsegv(
 ) -> bool {
     if safepoint::addr_in_safepoint((*info).si_addr() as _) {
         let thread = Thread::current();
-       
+
         log::trace!(target: "gc-safepoint", "{:?} reached safepoint", std::thread::current().id());
         // basically spin-loop that waits for safepoint to be disabled
         thread.enter_safepoint();

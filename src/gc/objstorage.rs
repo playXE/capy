@@ -167,8 +167,10 @@ impl Block {
         1 << index
     }
 
-    pub fn iterate<F>(&mut self, f: &mut F) -> bool 
-    where F: FnMut(*mut Value) -> bool {
+    pub fn iterate<F>(&mut self, f: &mut F) -> bool
+    where
+        F: FnMut(*mut Value) -> bool,
+    {
         let mut bitmask = self.allocated_bitmask();
         while bitmask != 0 {
             let index = bitmask.trailing_zeros() as usize;
@@ -816,7 +818,6 @@ impl ObjStorageInner {
             concurrent_iteration_count: AtomicUsize::new(0),
         }
     }
-
 }
 
 unsafe fn with_active_array<T>(
@@ -874,7 +875,6 @@ impl ObjHandle {
         unsafe { &self.inner.as_ref().storage }
     }
 }
-
 
 impl Clone for ObjHandle {
     fn clone(&self) -> Self {
@@ -951,9 +951,7 @@ impl BasicParState {
             concurrent,
             num_dead: AtomicUsize::new(0),
         };
-        this.block_count = unsafe {
-            (*this.active_array).block_count_acquire()
-        };
+        this.block_count = unsafe { (*this.active_array).block_count_acquire() };
         this.update_concurrent_iteration_count(true);
         this
     }
@@ -1031,11 +1029,12 @@ impl BasicParState {
     }
 
     pub fn iterate<F>(&self, mut f: F)
-    where F: FnMut(*mut Value)
+    where
+        F: FnMut(*mut Value),
     {
         let mut f = |val: *mut Value| {
             f(val);
-            true 
+            true
         };
 
         let mut data = IterationData {
@@ -1047,7 +1046,7 @@ impl BasicParState {
         while self.claim_next_segment(&mut data) {
             let mut i = data.segment_start;
             loop {
-                let block = unsafe { *(*self.active_array).block_ptr(i)};
+                let block = unsafe { *(*self.active_array).block_ptr(i) };
                 unsafe {
                     (*block).iterate(&mut f);
                 }
@@ -1058,7 +1057,7 @@ impl BasicParState {
                 }
             }
         }
-    } 
+    }
 }
 
 impl Drop for BasicParState {
@@ -1079,7 +1078,8 @@ impl<const CONCURRENT: bool> ParState<CONCURRENT> {
     }
 
     pub fn iterate<F>(&self, f: F)
-    where F: FnMut(*mut Value)
+    where
+        F: FnMut(*mut Value),
     {
         self.basic_state.iterate(f);
     }

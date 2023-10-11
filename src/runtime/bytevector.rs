@@ -1,9 +1,12 @@
-use crate::{vm::thread::Thread, gc_protect, runtime::list::scm_cons};
+use crate::{gc_protect, runtime::list::scm_cons, vm::thread::Thread};
 
 use super::{
     control::{invalid_argument_violation, wrong_type_argument_violation},
     gsubr::{scm_define_subr, Subr},
-    object::{scm_bytevector_as_slice_mut, scm_symbol_str, scm_bytevector_length, scm_bytevector_as_slice, scm_string_str, scm_bytevector_ref, scm_set_cdr},
+    object::{
+        scm_bytevector_as_slice, scm_bytevector_as_slice_mut, scm_bytevector_length,
+        scm_bytevector_ref, scm_set_cdr, scm_string_str, scm_symbol_str,
+    },
     symbol::scm_intern,
     value::Value,
 };
@@ -291,12 +294,7 @@ extern "C-unwind" fn bytevector_s8_ref(
     bvector: &mut Value,
     offset: &mut Value,
 ) -> Value {
-    let param = NativeAccessorParam::new(
-        1,
-        "bytevector-s8-ref",
-        thread,
-        &[bvector, offset],
-    );
+    let param = NativeAccessorParam::new(1, "bytevector-s8-ref", thread, &[bvector, offset]);
     let bytes = param.bytes;
 
     unsafe { Value::encode_int32(bytes.read() as i8 as i32) }
@@ -307,12 +305,7 @@ extern "C-unwind" fn bytevector_u8_ref(
     bvector: &mut Value,
     offset: &mut Value,
 ) -> Value {
-    let param = NativeAccessorParam::new(
-        1,
-        "bytevector-u8-ref",
-        thread,
-        &[bvector, offset],
-    );
+    let param = NativeAccessorParam::new(1, "bytevector-u8-ref", thread, &[bvector, offset]);
     let bytes = param.bytes;
 
     unsafe { Value::encode_int32(bytes.read() as u8 as i32) }
@@ -372,7 +365,6 @@ extern "C-unwind" fn bytevector_u8_set(
     value: &mut Value,
     endianess: &mut Value,
 ) -> Value {
-
     let param = NativeMutatorParam::new(
         1,
         "bytevector-u8-set!",
@@ -1369,7 +1361,8 @@ extern "C-unwind" fn bytevector_destructive_copy(
             libc::memmove(
                 bv2s.as_mut_ptr().add(dst as usize).cast(),
                 bv1s.as_mut_ptr().add(src as usize).cast(),
-                sz as usize);
+                sz as usize,
+            );
         }
         return Value::encode_undefined_value();
     } else {
@@ -1383,21 +1376,12 @@ extern "C-unwind" fn bytevector_destructive_copy(
             &[bv1, source, bv2, target, size],
         );
     }
-
 }
 
 /// `(bytevector-copy <source>) -> <bytevector>`
 extern "C-unwind" fn bytevector_copy(thread: &mut Thread, bv: &mut Value) -> Value {
     if !bv.is_bytevector() {
-        wrong_type_argument_violation(
-            thread,
-            "bytevector-copy",
-            0,
-            "bytevector",
-            *bv,
-            1,
-            &[bv],
-        );
+        wrong_type_argument_violation(thread, "bytevector-copy", 0, "bytevector", *bv, 1, &[bv]);
     }
 
     let bvs = scm_bytevector_as_slice(*bv);
@@ -1430,7 +1414,6 @@ extern "C-unwind" fn utf8_string(thread: &mut Thread, bvector: &mut Value) -> Va
     }
 }
 
-
 /// `string->utf8/nul
 extern "C-unwind" fn string_utf8_nul(thread: &mut Thread, s: &mut Value) -> Value {
     if s.is_string() {
@@ -1440,15 +1423,7 @@ extern "C-unwind" fn string_utf8_nul(thread: &mut Thread, s: &mut Value) -> Valu
         bvs.copy_from_slice(scm_string_str(*s).as_bytes());
         bv
     } else {
-        wrong_type_argument_violation(
-            thread,
-            "string->utf8/nul",
-            0,
-            "string",
-            *s,
-            1,
-            &[s],
-        );
+        wrong_type_argument_violation(thread, "string->utf8/nul", 0, "string", *s, 1, &[s]);
     }
 }
 
@@ -1459,15 +1434,7 @@ extern "C-unwind" fn string_utf8(thread: &mut Thread, s: &mut Value) -> Value {
         bvs.copy_from_slice(scm_string_str(*s).as_bytes());
         bv
     } else {
-        wrong_type_argument_violation(
-            thread,
-            "string->utf8",
-            0,
-            "string",
-            *s,
-            1,
-            &[s],
-        );
+        wrong_type_argument_violation(thread, "string->utf8", 0, "string", *s, 1, &[s]);
     }
 }
 
@@ -1484,15 +1451,7 @@ extern "C-unwind" fn bytevector_to_list(thread: &mut Thread, bv: &mut Value) -> 
 
         list
     } else {
-        wrong_type_argument_violation(
-            thread,
-            "bytevector->list",
-            0,
-            "bytevector",
-            *bv,
-            1,
-            &[bv],
-        );
+        wrong_type_argument_violation(thread, "bytevector->list", 0, "bytevector", *bv, 1, &[bv]);
     }
 }
 
@@ -1579,8 +1538,32 @@ pub(crate) fn init() {
         Subr::F3(bytevector_u16_native_set),
     );
 
-    scm_define_subr("bytevector-u16-native-set!", 3, 0, 0, Subr::F3(bytevector_u16_native_set));
-    scm_define_subr("bytevector-s16-native-set!", 3, 0, 0, Subr::F3(bytevector_s16_native_set));
-    scm_define_subr("bytevector-u32-native-set!", 3, 0, 0, Subr::F3(bytevector_u32_native_set));
-    scm_define_subr("bytevector-s32-native-set!", 3, 0, 0, Subr::F3(bytevector_s32_native_set));
+    scm_define_subr(
+        "bytevector-u16-native-set!",
+        3,
+        0,
+        0,
+        Subr::F3(bytevector_u16_native_set),
+    );
+    scm_define_subr(
+        "bytevector-s16-native-set!",
+        3,
+        0,
+        0,
+        Subr::F3(bytevector_s16_native_set),
+    );
+    scm_define_subr(
+        "bytevector-u32-native-set!",
+        3,
+        0,
+        0,
+        Subr::F3(bytevector_u32_native_set),
+    );
+    scm_define_subr(
+        "bytevector-s32-native-set!",
+        3,
+        0,
+        0,
+        Subr::F3(bytevector_s32_native_set),
+    );
 }

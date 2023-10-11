@@ -112,20 +112,14 @@ macro_rules! for_each_opcode {
             (op_neg, "neg", { dst: u16, src: u16 })
             (op_div, "div", { dst: u16, a: u16, b: u16 })
             (op_quotient, "quotient", { dst: u16, a: u16, b: u16 })
-            (op_quotient_imm, "quotient/immediate", { dst: u16, a: u16, b: i32 })
+            (op_remainder, "remainder", { dst: u16, a: u16, b: i32 })
             (op_mul, "mul", { dst: u16, a: u16, b: u16 })
             (op_mul_imm, "mul/immediate", { dst: u16, a: u16, b: i32 })
-            (op_mod, "mod", { dst: u16, a: u16, b: u16 })
-            (op_mod_imm, "mod/immediate", { dst: u16, a: u16, b: i32 })
             (op_bitand, "bitand", { dst: u16, a: u16, b: u16 })
-            (op_bitand_imm, "bitand/immediate", { dst: u16, a: u16, b: i32 })
             (op_bitor, "bitor", { dst: u16, a: u16, b: u16 })
-            (op_bitor_imm, "bitor/immediate", { dst: u16, a: u16, b: i32 })
             (op_bitxor, "bitxor", { dst: u16, a: u16, b: u16 })
-            (op_bitxor_imm, "bitxor/immediate", { dst: u16, a: u16, b: i32 })
             (op_bitnot, "bitnot", { dst: u16, src: u16 })
             (op_arithmetic_shift, "arithmetic-shift", { dst: u16, a: u16, b: u16 })
-            (op_arithmetic_shift_imm, "arithmetic-shift/immediate", { dst: u16, a: u16, b: i32 })
             (op_less, "<", { dst: u16, a: u16, b: u16 })
             (op_less_imm, "</immediate", { dst: u16, a: u16, b: i32 })
             (op_greater, ">", { dst: u16, a: u16, b: u16 })
@@ -427,7 +421,10 @@ pub fn disassemble_program(value: Value) {
             eprintln!("<no data>");
         } else {
             let offset = vcode.add(1).cast::<i32>().read();
-            let data = vcode.add(5).offset(offset as isize).cast::<JITFunctionData>();
+            let data = vcode
+                .add(5)
+                .offset(offset as isize)
+                .cast::<JITFunctionData>();
 
             let start = (*data).start;
             let end = (*data).end;

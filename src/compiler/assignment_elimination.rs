@@ -205,10 +205,7 @@ fn assignment_elimination_rec(mut tree: P<IForm>) -> P<IForm> {
         }
 
         IForm::LetValues(vals) => {
-            let mutated = vals
-                .lvars
-                .iter()
-                .filter(|lvar| !lvar.is_immutable());
+            let mutated = vals.lvars.iter().filter(|lvar| !lvar.is_immutable());
 
             let (mut lvars, mut inits) = (vec![], vec![]);
             let mut substitutes = HashMap::new();
@@ -235,7 +232,7 @@ fn assignment_elimination_rec(mut tree: P<IForm>) -> P<IForm> {
                 typ: LetType::Let,
                 lvars,
                 inits,
-                body
+                body,
             }));
             vals.init = assignment_elimination_rec(vals.init.clone());
             vals.body = let_iform;

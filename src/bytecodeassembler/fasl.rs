@@ -138,7 +138,6 @@ impl<'a, W: std::io::Write> FASLPrinter<'a, W> {
                 let id = *self.lites.get(&obj).unwrap();
                 self.emit_u8(TAG_LOOKUP)?;
                 self.emit_u32(id as u32)?;
-                
             }
 
             Sexpr::Fixnum(fix) => {

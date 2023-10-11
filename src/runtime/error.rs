@@ -132,5 +132,3 @@ macro_rules! raise_exn {
         std::hint::black_box($crate::runtime::error::finish_exn_impl::<$t>($crate::runtime::error::Exception::$id, $crate::runtime::error::EXN_TABLE[$crate::runtime::error::Exception::$id as usize].args, $eargs, format!($msg, $($arg),*), None, false))
     }};
 }
-
-

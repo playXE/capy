@@ -91,6 +91,31 @@ impl ShadowStack {
     }
 
     #[inline(always)]
+    pub fn push_many(&mut self, values: &[Value]) {
+        unsafe {
+            if unlikely(self.root_stack_top.add(values.len()) >= self.root_stack_limit) {
+                self.expand();
+            }
+            std::ptr::copy_nonoverlapping(values.as_ptr(), self.root_stack_top, values.len());
+            self.root_stack_top = self.root_stack_top.add(values.len());
+        }
+    }
+
+    #[inline(always)]
+    pub fn pop_many<const N: usize>(&mut self) -> [Value; N] {
+        unsafe {
+            let mut result = std::mem::MaybeUninit::<[Value; N]>::uninit();
+            std::ptr::copy_nonoverlapping(
+                self.root_stack_top.sub(N),
+                result.as_mut_ptr() as *mut Value,
+                N,
+            );
+            self.root_stack_top = self.root_stack_top.sub(N);
+            result.assume_init()
+        }
+    }
+
+    #[inline(always)]
     pub fn pop_to_restore(&mut self) -> Value {
         unsafe {
             self.root_stack_top = self.root_stack_top.sub(1);

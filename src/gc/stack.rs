@@ -1,6 +1,5 @@
 use std::ptr::{null, null_mut};
 
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct StackBounds {
     pub origin: *mut u8,
@@ -151,12 +150,9 @@ fn thread_self() -> u64 {
     }
 }
 
-
 #[inline(never)]
 pub fn approximate_stack_pointer() -> *const *const u8 {
     let mut x: *const *const u8 = null();
     x = &x as *const *const *const u8 as *const *const u8;
     x
 }
-
-

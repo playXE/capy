@@ -16,7 +16,7 @@ use crate::{
 };
 
 use super::{
-    arith::scm_to_u32,
+    arith::{scm_to_u32, ScmBigInteger},
     control::{invalid_argument_violation, wrong_type_argument_violation},
     gsubr::{scm_define_subr, Subr},
     list::scm_length,
@@ -801,57 +801,6 @@ extern "C-unwind" fn integer_to_char(thread: &mut Thread, val: &mut Value) -> Va
     }
 }
 
-extern "C-unwind" fn number_to_string(
-    thread: &mut Thread,
-    val: &mut Value,
-    radix: &mut Value,
-) -> Value {
-    let radix = if radix.is_int32() {
-        radix.get_int32()
-    } else if radix.is_undefined() {
-        10
-    } else {
-        wrong_type_argument_violation(
-            thread,
-            "number->string",
-            1,
-            "integer",
-            *radix,
-            2,
-            &[val, radix],
-        )
-    };
-
-    if val.is_int32() {
-        let int = val.get_int32();
-        match radix {
-            10 => thread.make_string::<false>(&int.to_string()),
-            16 => thread.make_string::<false>(&format!("{:x}", int)),
-            8 => thread.make_string::<false>(&format!("{:o}", int)),
-            2 => thread.make_string::<false>(&format!("{:b}", int)),
-            _ => invalid_argument_violation(
-                thread,
-                "number->string",
-                "radix must be 2, 8, 10, or 16",
-                Value::encode_int32(radix),
-                1,
-                2,
-                &[val, &mut Value::encode_int32(radix)],
-            ),
-        }
-    } else {
-        wrong_type_argument_violation(
-            thread,
-            "number->string",
-            0,
-            "integer",
-            *val,
-            2,
-            &[val, &mut Value::encode_int32(radix)],
-        )
-    }
-}
-
 extern "C-unwind" fn char_to_integer(thread: &mut Thread, val: &mut Value) -> Value {
     if val.is_char() {
         let ch = val.get_char();
@@ -1045,7 +994,6 @@ pub(crate) fn init() {
     scm_define_subr("tuple-length", 1, 0, 0, Subr::F1(tuple_length));
     scm_define_subr("current-millis", 0, 0, 0, Subr::F0(current_millis));
     scm_define_subr("integer->char", 1, 0, 0, Subr::F1(integer_to_char));
-    scm_define_subr("number->string", 1, 1, 0, Subr::F2(number_to_string));
     scm_define_subr("char->integer", 1, 0, 0, Subr::F1(char_to_integer));
     scm_define_subr("char=?", 2, 0, 0, Subr::F2(char_eq_p));
     scm_define_subr(
@@ -1062,4 +1010,5 @@ pub(crate) fn init() {
     super::list::init();
     super::bytevector::init();
     super::fileio::init();
+    super::subr_arith::init_arith();
 }

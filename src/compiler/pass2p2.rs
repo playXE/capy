@@ -78,7 +78,6 @@ pub fn scan<const RESET_CALL: bool>(
                 scan::<RESET_CALL>(&P(lam), fs, bs, toplevel, labels);
             }
             scan::<RESET_CALL>(&fix.body, fs, bs, toplevel, labels);
-            
         }
 
         IForm::Call(_) => {
@@ -138,7 +137,6 @@ pub fn scan<const RESET_CALL: bool>(
             scan::<RESET_CALL>(&vals.body, fs, bs, toplevel, labels);
         }
 
-       
         _ => (),
     }
 }

@@ -123,6 +123,7 @@ dependencies = [
  "macroassembler",
  "mmtk",
  "murmur3",
+ "num",
  "num-traits",
  "once_cell",
  "parking_lot",

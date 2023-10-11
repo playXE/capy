@@ -531,7 +531,8 @@ pub fn copy_hashtable(thread: &mut Thread, mut ht: Value) -> Value {
     let hash = ht.cast_as::<ScmHashTable>();
     let nelts = hash.datum().capacity;
 
-    let ht2 = gc_protect!(thread => ht => thread.make_hashtable(lookup_hashtable_size(nelts), hash.typ));
+    let ht2 =
+        gc_protect!(thread => ht => thread.make_hashtable(lookup_hashtable_size(nelts), hash.typ));
 
     ht2.cast_as::<ScmHashTable>().lock.lock(true);
     let hash = ht.cast_as::<ScmHashTable>();
@@ -544,8 +545,12 @@ pub fn copy_hashtable(thread: &mut Thread, mut ht: Value) -> Value {
             if hash.datum().elts.as_ptr().add(i).read().is_undefined() {
                 continue;
             }
-            
-            put_hashtable::<false>(ht2, hash.datum().elts.as_ptr().add(i).read(), hash.datum().elts.as_ptr().add(i + nelts as usize).read());
+
+            put_hashtable::<false>(
+                ht2,
+                hash.datum().elts.as_ptr().add(i).read(),
+                hash.datum().elts.as_ptr().add(i + nelts as usize).read(),
+            );
         }
     }
 
@@ -650,8 +655,12 @@ pub(crate) fn inplace_rehash_weak_hashtable(ht: Value) {
                 continue;
             }
 
-            println!("{:x} {}",elt.get_raw(), elt.is_undefined());
-            assert!(elt.type_of() == TypeId::WeakMapping, "weakmapping expected but got {:?}", elt.type_of());
+            println!("{:x} {}", elt.get_raw(), elt.is_undefined());
+            assert!(
+                elt.type_of() == TypeId::WeakMapping,
+                "weakmapping expected but got {:?}",
+                elt.type_of()
+            );
             if !elt.cast_as::<ScmWeakMapping>().key.is_object() {
                 continue;
             }

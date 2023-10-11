@@ -202,9 +202,7 @@ fn compute_frame_size(lam: P<Lambda>) -> usize {
                 inits.max(body)
             }
 
-            IForm::Fix(fix) => {
-                fix.lhs.len() + visit(&fix.body)
-            }
+            IForm::Fix(fix) => fix.lhs.len() + visit(&fix.body),
 
             IForm::Label(label) => visit(&label.body),
             IForm::LetValues(letv) => visit(&letv.init).max(letv.lvars.len() + visit(&letv.body)),
@@ -340,11 +338,9 @@ pub fn compile_closure(
 
         let mut free_vars = frame_base;
         for (i, var) in free_lvars.iter().enumerate() {
-           
             free_vars = push_free_var(var.clone(), i as _, free_vars);
         }
 
-   
         let closure = push_closure(free_vars);
 
         let mut env = closure;
@@ -368,7 +364,7 @@ pub fn compile_closure(
         for var in free_vars.iter() {
             let loc = lookup_lexical(var.clone(), env);
             let idx = loc.idx;
-            
+
             if loc.closure {
                 asm.emit_load_free_variable(tmp0 as _, state.frame_size as u16 - 1, idx);
                 asm.emit_store_free_variable(dst as u16, tmp0 as _, free_idx);
@@ -654,7 +650,7 @@ pub fn compile_closure(
                     asm.emit_static_program(dst as _, label as _);
                 } else {
                     asm.emit_make_program(0, lam.free_lvars.len() as _, label as _);
-                    
+
                     init_free_vars(asm, 0, &lam.free_lvars, env, 1, state);
                     asm.emit_mov(dst as _, 0);
                 }
@@ -898,11 +894,7 @@ pub fn compile_closure(
                     let env = for_value(asm, &lset.value, env, state);
 
                     //if l.closure {
-                    asm.emit_store_free_variable(
-                        1 - state.frame_size as u16,
-                        env.idx as _,
-                        l.idx,
-                    );
+                    asm.emit_store_free_variable(1 - state.frame_size as u16, env.idx as _, l.idx);
                     //} else {
                     asm.emit_mov(l.idx as _, env.idx);
                     //}
@@ -1497,6 +1489,12 @@ static PRIMITIVES: Lazy<HashMap<&'static str, Primitive>> = Lazy::new(|| {
         ("number?", 1, false, true, asm, args => {
             asm.emit_is_number(args[0] as _, args[1] as _);
         })
+        /*("rational?", 1, false, true, asm, args => {
+            asm.emit_heap_tag_eq(args[0] as _, args[1] as _, TypeId::Rational as _);
+        })
+        ("complex?", 1, false, true, asm, args => {
+            asm.emit_heap_tag_eq(args[0] as _, args[1] as _, TypeId::Complex as _);
+        })*/
         ("car", 1, false, true, asm, args => {
             asm.emit_car(args[0] as _, args[1] as _)
         })

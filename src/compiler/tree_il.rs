@@ -743,8 +743,7 @@ pub fn il_to_core_form(thread: &mut Thread, iform: &IForm) -> Value {
             vec
         }
         IForm::Call(call) => {
-            let mut vec =
-                thread.make_vector::<false>(3, Value::encode_null_value());
+            let mut vec = thread.make_vector::<false>(3, Value::encode_null_value());
             scm_vector_set(vec, thread, 0, scm_intern("$call"));
             let proc = gc_protect!(thread => vec => il_to_core_form(thread, &*call.proc));
             scm_vector_set(vec, thread, 1, proc);
@@ -855,15 +854,21 @@ pub fn il_to_core_form(thread: &mut Thread, iform: &IForm) -> Value {
         }
 
         IForm::Let(var) => {
-            assert_eq!(var.typ, LetType::Let, "all recursive lets should be converted to <fix>");
+            assert_eq!(
+                var.typ,
+                LetType::Let,
+                "all recursive lets should be converted to <fix>"
+            );
 
             let mut vec = thread.make_vector::<false>(3, Value::encode_null_value());
             let mut args = gc_protect!(thread => vec => thread.make_vector::<false>(var.lvars.len(), Value::encode_null_value()));
-            
+
             for (i, (lvar, init)) in var.lvars.iter().zip(var.inits.iter()).enumerate() {
                 let mut binding = gc_protect!(thread => vec, args => thread.make_vector::<false>(2, Value::encode_null_value()));
-                let name = gc_protect!(thread => vec, args, binding => sexpr_to_value(thread, &lvar.name));
-                let init = gc_protect!(thread => vec, args, binding => il_to_core_form(thread, &*init));
+                let name =
+                    gc_protect!(thread => vec, args, binding => sexpr_to_value(thread, &lvar.name));
+                let init =
+                    gc_protect!(thread => vec, args, binding => il_to_core_form(thread, &*init));
                 scm_vector_set(binding, thread, 0, name);
                 scm_vector_set(binding, thread, 1, init);
                 scm_vector_set(args, thread, i as u32, binding);
@@ -881,13 +886,14 @@ pub fn il_to_core_form(thread: &mut Thread, iform: &IForm) -> Value {
             // (fix ([l0 (lambda ...)] [l1 (lambda ...)] ...) <body>)
             // =>
             // #(fix ([l0 (lambda ...)] [l1 (lambda ...)] ...) <body>)
-            
+
             let mut vec = thread.make_vector::<false>(3, Value::encode_null_value());
             let mut args = gc_protect!(thread => vec => thread.make_vector::<false>(fix.lhs.len(), Value::encode_null_value()));
 
             for (i, (lhs, rhs)) in fix.lhs.iter().zip(fix.rhs.iter()).enumerate() {
                 let mut binding = gc_protect!(thread => vec, args => thread.make_vector::<false>(2, Value::encode_null_value()));
-                let name = gc_protect!(thread => vec, args, binding => sexpr_to_value(thread, &lhs.name));
+                let name =
+                    gc_protect!(thread => vec, args, binding => sexpr_to_value(thread, &lhs.name));
                 let lambda = gc_protect!(thread => vec, args, binding => il_to_core_form(thread, &IForm::Lambda(rhs.clone())));
                 scm_vector_set(binding, thread, 0, name);
                 scm_vector_set(binding, thread, 1, lambda);

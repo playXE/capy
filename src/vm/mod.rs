@@ -16,7 +16,7 @@ use crate::{
         object::{CleanerType, ScmCellRef},
         subr_core,
         symbol::scm_intern,
-        value::Value
+        value::Value,
     },
 };
 
@@ -133,8 +133,8 @@ pub fn scm_init(mmtk: mmtk::MMTK<CapyVM>, plan: GCPlan) -> &'static mut VirtualM
         scm_virtual_machine().boot_continuation =
             Thread::current().make_program::<true>(BOOT_CONTINUATION_CODE.as_ptr(), 0);
 
-       // let modules = Thread::current().make_hashtable(128, HashTableType::Eq);
-       // scm_virtual_machine().module_obarray = modules;
+        // let modules = Thread::current().make_hashtable(128, HashTableType::Eq);
+        // scm_virtual_machine().module_obarray = modules;
         this.init_inherent();
         runtime::environment::init_env();
         intrinsics::init();

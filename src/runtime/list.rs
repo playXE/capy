@@ -1,9 +1,14 @@
 use crate::{
+    gc_protect,
     runtime::object::{scm_cdr, scm_set_cdr},
-    vm::thread::Thread, gc_protect,
+    vm::thread::Thread,
 };
 
-use super::{object::{scm_car, scm_set_car}, value::Value, gsubr::{scm_define_subr, Subr}};
+use super::{
+    gsubr::{scm_define_subr, Subr},
+    object::{scm_car, scm_set_car},
+    value::Value,
+};
 
 pub fn scm_assq(key: Value, list: Value) -> Value {
     let mut cell = list;
@@ -27,8 +32,6 @@ pub fn scm_assq(key: Value, list: Value) -> Value {
 
     Value::encode_bool_value(false)
 }
-
-
 
 pub fn scm_acons(mut caar: Value, mut cdar: Value, mut cdr: Value) -> Value {
     let thread = Thread::current();
@@ -80,7 +83,7 @@ pub fn scm_length(sx: Value) -> Option<usize> {
         i += 1;
         tortoise = scm_cdr(tortoise);
 
-        if hare == tortoise {   
+        if hare == tortoise {
             return None;
         }
     }
@@ -113,13 +116,23 @@ pub fn scm_last_pair(val: Value) -> Value {
 macro_rules! scm_append1 {
     ($start: expr, $last: expr, $obj: expr) => {
         if $start.is_null() {
-            *$start = $crate::runtime::list::scm_cons($obj, $crate::runtime::value::Value::encode_null_value());
+            *$start = $crate::runtime::list::scm_cons(
+                $obj,
+                $crate::runtime::value::Value::encode_null_value(),
+            );
             *$last = *$start;
         } else {
-            $crate::runtime::object::scm_set_cdr(*$last, $crate::vm::thread::Thread::current(), $crate::runtime::list::scm_cons($obj, $crate::runtime::value::Value::encode_null_value()));
+            $crate::runtime::object::scm_set_cdr(
+                *$last,
+                $crate::vm::thread::Thread::current(),
+                $crate::runtime::list::scm_cons(
+                    $obj,
+                    $crate::runtime::value::Value::encode_null_value(),
+                ),
+            );
             *$last = scm_cdr(*$last);
         }
-    }
+    };
 }
 
 #[macro_export]
@@ -136,7 +149,7 @@ macro_rules! scm_append {
             scm_set_cdr(*$last, $crate::vm::thread::Thread::current(), list);
             *$last = $crate::runtime::list::scm_last_pair(*last);
         }
-    }
+    };
 }
 
 pub fn scm_append2(list: Value, obj: Value) -> Value {
@@ -184,7 +197,6 @@ pub fn scm_reversex(list: Value) -> Value {
 }
 
 extern "C-unwind" fn list_p(_thread: &mut Thread, xs: &mut Value) -> Value {
-   
     let mut tortoise = *xs;
     let mut hare = *xs;
 
@@ -209,7 +221,7 @@ extern "C-unwind" fn list_p(_thread: &mut Thread, xs: &mut Value) -> Value {
         }
         hare = scm_cdr(hare);
 
-        if hare == tortoise {   
+        if hare == tortoise {
             return Value::encode_bool_value(false);
         }
     }

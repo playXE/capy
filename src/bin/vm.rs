@@ -1,7 +1,12 @@
 use capy::{
     bytecode::image::load_image_from_memory,
     interpreter::scm_call_n,
-    vm::{options::VMOptions, scm_init, thread::Thread}, runtime::{gsubr::{scm_define_subr, Subr}, value::Value, object::{scm_car, scm_cdr}},
+    runtime::{
+        gsubr::{scm_define_subr, Subr},
+        object::{scm_car, scm_cdr},
+        value::Value,
+    },
+    vm::{options::VMOptions, scm_init, thread::Thread},
 };
 
 fn main() {
@@ -23,7 +28,11 @@ fn main() {
             opts.gc_min_heap_size, opts.gc_max_heap_size
         ),
     );
-    println!("GC size: {}..{}M", opts.gc_min_heap_size / 1024, opts.gc_max_heap_size / 1024);
+    println!(
+        "GC size: {}..{}M",
+        opts.gc_min_heap_size / 1024,
+        opts.gc_max_heap_size / 1024
+    );
     mmtk.set_option("threads", "4");
 
     let vm = scm_init(mmtk.build(), opts.gc_plan);

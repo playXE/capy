@@ -1,4 +1,3 @@
-
 use crate::{
     bytecode::opcodes::{
         OP_ASSERT_NARGS_GE, OP_EXPAND_APPLY_ARGUMENT, OP_RETURN_VALUES, OP_SHUFFLE_DOWN,
@@ -8,6 +7,7 @@ use crate::{
     interpreter::stackframe::{
         frame_local, frame_num_locals, frame_virtual_return_address, StackElement,
     },
+    raise_exn,
     runtime::{
         control::{ScmContinuation, VMCont},
         environment::scm_define,
@@ -16,7 +16,7 @@ use crate::{
         object::{scm_car, scm_cdr, ScmPair, ScmProgram},
         symbol::scm_intern,
         value::Value,
-    }, raise_exn,
+    },
 };
 
 use super::{scm_virtual_machine, thread::Thread};
@@ -88,7 +88,6 @@ pub(crate) unsafe extern "C-unwind" fn reinstate_continuation_x(
         let arg = thread.interpreter().sp.add(i as usize).read().as_value;
         argv[i as usize] = arg;
     }
-    
 
     return_to_continuation_inner(thread, continuation.vm_cont.cast_as());
 

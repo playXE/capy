@@ -1,11 +1,15 @@
-use self::{stackframe::{
-    frame_dynamic_link, frame_local, frame_previous_sp, set_frame_dynamic_link,
-    set_frame_virtual_return_address, StackElement, StackFrame,
-}, engine::EngineConstParams, entry_record::EntryFrame};
+use self::{
+    engine::EngineConstParams,
+    entry_record::EntryFrame,
+    stackframe::{
+        frame_dynamic_link, frame_local, frame_previous_sp, set_frame_dynamic_link,
+        set_frame_virtual_return_address, StackElement, StackFrame,
+    },
+};
 use crate::{
     gc::{
         virtual_memory::{PlatformVirtualMemory, VirtualMemory, VirtualMemoryImpl},
-        ObjEdge, CapyVM,
+        CapyVM, ObjEdge,
     },
     runtime::{
         control::{restore_cont_jump, ScmContinuation},
@@ -13,12 +17,18 @@ use crate::{
     },
     vm::{
         intrinsics::{get_callee_vcode, UnwindAndContinue},
+        options::GCPlan,
+        scm_virtual_machine,
         thread::Thread,
-        BOOT_CONTINUATION_CODE, scm_virtual_machine, options::GCPlan,
+        BOOT_CONTINUATION_CODE,
     },
 };
 
-use mmtk::{util::{Address, ObjectReference}, vm::RootsWorkFactory, Mutator};
+use mmtk::{
+    util::{Address, ObjectReference},
+    vm::RootsWorkFactory,
+    Mutator,
+};
 use rsetjmp::{setjmp, JumpBuf};
 use std::{
     mem::size_of,
@@ -27,10 +37,10 @@ use std::{
     sync::atomic::AtomicU64,
 };
 pub mod engine;
-pub mod llint;
-pub mod stackframe;
 pub mod entry_record;
 pub mod indirect_threaded;
+pub mod llint;
+pub mod stackframe;
 
 /// A simple counter used to identify different interpreter entrypoints.
 ///
@@ -76,14 +86,26 @@ impl InterpreterState {
         //let info = AllocatorInfo::new::<CapyVM>(selector);
 
         let engine = match scm_virtual_machine().gc_plan {
-            GCPlan::GenCopy | GCPlan::GenImmix | GCPlan::StickyImmix => engine::rust_engine::<{EngineConstParams {
-                needs_write_barrier: true,
-                bump_pointer_offset: usize::MAX 
-            }}>,
-            _ => engine::rust_engine::<{EngineConstParams {
-                needs_write_barrier: false,
-                bump_pointer_offset: usize::MAX 
-            }}>,
+            GCPlan::GenCopy | GCPlan::GenImmix | GCPlan::StickyImmix => {
+                engine::rust_engine::<
+                    {
+                        EngineConstParams {
+                            needs_write_barrier: true,
+                            bump_pointer_offset: usize::MAX,
+                        }
+                    },
+                >
+            }
+            _ => {
+                engine::rust_engine::<
+                    {
+                        EngineConstParams {
+                            needs_write_barrier: false,
+                            bump_pointer_offset: usize::MAX,
+                        }
+                    },
+                >
+            }
         };
 
         let mut this = Self {
@@ -133,7 +155,11 @@ impl InterpreterState {
                 let value = sp.cast::<Value>();
                 if (*value).is_object() {
                     let addr = (*value).get_raw();
-                    if mmtk::memory_manager::is_in_mmtk_spaces::<CapyVM>(std::mem::transmute::<_, ObjectReference>(addr)) {
+                    if mmtk::memory_manager::is_in_mmtk_spaces::<CapyVM>(std::mem::transmute::<
+                        _,
+                        ObjectReference,
+                    >(addr))
+                    {
                         let edge = ObjEdge::from_address(Address::from_ptr(value));
                         edges.push(edge);
                     }

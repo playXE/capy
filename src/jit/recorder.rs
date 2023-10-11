@@ -1,7 +1,7 @@
 #![allow(dead_code)]
-use crate::{vm::thread::Thread, runtime::value::Value, interpreter::stackframe::frame_local};
+use crate::{interpreter::stackframe::frame_local, runtime::value::Value, vm::thread::Thread};
 
-use super::ir::{ValueId, JITState, self};
+use super::ir::{self, JITState, ValueId};
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub enum Variable {
@@ -25,7 +25,6 @@ impl RecordingInterpreter {
         todo!()
     }
 
-
     unsafe fn sp_ref(&mut self, ix: i32) -> (Value, ValueId) {
         let value = self.thread.interpreter().sp.offset(ix as _).read().as_value;
         let spix = self.sp + ix as isize;
@@ -36,14 +35,14 @@ impl RecordingInterpreter {
                     typ: ir::Type::Fixnum,
                     id: ValueId(0),
                     children: vec![],
-                    data: ir::ValueData::Int32(spix as _)
+                    data: ir::ValueData::Int32(spix as _),
                 };
                 let constant = self.jit.add_value(constant);
                 let load_var = ir::Value {
                     typ: ir::Type::Any,
                     id: ValueId(0),
                     children: vec![constant],
-                    data: ir::ValueData::None
+                    data: ir::ValueData::None,
                 };
                 let load_var = self.jit.add_value(load_var);
 
@@ -57,7 +56,12 @@ impl RecordingInterpreter {
     }
 
     unsafe fn sp_set(&mut self, ix: i32, val: Value, ir_ref: ValueId) {
-        self.thread.interpreter().sp.offset(ix as _).cast::<Value>().write(val);
+        self.thread
+            .interpreter()
+            .sp
+            .offset(ix as _)
+            .cast::<Value>()
+            .write(val);
         let spix = self.sp + ix as isize;
         self.stack[spix as usize] = Variable::Loaded(ir_ref);
     }
@@ -79,6 +83,5 @@ impl RecordingInterpreter {
         // grow our stack of IR values now
         let sp = self.fp - num_locals as isize;
         self.sp = sp;
-
     }
 }

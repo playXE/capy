@@ -1,9 +1,8 @@
-use std::mem::{size_of, offset_of};
+use std::mem::{offset_of, size_of};
 
 use macroassembler::jit::gpr_info::NUMBER_OF_CALLEE_SAVED_REGISTERS;
 
 use super::stackframe::StackFrame;
-
 
 /// Opaque type representing VM entry frame in low-level interpreter
 pub struct EntryFrame;
@@ -17,7 +16,8 @@ impl EntryFrame {
     }
 
     pub unsafe fn callee_save_registers_buffer_offset() -> isize {
-        Self::vm_entry_record_offset() + offset_of!(VMEntryRecord, callee_save_registers_buffer) as isize
+        Self::vm_entry_record_offset()
+            + offset_of!(VMEntryRecord, callee_save_registers_buffer) as isize
     }
 }
 
@@ -30,6 +30,10 @@ pub struct VMEntryRecord {
 
 pub unsafe extern "C" fn vm_entry_record(entry_frame: *mut EntryFrame) -> *mut VMEntryRecord {
     let stack_alignment = 16;
-    let vm_entry_total_frame_size = (size_of::<VMEntryRecord>() + (stack_alignment - 1)) & !(stack_alignment - 1);
-    entry_frame.cast::<u8>().sub(vm_entry_total_frame_size).cast()
+    let vm_entry_total_frame_size =
+        (size_of::<VMEntryRecord>() + (stack_alignment - 1)) & !(stack_alignment - 1);
+    entry_frame
+        .cast::<u8>()
+        .sub(vm_entry_total_frame_size)
+        .cast()
 }

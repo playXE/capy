@@ -71,10 +71,14 @@ impl PatternContext {
         };
 
         self.pvcnt += 1;
-        
-        self.pvars = sexp_acons(pvar.clone(), Sexpr::PVRef(pvref.clone()), self.pvars.clone());
+
+        self.pvars = sexp_acons(
+            pvar.clone(),
+            Sexpr::PVRef(pvref.clone()),
+            self.pvars.clone(),
+        );
         pat.vars = sexp_cons(Sexpr::PVRef(pvref.clone()), pat.vars.clone());
-        
+
         Ok(Sexpr::PVRef(pvref))
     }
 
@@ -103,7 +107,6 @@ impl PatternContext {
         if matches!(self.ellipsis, Sexpr::Boolean(false)) {
             return false; // inside (... template)
         } else if matches!(self.ellipsis, Sexpr::Boolean(true)) {
-         
             return er_compare(
                 Sexpr::Symbol(*ELLIPSIS),
                 obj,
@@ -169,7 +172,7 @@ impl PatternContext {
             let mut t = Sexpr::Null;
 
             let mut ellipsis_seen = false;
-            
+
             if form.cdr().is_pair() && self.is_ellipsis(form.car()) {
                 if patternp {
                     return Err(format!(
@@ -179,14 +182,14 @@ impl PatternContext {
 
                 let save_elli = self.ellipsis.clone();
                 self.ellipsis = Sexpr::Boolean(false);
-               
+
                 let r = self.compile_rule1(form.cadr(), spat.clone(), false);
                 self.ellipsis = save_elli;
                 return r;
             }
 
             let mut pp;
-            
+
             sexpr_for_each!(declared pp, form, {
                 if self.ellipsis_following(&pp) {
                     if patternp && ellipsis_seen {
@@ -196,7 +199,7 @@ impl PatternContext {
                                 self.name, self.form)
                         );
                     }
-                    
+
                     ellipsis_seen = true;
                     let base = pp.car();
                     pp = pp.cdr();
@@ -341,7 +344,6 @@ impl PatternContext {
             }
 
             if patternp {
-               
                 return self.add_pvar(spat, form);
             } else {
                 let pvref = self.pvar_to_pvref(spat.clone(), form.clone())?;
@@ -482,13 +484,13 @@ fn compile_rules(
             level: 0,
             num_following_items: 0,
         });
-        
+
         ctx.pvars = Sexpr::Null;
         ctx.pvcnt = 0;
         ctx.maxlev = 0;
 
         ctx.form = rule.car();
-        
+
         pat.pattern = ctx.compile_rule1(ctx.form.cdr().clone(), pat.clone(), true)?;
         ctx.form = rule.cadr();
         tmpl.pattern = ctx.compile_rule1(ctx.form.clone(), tmpl.clone(), false)?;
@@ -643,7 +645,9 @@ fn exit_subpattern(subpat: P<SyntaxPattern>, mvec: &mut [MatchVar]) {
             if subpat.level == 1 {
                 mvec[count as usize].root = sexp_reversex(mvec[count as usize].branch.clone());
             } else {
-                mvec[count as usize].sprout.set_car(sexp_reversex(mvec[count as usize].branch.clone()));
+                mvec[count as usize]
+                    .sprout
+                    .set_car(sexp_reversex(mvec[count as usize].branch.clone()));
                 mvec[count as usize].branch = Sexpr::Null;
             }
         }
@@ -842,9 +846,7 @@ fn match_synrule(
             }
         }
 
-        _ => {
-            sexp_equal(&form, &pattern)
-        }
+        _ => sexp_equal(&form, &pattern),
     }
 }
 
@@ -955,7 +957,6 @@ fn realize_template_rec(
     }
 
     if matches!(template, Sexpr::Symbol(_) | Sexpr::Identifier(_)) {
-        
         return rename_variable(template, id_alist, sr.syntax_env.clone(), sr.env.clone());
     }
 
@@ -996,7 +997,7 @@ pub fn synrule_expand(
             branch: Sexpr::Null,
             sprout: Sexpr::Null,
         });
-       
+
         if match_synrule(
             form.cdr().clone(),
             &rule.pattern,

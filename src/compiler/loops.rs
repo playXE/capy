@@ -11,8 +11,9 @@ use crate::compiler::{
 };
 
 use super::{
+    sexpr::Sexpr,
     tree_il::{IForm, LVar, Label, Lambda, Let, LetType},
-    P, sexpr::Sexpr,
+    P,
 };
 
 fn is_misused(x: &IForm, tail: bool, lvar: P<LVar>, formals: &[P<LVar>]) -> bool {
@@ -22,13 +23,13 @@ fn is_misused(x: &IForm, tail: bool, lvar: P<LVar>, formals: &[P<LVar>]) -> bool
         IForm::GSet(gset) => is_misused(&gset.value, tail, lvar, formals),
         IForm::Lambda(lam) => is_misused(&lam.body, tail, lvar, formals),
         IForm::Seq(seq) => {
-            for i in 0..seq.forms.len()-1 {
+            for i in 0..seq.forms.len() - 1 {
                 if is_misused(&seq.forms[i], false, lvar.clone(), formals) {
                     return true;
                 }
             }
 
-            is_misused(&seq.forms[seq.forms.len()-1], tail, lvar, formals)
+            is_misused(&seq.forms[seq.forms.len() - 1], tail, lvar, formals)
         }
 
         IForm::Label(label) => is_misused(&label.body, tail, lvar, formals),
@@ -51,7 +52,7 @@ fn is_misused(x: &IForm, tail: bool, lvar: P<LVar>, formals: &[P<LVar>]) -> bool
             // position and this must be a tail call.
 
             let op = call.proc.clone();
-            
+
             if op.is_lref() && op.lref_lvar().unwrap().as_ptr() == lvar.as_ptr() {
                 !tail || call.args.len() != formals.len()
             } else {
@@ -119,13 +120,12 @@ fn is_captured(x: &IForm, in_lambda: bool, lvar: P<LVar>) -> bool {
 /// formals of the proccase can be captured in the proccase.
 
 fn is_optimizeable_loop(lhs: &[P<LVar>], rhs: &[P<Lambda>], body: P<IForm>) -> bool {
-   if lhs.len() != 1 {
-    return false;
-   }
+    if lhs.len() != 1 {
+        return false;
+    }
 
     let lvar = lhs[0].clone();
     let init = rhs[0].clone();
-
 
     let body = match &*body {
         IForm::Seq(seq) if seq.forms.len() == 1 => seq.forms[0].clone(),
@@ -226,7 +226,7 @@ pub fn recover_loops_rec(
             if seq.forms.len() == 0 {
                 return P(IForm::Const(Sexpr::Undefined));
             }
-            for i in 0..seq.forms.len() - 1{
+            for i in 0..seq.forms.len() - 1 {
                 seq.forms[i] = recover_loops_rec(seq.forms[i].clone(), penv, false, changed);
             }
             let lidx = seq.forms.len() - 1;
@@ -295,11 +295,7 @@ pub fn recover_loops_rec(
     }
 }
 
-fn optimize_loop(
-    lvar: P<LVar>,
-    lambda: P<Lambda>,
-    init: Vec<P<IForm>>,
-) -> P<IForm> {
+fn optimize_loop(lvar: P<LVar>, lambda: P<Lambda>, init: Vec<P<IForm>>) -> P<IForm> {
     let mut label = P(IForm::Label(Label {
         src: lambda.body.src(),
         label: None,
@@ -307,7 +303,6 @@ fn optimize_loop(
     }));
 
     fn rewrite(mut x: P<IForm>, lvar: &P<LVar>, formals: &[P<LVar>], label: P<IForm>) -> P<IForm> {
-
         match &mut *x {
             IForm::Call(call) => {
                 if call.proc.is_lref() && call.proc.lref_lvar().unwrap().as_ptr() == lvar.as_ptr() {
@@ -434,13 +429,12 @@ fn optimize_loop(
                 }
                 fix.body = rewrite(fix.body.clone(), lvar, formals, label.clone());
                 x
-
             }
 
             _ => x,
         }
     }
-    
+
     let body = rewrite(lambda.body.clone(), &lvar, &lambda.lvars, label.clone());
 
     let IForm::Label(ref mut lbl_) = &mut *label else {
@@ -459,4 +453,3 @@ fn optimize_loop(
 
     binding
 }
-

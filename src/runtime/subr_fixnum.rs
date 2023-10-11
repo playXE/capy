@@ -1,6 +1,10 @@
 use crate::vm::thread::Thread;
 
-use super::{control::wrong_type_argument_violation, value::Value, gsubr::{scm_define_subr, Subr}};
+use super::{
+    control::wrong_type_argument_violation,
+    gsubr::{scm_define_subr, Subr},
+    value::Value,
+};
 
 extern "C-unwind" fn fx_eq(thread: &mut Thread, a: &mut Value, b: &mut Value) -> Value {
     if !a.is_int32() {
@@ -187,7 +191,6 @@ extern "C-unwind" fn fxrshl(thread: &mut Thread, a: &mut Value, b: &mut Value) -
 }
 
 pub(crate) fn init() {
-    
     scm_define_subr("fx=", 2, 0, 0, Subr::F2(fx_eq));
     scm_define_subr("fx<", 2, 0, 0, Subr::F2(fx_lt));
     scm_define_subr("fx>", 2, 0, 0, Subr::F2(fx_gt));
@@ -204,5 +207,4 @@ pub(crate) fn init() {
     scm_define_subr("fxsha", 2, 0, 0, Subr::F2(fx_sha));
     scm_define_subr("fixnum?", 1, 0, 0, Subr::F1(fixnum_p));
     scm_define_subr("fxrshl", 2, 0, 0, Subr::F2(fxrshl));
-
 }

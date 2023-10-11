@@ -5,6 +5,7 @@ pub mod sexpr;
 pub mod assignment_elimination;
 pub mod compile_bytecode;
 pub mod constfold;
+pub mod fix_letrec;
 pub mod loops;
 pub mod pass2;
 pub mod pass2p2;
@@ -12,7 +13,6 @@ pub mod pass3;
 pub mod primitives;
 pub mod synrules;
 pub mod tree_il;
-pub mod fix_letrec;
 
 use std::collections::HashMap;
 
@@ -21,8 +21,12 @@ pub use p::P;
 use crate::runtime::value::Value;
 
 use self::{
-    sexpr::{sexp_acons, sexp_cons, sexp_eq, Identifier, Sexpr, SyntaxRules, SourceInfo, SourceLoc, EqSexpr},
-    tree_il::IForm, primitives::resolve_primitives,
+    primitives::resolve_primitives,
+    sexpr::{
+        sexp_acons, sexp_cons, sexp_eq, EqSexpr, Identifier, Sexpr, SourceInfo, SourceLoc,
+        SyntaxRules,
+    },
+    tree_il::IForm,
 };
 
 pub fn make_identifier(name: Sexpr, senv: P<SyntaxEnv>, env: Sexpr) -> P<Identifier> {
@@ -117,7 +121,7 @@ pub enum Denotation {
 pub struct Cenv<'a> {
     pub syntax_env: P<SyntaxEnv>,
     pub frames: Sexpr,
-    pub source_loc: &'a SourceInfo
+    pub source_loc: &'a SourceInfo,
 }
 
 impl Cenv<'_> {
@@ -184,7 +188,7 @@ impl Cenv<'_> {
         Self {
             syntax_env: self.syntax_env.clone(),
             frames: sexp_acons(typ, frame, self.frames.clone()),
-            source_loc: self.source_loc
+            source_loc: self.source_loc,
         }
     }
 
@@ -202,13 +206,13 @@ pub fn is_free_identifier_eq(id1: Sexpr, id2: Sexpr) -> bool {
             let b1 = Cenv {
                 syntax_env: id1.env.clone(),
                 frames: identifier_env(id1.clone()),
-                source_loc: &SourceInfo::new()
+                source_loc: &SourceInfo::new(),
             }
             .lookup_int(id1.name.clone());
             let b2 = Cenv {
                 syntax_env: id2.env.clone(),
                 frames: identifier_env(id2.clone()),
-                source_loc: &SourceInfo::new()
+                source_loc: &SourceInfo::new(),
             }
             .lookup_int(id2.name.clone());
 
@@ -231,13 +235,13 @@ pub fn er_compare(a: Sexpr, b: Sexpr, env: P<SyntaxEnv>, frames: Sexpr) -> bool 
         let a1 = Cenv {
             syntax_env: env.clone(),
             frames: frames.clone(),
-            source_loc: &SourceInfo::new()
+            source_loc: &SourceInfo::new(),
         }
         .lookup(a);
         let b1 = Cenv {
             syntax_env: env.clone(),
             frames: frames.clone(),
-            source_loc: &SourceInfo::new()
+            source_loc: &SourceInfo::new(),
         }
         .lookup(b);
 
@@ -296,12 +300,11 @@ pub fn compile(
     let fixed = fix_letrec::pass_fix_letrec(expanded);
     let immut = assignment_elimination::assignment_elimination(fixed);
     let immut = resolve_primitives(immut);
-    if  opt {
+    if opt {
         let opt = pass2::pass2(immut, recover_loops)?;
 
         Ok(opt)
     } else {
         Ok(immut)
     }
-    
 }

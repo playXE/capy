@@ -97,7 +97,6 @@ impl Assembler {
 
     pub fn emit_box_set(&mut self, dst: u32, src: u32) {
         OpBoxSet::new(dst as _, src as _).write(self);
-        
     }
 
     pub fn emit_cons(&mut self, dst: u16, car: u16, cdr: u16) {

@@ -343,7 +343,6 @@ pub fn define_syntax() -> P<SyntaxEnv> {
         }
     });
 
-
     define_syntax!("lambda", form, cenv, {
         if form.list_length().filter(|x| *x >= 3).is_some() {
             let formals = form.cadr();
@@ -986,7 +985,7 @@ fn pass1_body_rec(
 
             if (matches!(vframe, Sexpr::Boolean(false))
                 || matches!(vframe.assq(&op), Sexpr::Boolean(false)))
-                    && matches!(op, Sexpr::Identifier(_) | Sexpr::Symbol(_))
+                && matches!(op, Sexpr::Identifier(_) | Sexpr::Symbol(_))
             {
                 let head = cenv.lookup(op.clone());
 

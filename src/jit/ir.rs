@@ -1,4 +1,3 @@
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ValueId(pub u32);
 
@@ -54,15 +53,13 @@ pub enum Opcode {
 
     /// Load variable from interpreter stack.
     LoadVar,
-    
 
     GlobalRef,
     GlobalSet,
-
 }
 
 pub struct JITState {
-    values: Vec<Value>
+    values: Vec<Value>,
 }
 
 impl JITState {

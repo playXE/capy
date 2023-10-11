@@ -47,12 +47,6 @@
             (let ((temp a))
                 (if temp temp (or b ...))))))
 
-;(define-syntax or 
-;    (syntax-rules ()
-;        ((_) #f)
-;        ((_ a) a)
-;        ((_ a b ...) (if a a (or b ...)))))
-
 (define-syntax let*
     (syntax-rules ()
         ((let* () body1 body2 ...)

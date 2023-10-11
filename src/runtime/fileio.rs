@@ -1,12 +1,12 @@
 use crate::vm::thread::Thread;
 
 use super::{
-    control::{wrong_type_argument_violation},
+    control::wrong_type_argument_violation,
     gsubr::{scm_define_subr, Subr},
     object::{scm_bytevector_as_slice_mut, scm_bytevector_length, scm_string_str, scm_vector_set},
     value::Value,
 };
-use chrono::{DateTime, Utc, Datelike, Timelike};
+use chrono::{DateTime, Datelike, Timelike, Utc};
 
 pub const OPEN_READ: i32 = 0x01;
 pub const OPEN_WRITE: i32 = 0x02;
@@ -202,7 +202,7 @@ extern "C-unwind" fn mtime(thread: &mut Thread, filename: &mut Value, vec: &mut 
             } else {
                 return Value::encode_int32(-1);
             }
-        } 
+        }
     };
 
     match stats.modified() {
@@ -224,7 +224,15 @@ extern "C-unwind" fn mtime(thread: &mut Thread, filename: &mut Value, vec: &mut 
 
 extern "C-unwind" fn file_exists_p(thread: &mut Thread, filename: &mut Value) -> Value {
     if !filename.is_string() {
-        wrong_type_argument_violation(thread, "file-exists?", 0, "string", *filename, 1, &[filename])
+        wrong_type_argument_violation(
+            thread,
+            "file-exists?",
+            0,
+            "string",
+            *filename,
+            1,
+            &[filename],
+        )
     }
 
     let filename = scm_string_str(*filename);
@@ -235,7 +243,15 @@ extern "C-unwind" fn file_exists_p(thread: &mut Thread, filename: &mut Value) ->
 
 extern "C-unwind" fn relative_path_string_p(thread: &mut Thread, path: &mut Value) -> Value {
     if !path.is_string() {
-        wrong_type_argument_violation(thread, "relative-path-string?", 0, "string", *path, 1, &[path])
+        wrong_type_argument_violation(
+            thread,
+            "relative-path-string?",
+            0,
+            "string",
+            *path,
+            1,
+            &[path],
+        )
     }
 
     let path = scm_string_str(*path);
@@ -246,7 +262,15 @@ extern "C-unwind" fn relative_path_string_p(thread: &mut Thread, path: &mut Valu
 
 extern "C-unwind" fn absolute_path_string_p(thread: &mut Thread, path: &mut Value) -> Value {
     if !path.is_string() {
-        wrong_type_argument_violation(thread, "absolute-path-string?", 0, "string", *path, 1, &[path])
+        wrong_type_argument_violation(
+            thread,
+            "absolute-path-string?",
+            0,
+            "string",
+            *path,
+            1,
+            &[path],
+        )
     }
 
     let path = scm_string_str(*path);
@@ -266,6 +290,18 @@ pub(crate) fn init() {
     scm_define_subr("rename", 2, 0, 0, Subr::F2(rename));
     scm_define_subr("mtime", 2, 0, 0, Subr::F2(mtime));
     scm_define_subr("file-exists?", 1, 0, 0, Subr::F1(file_exists_p));
-    scm_define_subr("relative-path-string?", 1, 0, 0, Subr::F1(relative_path_string_p));
-    scm_define_subr("absolute-path-string?", 1, 0, 0, Subr::F1(absolute_path_string_p));
+    scm_define_subr(
+        "relative-path-string?",
+        1,
+        0,
+        0,
+        Subr::F1(relative_path_string_p),
+    );
+    scm_define_subr(
+        "absolute-path-string?",
+        1,
+        0,
+        0,
+        Subr::F1(absolute_path_string_p),
+    );
 }

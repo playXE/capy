@@ -44,7 +44,7 @@ fn main() {
         };
         println!("Compiling {}...", filename);
         let mut parser = Parser::new(&mut interner, &src, false);
-        
+
         loop {
             if parser.finished() {
                 break;
@@ -52,9 +52,13 @@ fn main() {
             let result = parser.parse(true);
             match result {
                 Ok(expr) => {
-                    
                     let interner = NoIntern;
-                    let sexpr = r7rs_expr_to_sexpr(&interner, scm_intern(filename), &expr, &mut source_info);
+                    let sexpr = r7rs_expr_to_sexpr(
+                        &interner,
+                        scm_intern(filename),
+                        &expr,
+                        &mut source_info,
+                    );
                     let cenv = Cenv {
                         frames: Sexpr::Null,
                         syntax_env: env.clone(),
@@ -96,9 +100,8 @@ fn main() {
         lifted_var: LiftedVar::Candidate,
     });
 
-   
     let lam = P(IForm::Lambda(toplevel_lambda));
-    
+
     let mut bcode = vec![];
     let mut out = termcolor::StandardStream::stderr(termcolor::ColorChoice::Never);
     lam.pretty_print::<true>(&mut out).unwrap();

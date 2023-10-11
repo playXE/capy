@@ -6,10 +6,7 @@ use crate::{
 };
 
 use super::{
-    control::{
-        invalid_argument_violation, scheme_raise,
-        wrong_type_argument_violation,
-    },
+    control::{invalid_argument_violation, scheme_raise, wrong_type_argument_violation},
     environment::environment_get,
     gsubr::{scm_define_subr, Subr},
     hashtable::*,
@@ -708,8 +705,7 @@ extern "C-unwind" fn core_hashtable_to_alist(thread: &mut Thread, ht: &mut Value
                         continue;
                     }
                     let wmap = elt.cast_as::<ScmWeakMapping>();
-                    let mut cons =
-                        gc_protect!(thread => ans => thread.make_cons::<false>(wmap.key, wmap.value));
+                    let mut cons = gc_protect!(thread => ans => thread.make_cons::<false>(wmap.key, wmap.value));
                     let cons2 = gc_protect!(thread => cons => thread.make_cons::<false>(cons, ans));
 
                     ans = cons2;
@@ -764,20 +760,8 @@ pub(crate) fn init() {
         0,
         Subr::F1(core_hashtable_hash_function),
     );
-    scm_define_subr(
-        "core-hashtable-set!",
-        3,
-        0,
-        0,
-        Subr::F3(core_hashtable_set),
-    );
-    scm_define_subr(
-        "core-hashtable-ref",
-        3,
-        0,
-        0,
-        Subr::F3(core_hashtable_ref),
-    );
+    scm_define_subr("core-hashtable-set!", 3, 0, 0, Subr::F3(core_hashtable_set));
+    scm_define_subr("core-hashtable-ref", 3, 0, 0, Subr::F3(core_hashtable_ref));
     scm_define_subr(
         "core-hashtable-delete!",
         2,

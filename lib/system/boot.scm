@@ -305,7 +305,7 @@
 
 (define (call-with-values producer consumer)
     ; use call-with-values call that is recognized by 
-    ; compielr as a `let-values` form. This is a hack
+    ; compiler as a `let-values` form. This is a hack
     ; to define call-with-values in Scheme instead of
     ; in the VM using raw bytecode. Output Tree IL is like this:
     ;

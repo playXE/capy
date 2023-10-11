@@ -3,9 +3,7 @@ use std::mem::{size_of, transmute};
 use mmtk::{
     memory_manager::object_reference_write,
     util::{
-        metadata::{
-            MetadataSpec, header_metadata::HeaderMetadataSpec,
-        },
+        metadata::{header_metadata::HeaderMetadataSpec, MetadataSpec},
         Address, ObjectReference,
     },
     vm::edge_shape::SimpleEdge,
@@ -13,7 +11,7 @@ use mmtk::{
 
 use crate::{
     compiler::{tree_il::IForm, P},
-    gc::{ObjEdge, CapyVM},
+    gc::{CapyVM, ObjEdge},
     runtime::value::Value,
     utils::bitfield::BitField,
     vm::thread::Thread,
@@ -790,7 +788,6 @@ pub struct ScmWeakMapping {
     pub value: Value,
 }
 
-
 pub struct BytevectorMappingBitSpec(MetadataSpec);
 
 impl BytevectorMappingBitSpec {
@@ -798,9 +795,9 @@ impl BytevectorMappingBitSpec {
     pub const IS_GLOBAL: bool = false;
 
     pub const fn in_header(bit_offset: isize) -> Self {
-        Self (MetadataSpec::InHeader(HeaderMetadataSpec {
+        Self(MetadataSpec::InHeader(HeaderMetadataSpec {
             bit_offset,
-            num_of_bits: 1
+            num_of_bits: 1,
         }))
     }
 
@@ -824,7 +821,59 @@ pub fn scm_bytevector_set_mapping(bvec: Value) {
 pub fn scm_bytevector_is_mapping(bvec: Value) -> bool {
     let obj = bvec.get_object().object_reference();
     let spec = BYTEVECTOR_MAPPING_BIT_SPEC.as_spec();
-    unsafe {
-        spec.load::<CapyVM, u8>(obj, None) != 0
+    unsafe { spec.load::<CapyVM, u8>(obj, None) != 0 }
+}
+
+#[repr(C)]
+pub struct ScmRational {
+    pub header: ScmCellHeader,
+    pub numerator: Value,
+    pub denominator: Value,
+}
+
+#[repr(C)]
+pub struct ScmComplex {
+    pub header: ScmCellHeader,
+    pub real: Value,
+    pub imag: Value,
+}
+
+impl Value {
+    pub fn is_rational(self) -> bool {
+        self.is_object() && self.get_object().header().type_id() == TypeId::Rational
     }
+
+    pub fn is_complex(self) -> bool {
+        self.is_object() && self.get_object().header().type_id() == TypeId::Complex
+    }
+
+    pub fn get_rational<'a>(self) -> &'a mut ScmRational {
+        debug_assert!(self.is_rational());
+        self.cast_as::<ScmRational>()
+    }
+
+    pub fn get_complex<'a>(self) -> &'a mut ScmComplex {
+        debug_assert!(self.is_complex());
+        self.cast_as::<ScmComplex>()
+    }
+}
+
+pub fn scm_rational_numerator(rational: Value) -> Value {
+    debug_assert!(rational.is_rational());
+    rational.get_object().cast_as::<ScmRational>().numerator
+}
+
+pub fn scm_rational_denominator(rational: Value) -> Value {
+    debug_assert!(rational.is_rational());
+    rational.get_object().cast_as::<ScmRational>().denominator
+}
+
+pub fn scm_complex_real(complex: Value) -> Value {
+    debug_assert!(complex.is_complex());
+    complex.get_object().cast_as::<ScmComplex>().real
+}
+
+pub fn scm_complex_imag(complex: Value) -> Value {
+    debug_assert!(complex.is_complex());
+    complex.get_object().cast_as::<ScmComplex>().imag
 }

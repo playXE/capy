@@ -82,7 +82,7 @@ pub fn pass2_rec(
 
                 let first = args[0].clone();
                 let second = args[1].clone();
-                
+
                 if let IForm::Lambda(lam) = &*first {
                     if lam.lvars.len() != 0 {
                         return Err(format!(
@@ -98,9 +98,9 @@ pub fn pass2_rec(
                             body: second.body.clone(),
                             lvars: second.lvars.clone(),
                             init: lam.body.clone(),
-                            optarg: second.optarg
+                            optarg: second.optarg,
                         };
-                        
+
                         let vals = IForm::LetValues(let_values);
                         *iform = vals;
 
@@ -674,7 +674,7 @@ fn local_call_inliner(
 
     lvar.ref_count = 0;
     lambda_node.flag = LambdaFlag::Dissolved;
-    
+
     for call in calls.iter() {
         inline_it(call.clone(), lambda_node.clone())?;
     }
@@ -856,7 +856,7 @@ pub fn pass2(mut iform: P<IForm>, recover_loops: bool) -> Result<P<IForm>, Strin
             ctx.lambda_lift = !true;
             iform = pass2_rec(iform.clone(), &mut Vec::with_capacity(4), true, &mut ctx)?;
         }
-      
+
         if !ctx.changed || _passes >= 3 {
             return Ok(iform);
         }
