@@ -158,7 +158,7 @@
       [(procedure? x) (printstr (.procedure->string x))]
       [(bytevector? x) (printbytevector x p slashify level)]
       [(eof-object? x) (printeof x p slashify)]
-      [(eq? (undefined) x) (prinstr "#!undefined" p)]
+      [(eq? (undefined) x) (printstr "#!undefined" p)]
       [(port? x) (printport x p slashify)]
       [(tuple? x) (printtuple x p slashify level)]
       [else (print-raw x)]))
@@ -231,7 +231,7 @@
                     (printstr "x" p)
                     (printstr (number->string k 16) p)])]
             [(< k **delete**) (write-char c p)]
-            [(= k **delete**) (prinstr "delete" p)]
+            [(= k **delete**) (printstr "delete" p)]
             [(and (memq (transcoder-codec (port-transcoder p) '(utf-8 utf-16)))
                   (print-as-char-without-hexifying? c))
               (write-char c p)]

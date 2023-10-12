@@ -137,7 +137,7 @@
             (lambda (renv)
                 (let ([v (variable-ref-value cell)])
                     (if (undefined? v)
-                        (error "undefined global variable" name)
+                        (error 'interpret/global "undefined global variable" name)
                         v)))))
     (define (interpret/set-global name expr find-global)
         (let ([cell (find-global name)])

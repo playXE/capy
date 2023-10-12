@@ -1,5 +1,6 @@
 
 (define (format port format-string . args)
+  ;(print-raw port format-string)
   (let ((port (cond ((io/output-port? port) port)
                     ((eq? port #t) (current-output-port))
                     (else (error (errmsg 'msg:notopenoutputport) port)
