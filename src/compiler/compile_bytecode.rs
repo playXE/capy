@@ -4,6 +4,11 @@ use std::collections::HashSet;
 
 use crate::bytecode::encode::Encode;
 use crate::bytecode::encode::InstructionStream;
+use crate::bytecode::opcodes::OpCharEqual;
+use crate::bytecode::opcodes::OpCharGreater;
+use crate::bytecode::opcodes::OpCharGreaterEqual;
+use crate::bytecode::opcodes::OpCharLess;
+use crate::bytecode::opcodes::OpCharLessEqual;
 use crate::bytecode::opcodes::OpCons;
 use crate::bytecode::opcodes::OpEq;
 use crate::bytecode::opcodes::OpEqual;
@@ -1405,6 +1410,26 @@ static PRIMITIVES: Lazy<HashMap<&'static str, Primitive>> = Lazy::new(|| {
 
         ("=", 2, false, true, asm, args => {
             asm.emit_numerically_equal(args[0] as _, args[1] as _, args[2] as _);
+        })
+
+        ("char=?", 2, false, true, asm, args => {
+            OpCharEqual::new(args[0] as _, args[1] as _, args[2] as _).write(asm);
+        })
+
+        ("char<?", 2, false, true, asm, args => {
+            OpCharLess::new(args[0] as _, args[1] as _, args[2] as _).write(asm);
+        })
+
+        ("char<=?", 2, false, true, asm, args => {
+            OpCharLessEqual::new(args[0] as _, args[1] as _, args[2] as _).write(asm);
+        })
+
+        ("char>?", 2, false, true, asm, args => {
+            OpCharGreater::new(args[0] as _, args[1] as _, args[2] as _).write(asm);
+        })
+
+        ("char>=?", 2, false, true, asm, args => {
+            OpCharGreaterEqual::new(args[0] as _, args[1] as _, args[2] as _).write(asm);
         })
 
         ("eq?", 2, true, true, asm, args => {

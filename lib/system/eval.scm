@@ -271,3 +271,21 @@
         (let ([env (if (null? rest) (interaction-environment) (car rest))])
             (let ([clos (interpret/preprocess (%core-preprocess x) '() (lambda (name) (environment-get-cell env name)))])
                 (clos '()))))))
+
+
+(define evaluator
+    (make-parameter "evaluator"
+        (lambda (expr env) 
+            (eval-core expr env))
+        procedure?))
+
+(define (eval expr . rest)
+  ((evaluator) expr
+   (cond ((null? rest)
+          (interaction-environment))
+         ((and (null? (cdr rest))
+               (environment? (car rest)))
+          (car rest))
+         (else
+          (error 'eval "bad arguments" rest)
+          #t))))

@@ -15,7 +15,7 @@
         append
         (map (lambda (component)
                (or (condition? component)
-                   (assertion-violation 'condition (format #f "expected condition, but got ~r" component) components))
+                   (assertion-violation 'condition (format "expected condition, but got ~r" component) components))
                (simple-conditions component))
              components)))))
 

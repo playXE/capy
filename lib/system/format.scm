@@ -1,51 +1,69 @@
-
-(define (format port format-string . args)
-  ;(print-raw port format-string)
-  (let ((port (cond ((io/output-port? port) port)
-                    ((eq? port #t) (current-output-port))
-                    (else (error (errmsg 'msg:notopenoutputport) port)
-                          #t)))
-        (n    (string-length format-string)))
-
-    (define (format-loop i args)
-      (cond ((= i n))
-            ((char=? (string-ref format-string i) #\~)
-             (let ((c (string-ref format-string (+ i 1))))
-               (cond ((char=? c #\~)
-                      (write-char #\~ port)
-                      (format-loop (+ i 2) args))
-                     ((char=? c #\%)
-                      (newline port)
-                      (format-loop (+ i 2) args))
-                     ((char=? c #\a)
-                      (display-simple (car args) port)
-                      
-                      (format-loop (+ i 2) (cdr args)))
-                     ((char=? c #\s)
-                      (write-simple (car args) port)
-                      (format-loop (+ i 2) (cdr args)))
-                     ((char=? c #\c)
-                      (write-char (car args) port)
-                      (format-loop (+ i 2) (cdr args)))
-                     ((or (char=? c #\b)
-                          (char=? c #\B))
-                      (let ((bv    (car args))
-                            (radix (if (char=? c #\b) 10 16)))
-                        (if (not (bytevector? bv))
-                            (error 'format (errmsg 'msg:notbytevector) bv))
-                        (do ((k 0 (+ k 1)))
-                            ((= k (bytevector-length bv)))
-                          (display (number->string (bytevector-ref bv k) radix)
-                                   port)
-                        (write-char #\space port)))
-                      (format-loop (+ i 2) (cdr args)))
+;;An SRFI-28 and SRFI-29 compliant version of format.  It requires
+;;SRFI-23 for error reporting.
+(define format
+  (lambda (format-string . objects)
+    (let ((buffer (open-output-string)))
+      (let loop ((format-list (string->list format-string))
+                 (objects objects)
+                 (object-override #f))
+        (cond ((null? format-list) (get-output-string buffer))
+              ((char=? (car format-list) #\~)
+               (cond ((null? (cdr format-list))
+                      (error 'format "Incomplete escape sequence"))
+                     ((char-numeric? (cadr format-list))
+                      (let posloop ((fl (cddr format-list))
+                                    (pos (string->number
+                                          (string (cadr format-list)))))
+                        (cond ((null? fl)
+                               (error 'format "Incomplete escape sequence"))
+                              ((and (eq? (car fl) '#\@)
+                                    (null? (cdr fl)))
+                                    (error 'format "Incomplete escape sequence"))
+                              ((and (eq? (car fl) '#\@)
+                                    (eq? (cadr fl) '#\*))
+                               (loop (cddr fl) objects (list-ref objects pos)))
+                              (else
+                                (posloop (cdr fl)
+                                         (+ (* 10 pos)
+                                            (string->number
+                                             (string (car fl)))))))))
                      (else
-                      (format-loop (+ i 1) args)))))
-            (else
-             (write-char (string-ref format-string i) port)
-             (format-loop (+ i 1) args))))
-
-    (format-loop 0 args)
-    (undefined)))
-
-; eof
+                       (case (cadr format-list)
+                         ((#\a)
+                          (cond (object-override
+                                 (begin
+                                   (display object-override buffer)
+                                   (loop (cddr format-list) objects #f)))
+                                ((null? objects)
+                                 (error 'format "No value for escape sequence"))
+                                (else
+                                  (begin
+                                    (display (car objects) buffer)
+                                    (loop (cddr format-list)
+                                          (cdr objects) #f)))))
+                         ((#\s)
+                          (cond (object-override
+                                 (begin
+                                   (display object-override buffer)
+                                   (loop (cddr format-list) objects #f)))
+                                ((null? objects)
+                                 (error 'format "No value for escape sequence"))
+                                (else
+                                  (begin
+                                    (write (car objects) buffer)
+                                    (loop (cddr format-list)
+                                          (cdr objects) #f)))))
+                         ((#\%)
+                          (if object-override
+                              (error 'format "Escape sequence following positional override does not require a value"))
+                          (display #\newline buffer)
+                          (loop (cddr format-list) objects #f))
+                        ((#\~)
+                          (if object-override
+                              (error 'format "Escape sequence following positional override does not require a value"))
+                          (display #\~ buffer)
+                          (loop (cddr format-list) objects #f))
+                         (else
+                           (error 'format "Unrecognized escape sequence"))))))
+              (else (display (car format-list) buffer)
+                    (loop (cdr format-list) objects #f)))))))

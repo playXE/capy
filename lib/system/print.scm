@@ -90,8 +90,8 @@
                  (loop x p (+ 1 i) n))))
 
     (loop s p 0 (string-length s)))
-  (define (print-slashed-symbol x p)
-    (printstr (symbol->string x) p))
+  ;(define (print-slashed-symbol x p)
+  ;  (printstr (symbol->string x) p))
   (define (print-slashed-string s p)
     (define (loop i n)
       (if (< i n)
@@ -125,7 +125,7 @@
   (define (print-slashed-bytevector s p)
     (define (loop x p i n)
       (if (< i n)
-          (let ((c (integer->char (bytevector-ref x i))))
+          (let ((c (integer->char (bytevector-u8-ref x i))))
             (if (memq c funny-characters)
                 (write-char #\\ p))
             (write-char c p)
@@ -155,15 +155,16 @@
       [(vector? x)
         (write-char #\# p)
         (print (vector->list x) p slashify level)]
-      [(procedure? x) (printstr (.procedure->string x))]
+      [(procedure? x) (printstr (.procedure->string x) p)]
       [(bytevector? x) (printbytevector x p slashify level)]
       [(eof-object? x) (printeof x p slashify)]
-      [(eq? (undefined) x) (printstr "#!undefined" p)]
+      [(eq? (undefined) x) (printstr "undefined" p)]
       [(port? x) (printport x p slashify)]
       [(tuple? x) (printtuple x p slashify level)]
       [else (print-raw x)]))
 
   (define (printtuple x p slashify level)
+    
     (let (
       [n (tuple-length x)])
       (cond 
@@ -187,7 +188,8 @@
                     (write-char (integer->char **space**) p)
                     (print (tuple-ref x i) p #t level)
                     (loop (+ i 1))))
-                (printstr ">" p)]))]
+                (printstr ">" p)
+                (undefined)]))]
         [else 
           (cond 
             [(get-tuple-type-name x) => 
@@ -299,3 +301,4 @@
   (call-with-string-output-port 
     (lambda (p)
       (print x p #f))))
+

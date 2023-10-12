@@ -466,7 +466,7 @@ impl std::fmt::Display for Value {
         } else if self.is_symbol() {
             write!(f, "{}", scm_symbol_str(*self))
         } else if self.is_char() {
-            write!(f, "#\\{}", self.get_char())
+            write!(f, "#\\ {}", self.get_char())
         } else if self.is_box() {
             write!(f, "#<box {}>", self.cast_as::<ScmBox>().value)
         } else if self.is_program() {
@@ -480,6 +480,14 @@ impl std::fmt::Display for Value {
                 self.cast_as::<ScmBigInteger>()
                     .to_string_base(&ScmBigInteger::DEC_BASE)
             )
+        } else if self.is_tuple() {
+            let t = self.cast_as::<ScmTuple>();
+            write!(f, "#<tuple")?;
+            for i in 0..t.length {
+                let val = scm_tuple_ref(*self, i as _);
+                write!(f, " {}", val)?;
+            }
+            write!(f, ">")
         } else {
             write!(
                 f,

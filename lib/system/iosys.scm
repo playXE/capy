@@ -90,7 +90,7 @@
 (define port.setposn   19) ; boolean: true iff supports set-port-position!
 (define port.alist     20) ; association list: used mainly by custom ports
 (define port.r7rstype  21) ; copy of port.type but unaltered by closing
-
+(define port.reader    22) ; port reader: lazily initialized
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;
 ; Miscellaneous constants.
@@ -107,7 +107,7 @@
 
 (define port.sentinel 255)
 
-(define port.structure-size 22)
+(define port.structure-size 23)
 
 (define (io/make-port ioproc iodata . rest)
     (let (
@@ -167,9 +167,20 @@
         (tuple-set! v port.setposn set-position?)
         (tuple-set! v port.alist '())
         (tuple-set! v port.r7rstype (tuple-ref v port.type))
+        (tuple-set! v port.reader #f)
         (tuple-set! v 0 'type:port)
 
         v))
+
+(define (port-reader p) 
+  (unless (input-port? p)
+    (error 'port-reader "not an input port" p))
+  (tuple-ref p port.reader)
+)
+(define (port-reader-set! p r)
+  (unless (input-port? p)
+    (error 'port-reader-set! "not an input port" p))
+  (tuple-set! p port.reader r))
 
 (define readmode-mask:foldcase        1)
 (define readmode-mask:locations       2)
@@ -193,6 +204,7 @@
 (define readmode:r5rs               128)
 (define readmode:r6rs               256)
 (define readmode:r7rs               512)
+
 
 (define (default-read-mode)
     (define (default parameter iftrue iffalse)

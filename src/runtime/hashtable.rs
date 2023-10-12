@@ -102,11 +102,11 @@ pub const SCM_HASHTABLE_HANDLER_MUTABLE: usize = 12;
 pub const SCM_HASHTABLE_HANDLER_ALIST: usize = 13;
 
 pub fn address_hash1(adrs: *const u8, bound: u32) -> u32 {
-    ((((adrs as usize) >> 3) * 2654435761 + (adrs as usize & 7)) % bound as usize) as u32
+    ((((adrs as usize) >> 3).wrapping_mul(2654435761) + (adrs as usize & 7)) % bound as usize) as u32
 }
 
 pub fn address_hash2(adrs: *const u8, bound: u32) -> u32 {
-    let hash = (((adrs as usize) >> 3) * 13845163) % bound as usize;
+    let hash = (((adrs as usize) >> 3).wrapping_mul(13845163)) % bound as usize;
     hash as u32 + (hash == 0) as u32
 }
 

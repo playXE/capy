@@ -643,6 +643,34 @@ extern "C-unwind" fn subr_exp(thread: &mut Thread, obj: &mut Value) -> Value {
     }
 }
 
+extern "C-unwind" fn subr_expt(thread: &mut Thread, lhs: &mut Value, rhs: &mut Value) -> Value {
+    if arith::number_p(*lhs) {
+        if arith::number_p(*rhs) {
+            return arith::arith_expt(thread, *lhs, *rhs);
+        } else {
+            wrong_type_argument_violation::<{ usize::MAX }>(
+                thread,
+                "expt",
+                1,
+                "number",
+                *rhs,
+                2,
+                &[lhs, rhs],
+            )
+        }
+    } else {
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "expt",
+            0,
+            "number",
+            *lhs,
+            2,
+            &[lhs, rhs],
+        )
+    }
+}
+
 extern "C-unwind" fn subr_log(thread: &mut Thread, lhs: &mut Value, rhs: &mut Value) -> Value {
     if rhs.is_undefined() {
         // (log <val>)
@@ -1054,7 +1082,7 @@ extern "C-unwind" fn bitwise_first_bit_set(thread: &mut Thread, a: &mut Value) -
     } else {
         wrong_type_argument_violation::<{ usize::MAX }>(
             thread,
-            "bitwise-bit-count",
+            "bitwise-first-bit-set",
             0,
             "exact integer",
             *a,
@@ -1352,6 +1380,34 @@ extern "C-unwind" fn bitwise_arithmetic_shift(
     }
 }
 
+extern "C-unwind" fn subr_mod(thread: &mut Thread, lhs: &mut Value, rhs: &mut Value) -> Value {
+    if arith::integer_value_p(*lhs) {
+        if arith::integer_value_p(*rhs) {
+            return arith::arith_modulo(thread, *lhs, *rhs);
+        } else {
+            wrong_type_argument_violation::<{ usize::MAX }>(
+                thread,
+                "mod",
+                1,
+                "integer",
+                *rhs,
+                2,
+                &[lhs, rhs],
+            )
+        }
+    } else {
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "mod",
+            0,
+            "integer",
+            *lhs,
+            2,
+            &[lhs, rhs],
+        )
+    }
+}
+
 pub(crate) fn init_arith() {
     scm_define_subr("string->number", 1, 1, 0, Subr::F2(string_to_number));
     scm_define_subr("number->string", 1, 1, 0, Subr::F2(number_to_string));
@@ -1365,6 +1421,7 @@ pub(crate) fn init_arith() {
     scm_define_subr("truncate", 1, 0, 0, Subr::F1(subr_truncate));
     scm_define_subr("round", 1, 0, 0, Subr::F1(round));
     scm_define_subr("exp", 1, 0, 0, Subr::F1(subr_exp));
+    scm_define_subr("expt", 2, 0, 0, Subr::F2(subr_expt));
     scm_define_subr("log", 1, 1, 0, Subr::F2(subr_log));
     scm_define_subr("infinite?", 1, 0, 0, Subr::F1(subr_infinite_p));
     scm_define_subr("finite?", 1, 0, 0, Subr::F1(subr_finite_p));
@@ -1392,6 +1449,7 @@ pub(crate) fn init_arith() {
     scm_define_subr("real?", 1, 0, 0, Subr::F1(subr_real_p));
     scm_define_subr("complex?", 1, 0, 0, Subr::F1(subr_complex_p));
     scm_define_subr("modulo", 2, 0, 0, Subr::F2(subr_modulo));
+    scm_define_subr("mod", 2, 0, 0, Subr::F2(subr_mod));
     scm_define_subr(
         "bitwise-bit-count",
         1,

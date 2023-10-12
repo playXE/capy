@@ -103,9 +103,9 @@ fn main() {
     let lam = P(IForm::Lambda(toplevel_lambda));
 
     let mut bcode = vec![];
-    let mut out = termcolor::StandardStream::stderr(termcolor::ColorChoice::Never);
-    lam.pretty_print::<true>(&mut out).unwrap();
-    println!();
+    //let mut out = termcolor::StandardStream::stderr(termcolor::ColorChoice::Never);
+    //lam.pretty_print::<true>(&mut out).unwrap();
+    //println!();
     compile_bytecode(lam, &mut bcode);
 
     match std::fs::write("boot.capy", bcode) {

@@ -184,6 +184,7 @@ impl Thread {
             .max_non_los_default_alloc_bytes;
     }
 
+    #[allow(dead_code)]
     pub(crate) fn deregister_mutator(&mut self) {
         unsafe {
             self.flush_cleaner_queue();

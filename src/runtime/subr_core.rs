@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, io::Read};
 
 use once_cell::sync::Lazy;
 use unicode_general_category::GeneralCategory;
@@ -11,7 +11,7 @@ use crate::{
         Cenv,
     },
     runtime::{environment::ScmEnvironment, object::scm_bytevector_as_slice},
-    vm::{scm_virtual_machine, thread::Thread},
+    vm::{scm_virtual_machine, thread::Thread}, bytecode::image::load_image_from_memory,
 };
 
 use super::{
@@ -57,6 +57,41 @@ extern "C-unwind" fn weakmapping_key(_thread: &mut Thread, obj: &mut Value) -> V
 
 extern "C-unwind" fn weakmapping_live_p(_thread: &mut Thread, obj: &mut Value) -> Value {
     Value::encode_bool_value(obj.cast_as::<ScmWeakMapping>().key.is_object())
+}
+
+extern "C-unwind" fn string_ends_with(
+    thread: &mut Thread,
+    base: &mut Value,
+    suffix: &mut Value,
+) -> Value {
+    if !base.is_string() {
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "string-ends-with?",
+            0,
+            "string",
+            *base,
+            2,
+            &[base, suffix],
+        )
+    }
+
+    if !suffix.is_string() {
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "string-ends-with?",
+            1,
+            "string",
+            *suffix,
+            2,
+            &[base, suffix],
+        )
+    }
+
+    let base = scm_string_str(*base);
+    let suffix = scm_string_str(*suffix);
+
+    Value::encode_bool_value(base.ends_with(suffix))
 }
 
 extern "C-unwind" fn string_append(thread: &mut Thread, rest: &mut Value) -> Value {
@@ -299,7 +334,7 @@ extern "C-unwind" fn string_length(_thread: &mut Thread, obj: &mut Value) -> Val
             &[obj],
         )
     }
-    Value::encode_int32(scm_string_str(*obj).len() as _)
+    Value::encode_int32(scm_string_str(*obj).chars().count() as _)
 }
 
 extern "C-unwind" fn symbol_p(_thread: &mut Thread, obj: &mut Value) -> Value {
@@ -389,7 +424,7 @@ extern "C-unwind" fn string_ref(_thread: &mut Thread, obj: &mut Value, index: &m
         )
     }) as usize;
     let s = scm_string_str(*obj);
-    if idx >= s.len() {
+    if idx >= s.chars().count() {
         invalid_argument_violation(
             _thread,
             "string-ref",
@@ -763,6 +798,57 @@ extern "C-unwind" fn core_preprocess(thread: &mut Thread, code: &mut Value) -> V
     il_to_core_form(thread, &fixed)
 }
 
+extern "C-unwind" fn load_from_byteimage(thread: &mut Thread, filename: &mut Value) -> Value {
+    if !filename.is_string() {
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "load-from-byteimage",
+            0,
+            "string",
+            *filename,
+            1,
+            &[filename],
+        );
+    }
+
+    let path = std::path::Path::new(scm_string_str(*filename));
+
+    if !path.exists() {
+        invalid_argument_violation(thread, "load-from-byteimage", "file not found", *filename, 0, 1, &[filename]);
+    }
+
+    if path.is_dir() {
+        invalid_argument_violation(thread, "load-from-byteimage", "file is a directory", *filename, 0, 1, &[filename]);
+    }
+
+    let mut file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(_) => {
+            invalid_argument_violation(thread, "load-from-byteimage", "failed to open file", *filename, 0, 1, &[filename]);
+        }
+    };
+
+
+    let mut memory = Vec::new();
+    match file.read_to_end(&mut memory) {
+        Ok(_) => {}
+        Err(_) => {
+            invalid_argument_violation(thread, "load-from-byteimage", "failed to read file", *filename, 0, 1, &[filename]);
+        }
+    }
+
+    match load_image_from_memory(&memory, None) {
+        Ok(image) => {
+            image.entry_program
+        }
+        Err(_) => {
+            invalid_argument_violation(thread, "load-from-byteimage", "failed to load image", *filename, 0, 1, &[filename]);
+        }
+    }
+
+    
+}
+
 extern "C-unwind" fn tuple(thread: &mut Thread, args: &mut Value) -> Value {
     let len = scm_length(*args).unwrap();
     let tuple = thread.make_tuple::<false>(len, Value::encode_bool_value(false));
@@ -942,7 +1028,7 @@ extern "C-unwind" fn char_to_integer(thread: &mut Thread, val: &mut Value) -> Va
         )
     }
 }
-
+/*
 extern "C-unwind" fn char_eq_p(thread: &mut Thread, rest: &mut Value) -> Value {
     let length = scm_length(*rest).unwrap();
 
@@ -1058,11 +1144,12 @@ extern "C-unwind" fn char_le_p(thread: &mut Thread, rest: &mut Value) -> Value {
 
     while xs.is_pair() {
         let x = scm_car(xs);
-        if first.get_char() > x.get_char() {
-            return Value::encode_bool_value(false);
+        if first.get_char() <= x.get_char() {
+            xs = scm_cdr(xs);
+            continue;
         }
 
-        xs = scm_cdr(xs);
+        return Value::encode_bool_value(false);
     }
 
     Value::encode_bool_value(true)
@@ -1150,7 +1237,7 @@ extern "C-unwind" fn char_ge_p(thread: &mut Thread, rest: &mut Value) -> Value {
     }
 
     Value::encode_bool_value(true)
-}
+}*/
 
 extern "C-unwind" fn char_whitespace_p(thread: &mut Thread, val: &mut Value) -> Value {
     if val.is_char() {
@@ -1159,6 +1246,22 @@ extern "C-unwind" fn char_whitespace_p(thread: &mut Thread, val: &mut Value) -> 
         wrong_type_argument_violation::<{ usize::MAX }>(
             thread,
             "char-whitespace?",
+            0,
+            "char",
+            *val,
+            1,
+            &[val],
+        )
+    }
+}
+
+extern "C-unwind" fn char_numeric_p(thread: &mut Thread, val: &mut Value) -> Value {
+    if val.is_char() {
+        return Value::encode_bool_value(val.get_char().is_numeric());
+    } else {
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "char-numeric?",
             0,
             "char",
             *val,
@@ -1291,7 +1394,31 @@ extern "C-unwind" fn make_condition_uid(_thread: &mut Thread) -> Value {
     sym
 }
 
+extern "C-unwind" fn capture_stacktrace(thread: &mut Thread) -> Value {
+    unsafe { super::error::capture_stacktrace(thread) }
+}
+
+extern "C-unwind" fn subr_symbol_hash(thread: &mut Thread, symbol: &mut Value) -> Value {
+    if !symbol.is_symbol() {
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "subr-symbol-hash",
+            0,
+            "symbol",
+            *symbol,
+            1,
+            &[symbol],
+        );
+    }
+
+    let hash = super::hashtable::address_hash1(symbol.get_raw() as _, i32::MAX as _);
+
+    Value::encode_int32(hash as _)
+}
+
 pub(crate) fn init() {
+    scm_define_subr("symbol-hash", 1, 0, 0, Subr::F1(subr_symbol_hash));
+    scm_define_subr("%capture-stacktrace", 0, 0, 0, Subr::F0(capture_stacktrace));
     scm_define_subr("make-condition-uid", 0, 0, 0, Subr::F0(make_condition_uid));
     scm_define_subr(".procedure->string", 1, 0, 0, Subr::F1(procedure_to_string));
     scm_define_subr("make-weakmapping", 2, 0, 0, Subr::F2(make_weakmapping));
@@ -1330,8 +1457,10 @@ pub(crate) fn init() {
     scm_define_subr("string>?", 0, 0, 1, Subr::F1(string_gt));
     scm_define_subr("string<=?", 0, 0, 1, Subr::F1(string_le));
     scm_define_subr("string>=?", 0, 0, 1, Subr::F1(string_ge));
+    scm_define_subr("string-ends-with?", 2, 0, 0, Subr::F2(string_ends_with));
     scm_define_subr("%raise", 1, 0, 0, Subr::F1(raw_raise));
     scm_define_subr("%core-preprocess", 1, 0, 0, Subr::F1(core_preprocess));
+    scm_define_subr("load-image-from-file", 1, 0, 0, Subr::F1(load_from_byteimage));
     scm_define_subr("make-tuple", 1, 0, 0, Subr::F1(make_tuple));
     scm_define_subr("tuple", 0, 0, 1, Subr::F1(tuple));
     scm_define_subr("tuple?", 1, 0, 0, Subr::F1(tuple_pred));
@@ -1341,12 +1470,13 @@ pub(crate) fn init() {
     scm_define_subr("current-millis", 0, 0, 0, Subr::F0(current_millis));
     scm_define_subr("integer->char", 1, 0, 0, Subr::F1(integer_to_char));
     scm_define_subr("char->integer", 1, 0, 0, Subr::F1(char_to_integer));
-    scm_define_subr("char=?", 0, 0, 1, Subr::F1(char_eq_p));
+    /*scm_define_subr("char=?", 0, 0, 1, Subr::F1(char_eq_p));
     scm_define_subr("char<?", 0, 0, 1, Subr::F1(char_lt_p));
     scm_define_subr("char<=?", 0, 0, 1, Subr::F1(char_le_p));
     scm_define_subr("char>?", 0, 0, 1, Subr::F1(char_gt_p));
-    scm_define_subr("char>=?", 0, 0, 1, Subr::F1(char_ge_p));
+    scm_define_subr("char>=?", 0, 0, 1, Subr::F1(char_ge_p));*/
     scm_define_subr("char-whitespace?", 1, 0, 0, Subr::F1(char_whitespace_p));
+    scm_define_subr("char-numeric?", 1, 0, 0, Subr::F1(char_numeric_p));
     scm_define_subr(
         "char-general-category",
         1,
@@ -1356,6 +1486,7 @@ pub(crate) fn init() {
     );
     scm_define_subr("procedure?", 1, 0, 0, Subr::F1(procedure_p));
     scm_define_subr("procedure=?", 2, 0, 0, Subr::F2(procedure_eq_p));
+    super::env::init();
     super::subr_fixnum::init();
     super::subr_hash::init();
     super::list::init();

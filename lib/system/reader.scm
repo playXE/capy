@@ -109,11 +109,10 @@
     (let ((rcd (make-record-constructor-descriptor rtd (record-type-rcd &condition) #f)))
       (make-record-type '&source-information rtd rcd))))
 (define make-source-condition (record-constructor (record-type-rcd &source-information)))
-(define source-condition? (record-predicate (record-type-rtd &source-information)))
-(define source-condition-file-name (record-accessor (record-type-rtd &source-information) 0))
-(define source-condition-line (record-accessor (record-type-rtd &source-information) 1))
-(define source-condition-column (record-accessor (record-type-rtd &source-information) 2))
-
+(define source-condition? (condition-predicate (record-type-rtd &source-information)))
+(define source-condition-file-name (condition-accessor (record-type-rtd &source-information) (record-accessor (record-type-rtd &source-information) 0)))
+(define source-condition-line (condition-accessor (record-type-rtd &source-information) (record-accessor (record-type-rtd &source-information) 1)))
+(define source-condition-column (condition-accessor (record-type-rtd &source-information) (record-accessor (record-type-rtd &source-information) 2)))
 (define (annotation-source->condition x)
   (if (vector? x)
     (apply make-source-condition (vector->list x))
@@ -142,7 +141,13 @@
   (raise (lexical-condition reader msg irritants)))
 
 (define (reader-warning reader msg . irritants)
-  (apply reader-error reader msg irritants))
+  ;; Recoverable if the reader is in tolerant mode.
+  (if (reader-tolerant? reader)
+      (raise-continuable
+        (condition
+         (make-warning)
+         (lexical-condition reader msg irritants)))
+      (apply reader-error reader msg irritants)))
 
 (define (assert-mode p msg modes)
   (unless (memq (reader-mode p) modes)
@@ -622,6 +627,7 @@
        (reader-get-number p (list c)))
       ((memv c '(#\- #\+))            ;peculiar identifier
        (cond ((and (char=? c #\-) (eqv? #\> (reader-lookahead-char p))) ;->
+              
               (reader-get-identifier p c #f))
              ((char-delimiter? p (reader-lookahead-char p))
               (values 'identifier (if (eqv? c #\-) '- '+)))
@@ -847,3 +853,23 @@
 
 (define (resolve-labels p labels)
   #f)
+
+(define (get-port-reader p fn)
+  (cond 
+    [(port-reader p)]
+    [else 
+      (let ([reader (make-reader p (or fn (port-name p)))])
+        (port-reader-set! p reader)
+        reader)]))
+
+(define (get-datum p)
+  (read-datum (get-port-reader p #f)))
+
+
+(define (read . port)
+  (cond 
+    [(null? port) (get-datum (current-input-port))]
+    [(and (pair? port) (null? (cdr port)))
+     (get-datum (car port))]
+    [else
+     (error 'read "too many arguments")]))

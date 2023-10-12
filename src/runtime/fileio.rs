@@ -1,4 +1,4 @@
-use crate::vm::thread::Thread;
+use crate::vm::thread::{safepoint_scope, Thread};
 
 use super::{
     control::wrong_type_argument_violation,
@@ -85,9 +85,11 @@ extern "C-unwind" fn unix_read(
     }
 
     let buf = scm_bytevector_as_slice_mut(*buf);
-    let ret = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, count as usize) };
+    safepoint_scope(|| {
+        let ret = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, count as usize) };
 
-    Value::encode_int32(ret as _)
+        Value::encode_int32(ret as _)
+    })
 }
 
 extern "C-unwind" fn unix_write(
@@ -116,13 +118,13 @@ extern "C-unwind" fn unix_write(
     };
 
     let buf = scm_bytevector_as_slice_mut(*buf);
-    let ret = unsafe {
+    let ret = safepoint_scope(|| unsafe {
         libc::write(
             fd,
             buf.as_mut_ptr().offset(offset as isize) as *mut libc::c_void,
             count as usize,
         )
-    };
+    });
     Value::encode_int32(ret as _)
 }
 

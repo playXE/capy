@@ -3013,14 +3013,10 @@ pub fn arith_first_bit_set(obj: Value) -> Value {
         let n = obj.get_int32();
 
         if n == 0 {
-            return Value::encode_int32(0);
+            return Value::encode_int32(-1);
         }
 
-        if n > 0 {
-            return Value::encode_int32(n.trailing_zeros() as i32 + 1);
-        } else {
-            return Value::encode_int32((-n).trailing_zeros() as i32 + 1);
-        }
+        return Value::encode_int32(n.trailing_zeros() as i32);
     }
 
     if obj.is_bignum() {
@@ -5157,7 +5153,13 @@ pub fn arith_exact_integer_sqrt(thread: &mut Thread, mut obj: Value) -> (Value, 
 
 pub fn cnvt_number_to_string(thread: &mut Thread, obj: Value, radix: i32) -> String {
     if obj.is_int32() {
-        return obj.get_int32().to_string();
+        match radix {
+            2 => return format!("{:b}", obj.get_int32()),
+            8 => return format!("{:o}", obj.get_int32()),
+            10 => return format!("{}", obj.get_int32()),
+            16 => return format!("{:x}", obj.get_int32()),
+            _ => unreachable!(),
+        }
     }
 
     if obj.is_bignum() {

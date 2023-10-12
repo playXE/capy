@@ -273,7 +273,10 @@
 (define > (make-nary-comparison '> (lambda (a b) (> a b))))
 (define <= (make-nary-comparison '<= (lambda (a b) (<= a b))))
 (define >= (make-nary-comparison '>= (lambda (a b) (>= a b))))
-
+(define char=? (make-nary-comparison 'char=? (lambda (a b) (char=? a b))))
+(define char<? (make-nary-comparison 'char<? (lambda (a b) (char<? a b))))
+(define char>? (make-nary-comparison 'char>? (lambda (a b) (char>? a b))))
+(define char<=? (make-nary-comparison 'char<=? (lambda (a b) (char<=? a b))))
 
 (define (list->vector list)
     (let ([len (length list)])
@@ -359,3 +362,29 @@
         (if (starts-with? (symbol->string (tuple-ref tuple 0)) "type:")
             (substring (symbol->string (tuple-ref tuple 0)) 5)
             #f)))
+
+(define (string->list s)
+    (let loop ([s s] [i 0] [len (string-length s)] [acc '()])
+        (if (= i len)
+            (reverse acc)
+            (loop s (+ i 1) len (cons (string-ref s i) acc)))))
+
+(define (bitwise-arithmetic-shift-left x y)
+    (if (>= y 0)
+        (bitwise-arithmetic-shift x y)
+        (bitwise-arithmetic-shift x (-- y))))
+
+(define (bitwise-arithmetic-shift-right x y)
+    (if (>= y 0)
+        (bitwise-arithmetic-shift x (-- y))
+        (bitwise-arithmetic-shift x y)))
+
+(define (bitwise-if ei1 ei2 ei3)
+    (bitwise-ior (bitwise-and ei1 ei2)
+             (bitwise-and (bitwise-not ei1) ei3)))
+
+(define (bitwise-copy-bit ei1 ei2 ei3)
+    (let* ((mask (bitwise-arithmetic-shift 1 ei2)))
+        (bitwise-if mask
+                    (bitwise-arithmetic-shift ei3 ei2)
+                    ei1)))

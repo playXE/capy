@@ -1307,6 +1307,111 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                 }
             }
 
+            OP_CHAR_EQUAL => {
+                let char_equal = OpCharEqual::read(ip);
+                ip = ip.add(size_of::<OpCharEqual>());
+                
+                let mut a = sp_ref!(char_equal.a());
+                let mut b = sp_ref!(char_equal.b());
+                if !a.is_char() {
+                    sync_ip!();
+                    sync_sp!();
+                    wrong_type_argument_violation::<{usize::MAX}>(thread, "char=?", 0, "char", a, 2, &[&mut a, &mut b]);
+                }
+
+                if !b.is_char() {
+                    sync_ip!();
+                    sync_sp!();
+                    wrong_type_argument_violation::<{usize::MAX}>(thread, "char=?", 1, "char", b, 2, &[&mut a, &mut b]);
+                }
+
+                sp_set!(char_equal.dst(), Value::encode_bool_value(a.get_char() == b.get_char()));
+            }
+
+            OP_CHAR_LESS => {
+                let char_less = OpCharLess::read(ip);
+                ip = ip.add(size_of::<OpCharLess>());
+                
+                let mut a = sp_ref!(char_less.a());
+                let mut b = sp_ref!(char_less.b());
+                if !a.is_char() {
+                    sync_ip!();
+                    sync_sp!();
+                    wrong_type_argument_violation::<{usize::MAX}>(thread, "char<?", 0, "char", a, 2, &[&mut a, &mut b]);
+                }
+
+                if !b.is_char() {
+                    sync_ip!();
+                    sync_sp!();
+                    wrong_type_argument_violation::<{usize::MAX}>(thread, "char<?", 1, "char", b, 2, &[&mut a, &mut b]);
+                }
+
+                sp_set!(char_less.dst(), Value::encode_bool_value(a.get_char() < b.get_char()));
+            }
+
+            OP_CHAR_GREATER => {
+                let char_greater = OpCharGreater::read(ip);
+                ip = ip.add(size_of::<OpCharGreater>());
+                
+                let mut a = sp_ref!(char_greater.a());
+                let mut b = sp_ref!(char_greater.b());
+                if !a.is_char() {
+                    sync_ip!();
+                    sync_sp!();
+                    wrong_type_argument_violation::<{usize::MAX}>(thread, "char>?", 0, "char", a, 2, &[&mut a, &mut b]);
+                }
+
+                if !b.is_char() {
+                    sync_ip!();
+                    sync_sp!();
+                    wrong_type_argument_violation::<{usize::MAX}>(thread, "char>?", 1, "char", b, 2, &[&mut a, &mut b]);
+                }
+
+                sp_set!(char_greater.dst(), Value::encode_bool_value(a.get_char() > b.get_char()));
+            }
+
+            OP_CHAR_LESS_EQUAL => {
+                let char_less_equal = OpCharLessEqual::read(ip);
+                ip = ip.add(size_of::<OpCharLessEqual>());
+                
+                let mut a = sp_ref!(char_less_equal.a());
+                let mut b = sp_ref!(char_less_equal.b());
+                if !a.is_char() {
+                    sync_ip!();
+                    sync_sp!();
+                    wrong_type_argument_violation::<{usize::MAX}>(thread, "char<=?", 0, "char", a, 2, &[&mut a, &mut b]);
+                }
+
+                if !b.is_char() {
+                    sync_ip!();
+                    sync_sp!();
+                    wrong_type_argument_violation::<{usize::MAX}>(thread, "char<=?", 1, "char", b, 2, &[&mut a, &mut b]);
+                }
+
+                sp_set!(char_less_equal.dst(), Value::encode_bool_value(a.get_char() <= b.get_char()));
+            }
+
+            OP_CHAR_GREATER_EQUAL => {
+                let char_greater_equal = OpCharGreaterEqual::read(ip);
+                ip = ip.add(size_of::<OpCharGreaterEqual>());
+                
+                let mut a = sp_ref!(char_greater_equal.a());
+                let mut b = sp_ref!(char_greater_equal.b());
+                if !a.is_char() {
+                    sync_ip!();
+                    sync_sp!();
+                    wrong_type_argument_violation::<{usize::MAX}>(thread, "char>=?", 0, "char", a, 2, &[&mut a, &mut b]);
+                }
+
+                if !b.is_char() {
+                    sync_ip!();
+                    sync_sp!();
+                    wrong_type_argument_violation::<{usize::MAX}>(thread, "char>=?", 1, "char", b, 2, &[&mut a, &mut b]);
+                }
+
+                sp_set!(char_greater_equal.dst(), Value::encode_bool_value(a.get_char() >= b.get_char()));
+            }
+
             OP_BIND_OPTIONALS => {
                 let bind_optionals = OpBindOptionals::read(ip);
                 ip = ip.add(size_of::<OpBindOptionals>());

@@ -49,3 +49,19 @@
     (and (procedure? p)
         (or (procedure=? p *r7rs-parameter-prototype*)
             (procedure=? p *old-style-parameter-prototype*))))
+
+(define (make-env-parameter name . rest)
+  (let ((*name* name)
+        (ok?    (if (null? rest)
+                  (lambda (x) #t)
+                  (car rest))))
+    (lambda args
+      (cond
+        ((not (pair? args))
+         (getenv *name*))
+        ((not (null? (cdr args)))
+         (error (string->symbol *name*) "too many arguments."))
+        ((ok? (car args))
+         (setenv *name* (car args)))
+        (else
+         (error (string->symbol *name*) "Invalid value " (car args)))))))

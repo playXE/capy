@@ -93,3 +93,7 @@
                 ((car handlers) obj)
                 (%raise "handler returned")))))
 
+(define (raise-continuable obj)
+  (let ((handlers *current-exception-handlers*))
+    (with-exception-handlers (cdr handlers)
+      (lambda () ((car handlers) obj)))))

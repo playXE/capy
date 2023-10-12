@@ -98,6 +98,7 @@ pub const INTERESTING_PRIMTIIVE_NAMES: &[&str] = &[
     "even?",
     "odd?",
     "exact-integer?",
+    "char=?",
     "char<?",
     "char<=?",
     "char>=?",

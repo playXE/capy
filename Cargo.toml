@@ -50,7 +50,7 @@ conditional-safepoint = []
 [profile.release]
 lto = "fat"
 codegen-units = 1
-opt-level = "s"
+opt-level = 2
 
 [lib]
 

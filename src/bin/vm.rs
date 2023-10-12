@@ -4,12 +4,12 @@ use capy::{
     runtime::{
         gsubr::{scm_define_subr, Subr},
         object::{scm_car, scm_cdr},
-        value::Value,
+        value::Value, environment::environment_get, symbol::scm_intern,
     },
     vm::{
         options::{pretty_print_bytes, VMOptions},
         scm_init,
-        thread::Thread,
+        thread::Thread, scm_virtual_machine,
     },
 };
 
@@ -76,7 +76,16 @@ fn main() {
                 println!("Ok: {}", val);
             }
             Err(err) => {
-                eprintln!("Error: {}", err);
+                println!("Unhandled exception");
+                let display_proc = environment_get(scm_virtual_machine().interaction_environment, scm_intern("display"));
+                match display_proc {
+                    Ok(proc) if proc.is_program() => {
+                        let _ = scm_call_n::<true>(Thread::current(), proc, &[err]);
+                    }
+                    _ => {
+                        eprintln!("Error: {}", err);
+                    }
+                }
                 std::process::exit(1);
             }
         }

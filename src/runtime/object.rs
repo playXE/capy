@@ -681,6 +681,14 @@ pub fn dump_object(val: Value) -> Result<String, std::fmt::Error> {
         write!(f, "{}", scm_symbol_str(val))?;
     } else if val.is_string() {
         write!(f, "{:?}", scm_string_str(val))?;
+    } else if val.is_tuple() {
+        let t = val.cast_as::<ScmTuple>();
+        write!(f, "#<tuple")?;
+        for i in 0..t.length {
+            let val = scm_tuple_ref(val, i as _);
+            write!(f, " {}", dump_object(val)?)?;
+        }
+        write!(f, ">")?
     } else {
         write!(f, "#<unknown {:?}>", val)?;
     }
