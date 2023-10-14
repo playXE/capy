@@ -3,15 +3,15 @@
     (if (or (not who) (string? who) (symbol? who) (identifier? who))
         (if (string? message)
             (raise
-              (apply
-                condition
-                (filter
-                  values
-                  (list
-                    (make-assertion-violation)
-                    (and who (make-who-condition who))
-                    (make-message-condition message)
-                    (make-irritants-condition irritants)))))
+              (call/cc 
+                (lambda (k)
+                  (if who 
+                    (condition 
+                      (make-assertion-violation)
+                      (make-who-condition who)
+                      (make-message-condition message)
+                      (make-irritants-condition irritants)
+                      (make-continuation-condition k))))))
             (assertion-violation 'assertion-violation (wrong-type-argument-message "string" message 2)))
         (assertion-violation 'assertion-violation (wrong-type-argument-message "string, symbol, or #f" who 1)))))
 
@@ -19,14 +19,16 @@
 (define undefined-violation
   (lambda (who . message)
     (raise
-      (apply
-        condition
-        (filter
-          values
-          (list
-            (make-undefined-violation)
-            (and who (make-who-condition who))
-            (and (pair? message) (make-message-condition (car message)))))))))
+      (call/cc (lambda (k)
+        (apply
+          condition
+          (filter
+            values
+            (list
+              (make-undefined-violation)
+              (and who (make-who-condition who))
+              (and (pair? message) (make-message-condition (car message))
+              (make-continuation-condition k))))))))))
 
 
 (define lexical-violation

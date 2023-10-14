@@ -28,6 +28,41 @@
   ;; If not #f, print the file name before loading.
   (make-parameter "load-verbose" #f))
 
+(define (compiled-file-name file)
+    (define (compiled-extension)
+        (cond 
+            [(or (null? %load-compiled-extensions)
+                 (= (length %load-compiled-extensions) 0))
+                ".capy"]
+            [else (car %load-compiled-extensions)]))
+    (and %compile-fallback-path 
+        (let ([f (string-append 
+                    %compile-fallback-path
+                    (canonicalize-path file)
+                    (compiled-extension))]) f)))
+
+(define macro-expander (make-parameter "macroexpander" (lambda (x) x) procedure?))
+
+(define (compile-tree-il x)
+    (%core-compile ((macro-expander) x)))
+
+(define (compile-file file output-file)
+    (define (read-file p)
+        (let loop ([acc '()])
+            (let ([expr (read p)])
+                (cond 
+                    [(eof-object? expr) 
+                        (close-input-port p)
+                        (reverse acc)]
+                    [else (loop (cons expr acc))]))))
+    (let* ([comp (or output-file (compiled-file-name file))]
+           [in (open-input-file file)]
+           [src (read-file in)])
+        
+        (ensure-directory (dirname comp))
+        (let ([out (open-file-output-port comp)])
+            (write-bytevector (compile-tree-il src) out)
+            (close-output-port out))))
 
 ; The second argument is a thunk, usually interaction-environment.
 ;

@@ -4,8 +4,10 @@ use std::mem::{size_of, transmute};
 
 use crate::bytecode::encode::Decode;
 use crate::gc::ObjEdge;
-use crate::raise_exn;
-use crate::runtime::control::wrong_type_argument_violation;
+use crate::runtime::control::{
+    invalid_argument_violation, raise_unbound_variable, wrong_number_of_arguments_violation_at,
+    wrong_number_of_values_violation_at, wrong_type_argument_violation, raise_error_ip,
+};
 use crate::runtime::equality::{equal, eqv};
 use crate::runtime::gsubr::scm_apply_subr;
 use crate::runtime::subr_arith::{
@@ -35,6 +37,13 @@ pub struct EngineConstParams {
     /// Offset to `BumpPointer` type inside `Thread` if the selected GC plan supports
     /// fast-path bump-pointer allocation. `usize::MAX` if not supported.
     pub bump_pointer_offset: usize,
+}
+
+#[cold]
+#[inline(never)]
+fn stack_overflow(thread: &mut Thread) {
+    let ip = thread.interpreter().ip;
+    raise_error_ip(thread, ip, "stack overflow", 0);
 }
 
 pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParams>(
@@ -106,10 +115,7 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
             if sp < thread.interpreter().stack_limit {
                 sync_ip!();
                 sync_sp!();
-                panic!(
-                    "stack overflow: {}",
-                    crate::runtime::error::capture_stacktrace(thread)
-                );
+                stack_overflow(thread);
                 // TODO: Expand stack
             } else {
                 thread.interpreter().sp = sp;
@@ -176,12 +182,13 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
 
             OP_ENTER => {
                 let _enter = OpEnter::read(ip);
-                ip = ip.add(size_of::<OpEnter>());
+
                 thread.interpreter().sp = sp;
                 thread.interpreter().ip = ip;
                 thread.safepoint();
                 sp = thread.interpreter().sp;
                 ip = thread.interpreter().ip;
+                ip = ip.add(size_of::<OpEnter>());
             }
 
             OP_LOOP_HINT => {
@@ -229,7 +236,6 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
 
             OP_RECEIVE => {
                 let receive = OpReceive::read(ip);
-                ip = ip.add(size_of::<OpReceive>());
 
                 let dst = receive.dest();
                 let proc = receive.proc();
@@ -237,103 +243,117 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                 if unlikely(frame_locals_count!() <= proc as isize) {
                     sync_sp!();
                     sync_ip!();
-                    raise_exn!(
-                        FailContractArity,
-                        &[],
-                        "expected one value, got {} ({:p})",
-                        frame_locals_count!() - 1,
-                        ip
-                    );
+                    wrong_number_of_values_violation_at(thread, ip, 1, 1, 0, &[]);
                 }
 
                 fp_set!(dst, *fp_ref!(proc));
                 reset_frame!(nlocals);
+                ip = ip.add(size_of::<OpReceive>());
             }
 
             OP_RECEIVE_VALUES => {
                 let receive_values = OpReceiveValues::read(ip);
-                ip = ip.add(size_of::<OpReceiveValues>());
+
                 let proc = receive_values.proc();
                 let nvalues = receive_values.nvalues();
                 let rest = receive_values.allow_extra();
-
+                let count = frame_locals_count!();
                 if rest {
-                    if unlikely(frame_locals_count!() < proc as isize + nvalues as isize) {
+                    if unlikely(count < proc as isize + nvalues as isize) {
                         sync_sp!();
                         sync_ip!();
-                        raise_exn!(
-                            FailContractArity,
+
+                        wrong_number_of_values_violation_at(
+                            thread,
+                            ip,
+                            nvalues as _,
+                            -1,
+                            (count - proc as isize - 1) as _,
                             &[],
-                            "expected at least {}, got {}",
-                            nvalues - 1,
-                            frame_locals_count!() - proc as isize - 1
                         );
                     }
                 } else {
-                    if unlikely(frame_locals_count!() != proc as isize + nvalues as isize) {
+                    if unlikely(count != proc as isize + nvalues as isize) {
                         sync_sp!();
                         sync_ip!();
-                        raise_exn!(
-                            FailContractArity,
+                        wrong_number_of_values_violation_at(
+                            thread,
+                            ip,
+                            nvalues as _,
+                            nvalues as _,
+                            count as _,
                             &[],
-                            "expected {}, got {}",
-                            nvalues - 1,
-                            frame_locals_count!() - proc as isize - 1
                         );
                     }
                 }
+
+                ip = ip.add(size_of::<OpReceiveValues>());
             }
 
             OP_ASSERT_NARGS_EE => {
                 let assert_nargs_ee = OpAssertNargsEe::read(ip);
-                ip = ip.add(size_of::<OpAssertNargsEe>());
 
                 if unlikely(frame_locals_count!() != assert_nargs_ee.n() as isize) {
                     sync_sp!();
                     sync_ip!();
-                    raise_exn!(
-                        FailContractArity,
+
+                    let count = frame_locals_count!() - 1;
+                    let expected = assert_nargs_ee.n() as u32 - 1;
+                    wrong_number_of_arguments_violation_at(
+                        thread,
+                        ip,
+                        expected as _,
+                        expected as _,
+                        count as _,
                         &[],
-                        "expected {}, got {}",
-                        assert_nargs_ee.n() - 1,
-                        frame_locals_count!() - 1
                     );
-                    ////todo!("no values error, expected {}, got {}", assert_nargs_ee.n(), frame_locals_count!()); // FIXME: Throw error
                 }
+
+                ip = ip.add(size_of::<OpAssertNargsEe>());
             }
 
             OP_ASSERT_NARGS_GE => {
                 let assert_nargs_ge = OpAssertNargsGe::read(ip);
-                ip = ip.add(size_of::<OpAssertNargsGe>());
 
                 if unlikely(frame_locals_count!() < assert_nargs_ge.n() as isize) {
                     sync_sp!();
                     sync_ip!();
-                    raise_exn!(
-                        FailContractArity,
+                    let count = frame_locals_count!() - 1;
+                    let expected = assert_nargs_ge.n() as u32 - 1;
+
+                    wrong_number_of_arguments_violation_at(
+                        thread,
+                        ip,
+                        expected as _,
+                        -1,
+                        count as _,
                         &[],
-                        "expected at least {}, got {}",
-                        assert_nargs_ge.n() - 1,
-                        frame_locals_count!() - 1
                     );
                 }
+
+                ip = ip.add(size_of::<OpAssertNargsGe>());
             }
 
             OP_ASSERT_NARGS_LE => {
                 let assert_nargs_le = OpAssertNargsLe::read(ip);
-                ip = ip.add(size_of::<OpAssertNargsLe>());
 
                 if unlikely(frame_locals_count!() > assert_nargs_le.n() as isize) {
                     sync_sp!();
                     sync_ip!();
-                    raise_exn!(
-                        FailContractArity,
+                    let count = frame_locals_count!() - 1;
+                    let expected = assert_nargs_le.n() as u32 - 1;
+
+                    wrong_number_of_arguments_violation_at(
+                        thread,
+                        ip,
+                        0,
+                        expected as _,
+                        count as _,
                         &[],
-                        "expected at most {}, got {}",
-                        assert_nargs_le.n() - 1,
-                        frame_locals_count!() - 1
                     );
                 }
+
+                ip = ip.add(size_of::<OpAssertNargsLe>());
             }
 
             /* bind-rest dst:24
@@ -343,7 +363,6 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
              */
             OP_BIND_REST => {
                 let bind_rest = OpBindRest::read(ip);
-                ip = ip.add(size_of::<OpBindRest>());
 
                 let dst = bind_rest.dst();
                 let nargs = frame_locals_count!();
@@ -359,75 +378,76 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
 
                     sp_set!(0, rest);
                 }
+                ip = ip.add(size_of::<OpBindRest>());
             }
 
             OP_ALLOC_FRAME => {
                 let alloc_frame = OpAllocFrame::read(ip);
-                ip = ip.add(size_of::<OpAllocFrame>());
 
                 alloc_frame!(alloc_frame.nlocals());
+                ip = ip.add(size_of::<OpAllocFrame>());
             }
 
             OP_RESET_FRAME => {
                 let reset_frame = OpResetFrame::read(ip);
-                ip = ip.add(size_of::<OpResetFrame>());
 
                 reset_frame!(reset_frame.nlocals());
+                ip = ip.add(size_of::<OpResetFrame>());
             }
 
             OP_MOV => {
                 let mov = OpMov::read(ip);
-                ip = ip.add(size_of::<OpMov>());
 
                 let src = sp_ref!(mov.src());
                 sp_set!(mov.dst(), src);
+                ip = ip.add(size_of::<OpMov>());
             }
 
             OP_LONG_MOV => {
                 let long_mov = OpLongMov::read(ip);
-                ip = ip.add(size_of::<OpLongMov>());
 
                 let src = sp_ref!(long_mov.src());
                 sp_set!(long_mov.dst(), src);
+                ip = ip.add(size_of::<OpLongMov>());
             }
 
             OP_LONG_FMOV => {
                 let long_fmov = OpLongFmov::read(ip);
-                ip = ip.add(size_of::<OpLongFmov>());
 
                 let src = *fp_ref!(long_fmov.src());
                 fp_set!(long_fmov.dst(), src);
+                ip = ip.add(size_of::<OpLongFmov>());
             }
 
             OP_PUSH => {
                 let push = OpPush::read(ip);
-                ip = ip.add(size_of::<OpPush>());
 
                 let src = sp_ref!(push.src());
                 alloc_frame!(frame_locals_count!() + 1);
                 sp_set!(0, src);
+                ip = ip.add(size_of::<OpPush>());
             }
 
             OP_POP => {
                 let pop = OpPop::read(ip);
-                ip = ip.add(size_of::<OpPop>());
+
                 let val = sp_ref!(0);
                 sp = sp.add(1);
                 thread.interpreter().sp = sp;
                 sp_set!(pop.dst(), val);
+                ip = ip.add(size_of::<OpPop>());
             }
 
             OP_DROP => {
                 let drop = OpDrop::read(ip);
-                ip = ip.add(size_of::<OpDrop>());
 
                 sp = sp.add(drop.n() as _);
                 thread.interpreter().sp = sp;
+                ip = ip.add(size_of::<OpDrop>());
             }
 
             OP_SHUFFLE_DOWN => {
                 let shuffle_down = OpShuffleDown::read(ip);
-                ip = ip.add(size_of::<OpShuffleDown>());
 
                 let nlocals = frame_locals_count!();
                 let from = shuffle_down.from() as u32;
@@ -440,6 +460,7 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                 }
 
                 reset_frame!(to + n);
+                ip = ip.add(size_of::<OpShuffleDown>());
             }
 
             OP_J => {
@@ -472,18 +493,17 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
 
             OP_MAKE_IMMEDIATE => {
                 let make_immediate = OpMakeImmediate::read(ip);
-                ip = ip.add(size_of::<OpMakeImmediate>());
 
                 let value = Value(crate::runtime::value::EncodedValueDescriptor {
                     as_int64: make_immediate.value() as i64,
                 });
 
                 sp_set!(make_immediate.dst(), value);
+                ip = ip.add(size_of::<OpMakeImmediate>());
             }
 
             OP_MAKE_NON_IMMEDIATE => {
                 let make_non_immediate = OpMakeNonImmediate::read(ip);
-                ip = ip.add(size_of::<OpMakeNonImmediate>());
 
                 let program = current_program!();
                 let constants = scm_vector_ref(
@@ -492,11 +512,11 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                 );
 
                 sp_set!(make_non_immediate.dst(), constants);
+                ip = ip.add(size_of::<OpMakeNonImmediate>());
             }
 
             OP_GLOBAL_REF => {
                 let global_ref = OpGlobalRef::read(ip);
-                ip = ip.add(size_of::<OpGlobalRef>());
 
                 let program = current_program!();
                 let global = scm_vector_ref(
@@ -506,20 +526,15 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                 let value = global.cast_as::<ScmGloc>().value;
                 if value.is_undefined() {
                     sync_ip!();
-                    raise_exn!(
-                        Exn,
-                        &[],
-                        "unbound variable: {}",
-                        global.cast_as::<ScmGloc>().name
-                    );
+                    raise_unbound_variable(thread, ip, global.cast_as::<ScmGloc>().name);
                 }
 
                 sp_set!(global_ref.dst(), value);
+                ip = ip.add(size_of::<OpGlobalRef>());
             }
 
             OP_GLOBAL_SET => {
                 let global_set = OpGlobalSet::read(ip);
-                ip = ip.add(size_of::<OpGlobalSet>());
 
                 let program = current_program!();
 
@@ -539,11 +554,13 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                 } else {
                     gloc.value = src;
                 }
+
+                ip = ip.add(size_of::<OpGlobalSet>());
             }
 
             OP_BOX => {
                 let box_ = OpBox::read(ip);
-                ip = ip.add(size_of::<OpBox>());
+
                 sync_sp!();
                 sync_ip!();
 
@@ -551,11 +568,11 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                 let src = sp_ref!(box_.src());
                 boxed.cast_as::<ScmBox>().value = src;
                 sp_set!(box_.dst(), boxed);
+                ip = ip.add(size_of::<OpBox>());
             }
 
             OP_BOX_SET => {
                 let box_set = OpBoxSet::read(ip);
-                ip = ip.add(size_of::<OpBoxSet>());
 
                 let boxed = sp_ref!(box_set.dst());
                 let src = sp_ref!(box_set.src());
@@ -570,20 +587,22 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                 } else {
                     boxed.cast_as::<ScmBox>().value = src;
                 }
+
+                ip = ip.add(size_of::<OpBoxSet>());
             }
 
             OP_BOX_REF => {
                 let box_ref = OpBoxRef::read(ip);
-                ip = ip.add(size_of::<OpBoxRef>());
 
                 let boxed = sp_ref!(box_ref.src());
                 let value = boxed.cast_as::<ScmBox>().value;
                 sp_set!(box_ref.dst(), value);
+                ip = ip.add(size_of::<OpBoxRef>());
             }
 
             OP_CONS => {
                 let cons = OpCons::read(ip);
-                ip = ip.add(size_of::<OpCons>());
+
                 sync_sp!();
                 sync_ip!();
 
@@ -595,94 +614,145 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                 pair.cdr = sp_ref!(cons.cdr());
 
                 sp_set!(cons.dst(), cell);
+                ip = ip.add(size_of::<OpCons>());
             }
 
             OP_MAKE_VECTOR_IMMEDIATE => {
                 let make_vector = OpMakeVectorImmediate::read(ip);
-                ip = ip.add(size_of::<OpMakeVectorImmediate>());
+
                 sync_sp!();
                 sync_ip!();
 
                 let v = thread
                     .make_vector::<false>(make_vector.len() as _, Value::encode_bool_value(false));
                 sp_set!(make_vector.dst(), v);
+                ip = ip.add(size_of::<OpMakeVectorImmediate>());
             }
 
             OP_MAKE_VECTOR => {
                 let make_vector = OpMakeVector::read(ip);
-                ip = ip.add(size_of::<OpMakeVector>());
+
                 sync_sp!();
                 sync_ip!();
-                let len = sp_ref!(make_vector.len());
-                if !len.is_int32() {
-                    sync_ip!();
-                    raise_exn!(Exn, &[], "make-vector: expected integer, got {}", len);
+                let mut len = sp_ref!(make_vector.len());
+                if unlikely(!len.is_int32() || len.get_int32() < 0) {
+                    wrong_type_argument_violation::<{ usize::MAX }>(
+                        thread,
+                        "make-vector",
+                        0,
+                        "exact nonnegative fixnum",
+                        len,
+                        1,
+                        &[&mut len],
+                    )
                 }
                 let len = len.get_int32();
 
                 let v = thread.make_vector::<false>(len as _, Value::encode_bool_value(false));
                 sp_set!(make_vector.dst(), v);
+                ip = ip.add(size_of::<OpMakeVector>());
             }
 
             OP_VECTOR_FILL => {
                 let fill_vector = OpVectorFill::read(ip);
-                ip = ip.add(size_of::<OpVectorFill>());
 
-                let vector = sp_ref!(fill_vector.dst());
-                let fill = sp_ref!(fill_vector.fill());
+                let mut vector = sp_ref!(fill_vector.dst());
+                let mut fill = sp_ref!(fill_vector.fill());
 
-                if !vector.is_vector() {
+                if unlikely(!vector.is_vector()) {
                     sync_ip!();
-                    raise_exn!(Exn, &[], "vector-fill!: expected vector, got {}", vector);
+                    wrong_type_argument_violation::<{ usize::MAX }>(
+                        thread,
+                        "vector-fill!",
+                        0,
+                        "vector",
+                        vector,
+                        1,
+                        &[&mut vector, &mut fill],
+                    )
                 }
 
                 let len = scm_vector_length(vector);
                 for i in 0..len {
                     scm_vector_set(vector, thread, i, fill);
                 }
+
+                ip = ip.add(size_of::<OpVectorFill>());
             }
 
             OP_VECTOR_REF_IMM => {
                 let vector_ref_imm = OpVectorRefImm::read(ip);
-                ip = ip.add(size_of::<OpVectorRefImm>());
 
-                let vector = sp_ref!(vector_ref_imm.src());
-                if !vector.is_vector() {
+                let mut vector = sp_ref!(vector_ref_imm.src());
+                if unlikely(!vector.is_vector()) {
                     sync_ip!();
-                    raise_exn!(Exn, &[], "vector-ref: expected vector, got {}", vector);
+                    wrong_type_argument_violation::<{ usize::MAX }>(
+                        thread,
+                        "vector-ref",
+                        0,
+                        "vector",
+                        vector,
+                        1,
+                        &[
+                            &mut vector,
+                            &mut Value::encode_int32(vector_ref_imm.idx() as _),
+                        ],
+                    )
                 }
                 let imm = vector_ref_imm.idx();
 
-                if scm_vector_length(vector) <= imm {
+                if unlikely(scm_vector_length(vector) <= imm) {
                     sync_ip!();
-                    raise_exn!(
-                        Exn,
-                        &[],
-                        "vector-ref: out of bounds: {} >= {}",
-                        imm,
-                        scm_vector_length(vector)
-                    );
+                    invalid_argument_violation::<{ usize::MAX }>(
+                        thread,
+                        "vector-ref",
+                        "out of bounds",
+                        Value::encode_int32(imm as _),
+                        1,
+                        2,
+                        &[&mut vector, &mut Value::encode_int32(imm as _)],
+                    )
                 }
 
                 let value = scm_vector_ref(vector, imm);
                 sp_set!(vector_ref_imm.dst(), value);
+                ip = ip.add(size_of::<OpVectorRefImm>());
             }
 
             OP_VECTOR_SET_IMM => {
                 let vector_set_imm = OpVectorSetImm::read(ip);
-                ip = ip.add(size_of::<OpVectorSetImm>());
 
-                let vector = sp_ref!(vector_set_imm.dst());
-                if !vector.is_vector() {
+                let mut vector = sp_ref!(vector_set_imm.dst());
+                let mut src = sp_ref!(vector_set_imm.src());
+                if unlikely(!vector.is_vector()) {
                     sync_ip!();
-                    raise_exn!(Exn, &[], "vector-set!: expected vector, got {}", vector);
+                    wrong_type_argument_violation::<{ usize::MAX }>(
+                        thread,
+                        "vector-set!",
+                        0,
+                        "vector",
+                        vector,
+                        1,
+                        &[
+                            &mut vector,
+                            &mut Value::encode_int32(vector_set_imm.idx() as _),
+                            &mut src,
+                        ],
+                    )
                 }
                 let imm = vector_set_imm.idx();
-                let src = sp_ref!(vector_set_imm.src());
 
-                if scm_vector_length(vector) <= imm {
+                if unlikely(scm_vector_length(vector) <= imm) {
                     sync_ip!();
-                    raise_exn!(Exn, &[], "vector-set!: out of bounds");
+                    invalid_argument_violation::<{ usize::MAX }>(
+                        thread,
+                        "vector-set!",
+                        "out of bounds",
+                        Value::encode_int32(imm as _),
+                        1,
+                        3,
+                        &[&mut vector, &mut Value::encode_int32(imm as _), &mut src],
+                    )
                 }
 
                 let vector = vector.cast_as::<ScmVector>();
@@ -698,55 +768,106 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                 } else {
                     vector.values.as_mut_ptr().add(imm as usize).write(src);
                 }
+
+                ip = ip.add(size_of::<OpVectorSetImm>());
             }
 
             OP_VECTOR_REF => {
                 let vector_ref = OpVectorRef::read(ip);
-                ip = ip.add(size_of::<OpVectorRef>());
 
-                let vector = sp_ref!(vector_ref.src());
-                if !vector.is_vector() {
+                let mut vector = sp_ref!(vector_ref.src());
+                let mut idx = sp_ref!(vector_ref.idx());
+                if unlikely(!vector.is_vector()) {
                     sync_ip!();
-                    raise_exn!(Exn, &[], "vector-ref: expected vector, got {}", vector);
+                    wrong_type_argument_violation::<{ usize::MAX }>(
+                        thread,
+                        "vector-ref",
+                        0,
+                        "vector",
+                        vector,
+                        1,
+                        &[&mut vector, &mut idx],
+                    )
                 }
-                let idx = sp_ref!(vector_ref.idx());
-                if !idx.is_int32() {
+
+                if unlikely(!idx.is_int32() || idx.get_int32() < 0) {
                     sync_ip!();
-                    raise_exn!(Exn, &[], "vector-ref: expected integer, got {}", idx);
+                    wrong_type_argument_violation::<{ usize::MAX }>(
+                        thread,
+                        "vector-ref",
+                        1,
+                        "exact nonnegative fixnum",
+                        idx,
+                        1,
+                        &[&mut vector, &mut idx],
+                    )
                 }
-                let idx = idx.get_int32();
-                if idx as u32 >= scm_vector_length(vector) {
+                let idxx = idx.get_int32();
+                if unlikely(idxx as u32 >= scm_vector_length(vector)) {
                     sync_ip!();
-                    raise_exn!(Exn, &[], "vector-ref: out of bounds")
+                    invalid_argument_violation::<{ usize::MAX }>(
+                        thread,
+                        "vector-ref",
+                        "out of bounds",
+                        idx,
+                        1,
+                        2,
+                        &[&mut vector, &mut idx],
+                    )
                 }
-                let value = scm_vector_ref(vector, idx as _);
+                let value = scm_vector_ref(vector, idxx as _);
                 sp_set!(vector_ref.dst(), value);
+                ip = ip.add(size_of::<OpVectorRef>());
             }
 
             OP_VECTOR_SET => {
                 let vector_set = OpVectorSet::read(ip);
-                ip = ip.add(size_of::<OpVectorSet>());
 
-                let vector = sp_ref!(vector_set.dst());
-                if !vector.is_vector() {
+                let mut vector = sp_ref!(vector_set.dst());
+                let mut idx = sp_ref!(vector_set.idx());
+                let mut src = sp_ref!(vector_set.src());
+                if unlikely(!vector.is_vector()) {
                     sync_ip!();
-                    raise_exn!(Exn, &[], "vector-set!: expected vector, got {:?}", vector);
+                    wrong_type_argument_violation::<{ usize::MAX }>(
+                        thread,
+                        "vector-set!",
+                        0,
+                        "vector",
+                        vector,
+                        1,
+                        &[&mut vector, &mut idx, &mut src],
+                    )
                 }
-                let idx = sp_ref!(vector_set.idx());
-                if !idx.is_int32() {
-                    sync_ip!();
-                    raise_exn!(Exn, &[], "vector-set!: expected integer, got {}", idx);
-                }
-                let idx = idx.get_int32();
-                let src = sp_ref!(vector_set.src());
 
-                if idx as u32 >= scm_vector_length(vector) {
+                if unlikely(!idx.is_int32() || idx.get_int32() < 0) {
                     sync_ip!();
-                    raise_exn!(Exn, &[], "vector-set!: out of bounds")
+                    wrong_type_argument_violation::<{ usize::MAX }>(
+                        thread,
+                        "vector-set!",
+                        1,
+                        "exact nonnegative fixnum",
+                        idx,
+                        1,
+                        &[&mut vector, &mut idx, &mut src],
+                    )
+                }
+                let idxx = idx.get_int32();
+
+                if unlikely(idxx as u32 >= scm_vector_length(vector)) {
+                    sync_ip!();
+                    invalid_argument_violation::<{ usize::MAX }>(
+                        thread,
+                        "vector-set!",
+                        "out of bounds",
+                        idx,
+                        1,
+                        3,
+                        &[&mut vector, &mut idx, &mut src],
+                    )
                 }
 
                 let vector = vector.cast_as::<ScmVector>();
-                let slot = transmute::<_, ObjEdge>(vector.values.as_mut_ptr().add(idx as usize));
+                let slot = transmute::<_, ObjEdge>(vector.values.as_mut_ptr().add(idxx as usize));
 
                 if src.is_object() {
                     reference_write::<CONST_PARAMS>(
@@ -756,40 +877,50 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                         transmute(src),
                     );
                 } else {
-                    vector.values.as_mut_ptr().add(idx as usize).write(src);
+                    vector.values.as_mut_ptr().add(idxx as usize).write(src);
                 }
+
+                ip = ip.add(size_of::<OpVectorSet>());
             }
 
             OP_VECTOR_LENGTH => {
                 let vector_length = OpVectorLength::read(ip);
-                ip = ip.add(size_of::<OpVectorLength>());
 
-                let vector = sp_ref!(vector_length.src());
-                if !vector.is_vector() {
+                let mut vector = sp_ref!(vector_length.src());
+                if unlikely(!vector.is_vector()) {
                     sync_ip!();
-                    raise_exn!(Exn, &[], "vector-length: expected vector, got {}", vector);
+                    wrong_type_argument_violation::<{ usize::MAX }>(
+                        thread,
+                        "vector-length",
+                        0,
+                        "vector",
+                        vector,
+                        1,
+                        &[&mut vector],
+                    )
                 }
                 let len = scm_vector_length(vector);
                 sp_set!(vector_length.dst(), Value::encode_int32(len as _));
+                ip = ip.add(size_of::<OpVectorLength>());
             }
 
             OP_PROGRAM_REF_IMM => {
                 let program_ref_imm = OpProgramRefImm::read(ip);
-                ip = ip.add(size_of::<OpProgramRefImm>());
 
                 let program = sp_ref!(program_ref_imm.src());
                 let var = scm_program_free_variable(program, program_ref_imm.idx());
                 //println!("{:p}: get {} at {} from {} to {}", ip, var, program_ref_imm.idx(), program_ref_imm.src(), program_ref_imm.dst());
                 sp_set!(program_ref_imm.dst(), var);
+                ip = ip.add(size_of::<OpProgramRefImm>());
             }
 
             OP_PROGRAM_SET_IMM => {
                 let program_set_imm = OpProgramSetImm::read(ip);
-                ip = ip.add(size_of::<OpProgramSetImm>());
 
                 let program = sp_ref!(program_set_imm.dst());
                 let var = sp_ref!(program_set_imm.src());
                 scm_program_set_free_variable(program, thread, program_set_imm.idx(), var);
+                ip = ip.add(size_of::<OpProgramSetImm>());
             }
 
             OP_MAKE_PROGRAM => {
@@ -1100,37 +1231,36 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
 
             OP_EQ => {
                 let eq = OpEq::read(ip);
-                ip = ip.add(size_of::<OpEq>());
 
                 let a = sp_ref!(eq.a());
                 let b = sp_ref!(eq.b());
 
                 sp_set!(eq.dst(), Value::encode_bool_value(a == b));
+                ip = ip.add(size_of::<OpEq>());
             }
 
             OP_EQV => {
                 let eqv_ = OpEqv::read(ip);
-                ip = ip.add(size_of::<OpEqv>());
 
                 let a = sp_ref!(eqv_.a());
                 let b = sp_ref!(eqv_.b());
 
                 sp_set!(eqv_.dst(), Value::encode_bool_value(eqv(a, b)));
+                ip = ip.add(size_of::<OpEqv>());
             }
 
             OP_EQUAL => {
                 let equal_ = OpEqual::read(ip);
-                ip = ip.add(size_of::<OpEqual>());
 
                 let a = sp_ref!(equal_.a());
                 let b = sp_ref!(equal_.b());
 
                 sp_set!(equal_.dst(), Value::encode_bool_value(equal(a, b)));
+                ip = ip.add(size_of::<OpEqual>());
             }
 
             OP_HEAP_TAG_EQ => {
                 let heap_tag_eq = OpHeapTagEq::read(ip);
-                ip = ip.add(size_of::<OpHeapTagEq>());
 
                 let src = sp_ref!(heap_tag_eq.src());
                 let tag = heap_tag_eq.tag();
@@ -1141,47 +1271,47 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                         src.is_object() && src.get_object().header().type_id() as u32 == tag
                     )
                 );
+                ip = ip.add(size_of::<OpHeapTagEq>());
             }
 
             OP_IS_FALSE => {
                 let is_false = OpIsFalse::read(ip);
-                ip = ip.add(size_of::<OpIsFalse>());
 
                 let src = sp_ref!(is_false.src());
 
                 sp_set!(is_false.dst(), Value::encode_bool_value(src.is_false()));
+                ip = ip.add(size_of::<OpIsFalse>());
             }
 
             OP_NOT => {
                 let not = OpNot::read(ip);
-                ip = ip.add(size_of::<OpNot>());
 
                 let src = sp_ref!(not.src());
 
                 sp_set!(not.dst(), Value::encode_bool_value(src.is_false()));
+                ip = ip.add(size_of::<OpNot>());
             }
 
             OP_IS_TRUE => {
                 let is_true = OpIsTrue::read(ip);
-                ip = ip.add(size_of::<OpIsTrue>());
 
                 let src = sp_ref!(is_true.src());
 
                 sp_set!(is_true.dst(), Value::encode_bool_value(src.is_true()));
+                ip = ip.add(size_of::<OpIsTrue>());
             }
 
             OP_IS_NULL => {
                 let is_null = OpIsNull::read(ip);
-                ip = ip.add(size_of::<OpIsNull>());
 
                 let src = sp_ref!(is_null.src());
 
                 sp_set!(is_null.dst(), Value::encode_bool_value(src.is_null()));
+                ip = ip.add(size_of::<OpIsNull>());
             }
 
             OP_IS_UNDEFINED => {
                 let is_undefined = OpIsUndefined::read(ip);
-                ip = ip.add(size_of::<OpIsUndefined>());
 
                 let src = sp_ref!(is_undefined.src());
 
@@ -1189,82 +1319,106 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                     is_undefined.dst(),
                     Value::encode_bool_value(src.is_undefined())
                 );
+                ip = ip.add(size_of::<OpIsUndefined>());
             }
 
             OP_IS_INT32 => {
                 let is_int32 = OpIsInt32::read(ip);
-                ip = ip.add(size_of::<OpIsInt32>());
 
                 let src = sp_ref!(is_int32.src());
 
                 sp_set!(is_int32.dst(), Value::encode_bool_value(src.is_int32()));
+                ip = ip.add(size_of::<OpIsInt32>());
             }
 
             OP_IS_CHAR => {
                 let is_char = OpIsChar::read(ip);
-                ip = ip.add(size_of::<OpIsChar>());
 
                 let src = sp_ref!(is_char.src());
 
                 sp_set!(is_char.dst(), Value::encode_bool_value(src.is_char()));
+                ip = ip.add(size_of::<OpIsChar>());
             }
 
             OP_IS_FLONUM => {
                 let is_flonum = OpIsFlonum::read(ip);
-                ip = ip.add(size_of::<OpIsFlonum>());
 
                 let src = sp_ref!(is_flonum.src());
 
                 sp_set!(is_flonum.dst(), Value::encode_bool_value(src.is_double()));
+                ip = ip.add(size_of::<OpIsFlonum>());
             }
 
             OP_IS_NUMBER => {
                 let is_number = OpIsNumber::read(ip);
-                ip = ip.add(size_of::<OpIsNumber>());
 
                 let src = sp_ref!(is_number.src());
 
                 sp_set!(is_number.dst(), Value::encode_bool_value(src.is_number()));
+                ip = ip.add(size_of::<OpIsNumber>());
             }
 
             OP_CAR => {
                 let car = OpCar::read(ip);
-                ip = ip.add(size_of::<OpCar>());
 
-                let src = sp_ref!(car.src());
+                let mut src = sp_ref!(car.src());
 
                 if unlikely(!src.is_pair()) {
                     sync_ip!();
-                    raise_exn!(Exn, &[], "car: expected pair, got {}", src)
+                    wrong_type_argument_violation::<{ usize::MAX }>(
+                        thread,
+                        "car",
+                        0,
+                        "pair",
+                        src,
+                        1,
+                        &[&mut src],
+                    )
                 }
 
                 sp_set!(car.dst(), scm_car(src));
+                ip = ip.add(size_of::<OpCar>());
             }
 
             OP_CDR => {
                 let cdr = OpCdr::read(ip);
-                ip = ip.add(size_of::<OpCdr>());
 
-                let src = sp_ref!(cdr.src());
+                let mut src = sp_ref!(cdr.src());
 
                 if unlikely(!src.is_pair()) {
                     sync_ip!();
-                    raise_exn!(Exn, &[], "cdr: expected pair, got {}", src)
+                    wrong_type_argument_violation::<{ usize::MAX }>(
+                        thread,
+                        "cdr",
+                        0,
+                        "pair",
+                        src,
+                        1,
+                        &[&mut src],
+                    )
                 }
 
                 sp_set!(cdr.dst(), scm_cdr(src));
+                ip = ip.add(size_of::<OpCdr>());
             }
 
             OP_SET_CAR => {
                 let set_car = OpSetCar::read(ip);
-                ip = ip.add(size_of::<OpSetCar>());
 
-                let src = sp_ref!(set_car.src());
-                let dst = sp_ref!(set_car.dst());
+                let mut src = sp_ref!(set_car.src());
+                let mut dst = sp_ref!(set_car.dst());
 
                 if unlikely(!dst.is_pair()) {
                     sync_ip!();
-                    raise_exn!(Exn, &[], "set-car!: expected pair, got {}", dst)
+                    wrong_type_argument_violation::<{ usize::MAX }>(
+                        thread,
+                        "set-car!",
+                        0,
+                        "pair",
+                        dst,
+                        1,
+                        &[&mut dst, &mut src],
+                    )
                 }
 
                 let pair = dst.cast_as::<ScmPair>();
@@ -1279,18 +1433,27 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                 } else {
                     pair.car = src;
                 }
+
+                ip = ip.add(size_of::<OpSetCar>());
             }
 
             OP_SET_CDR => {
                 let set_cdr = OpSetCdr::read(ip);
-                ip = ip.add(size_of::<OpSetCdr>());
 
-                let src = sp_ref!(set_cdr.src());
-                let dst = sp_ref!(set_cdr.dst());
+                let mut src = sp_ref!(set_cdr.src());
+                let mut dst = sp_ref!(set_cdr.dst());
 
                 if unlikely(!dst.is_pair()) {
                     sync_ip!();
-                    raise_exn!(Exn, &[], "set-cdr!: expected pair, got {}", dst)
+                    wrong_type_argument_violation::<{ usize::MAX }>(
+                        thread,
+                        "set-cdr!",
+                        0,
+                        "pair",
+                        dst,
+                        1,
+                        &[&mut dst, &mut src],
+                    )
                 }
 
                 let pair = dst.cast_as::<ScmPair>();
@@ -1305,116 +1468,212 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                 } else {
                     pair.cdr = src;
                 }
+                ip = ip.add(size_of::<OpSetCdr>());
             }
 
             OP_CHAR_EQUAL => {
                 let char_equal = OpCharEqual::read(ip);
-                ip = ip.add(size_of::<OpCharEqual>());
-                
+
                 let mut a = sp_ref!(char_equal.a());
                 let mut b = sp_ref!(char_equal.b());
                 if !a.is_char() {
                     sync_ip!();
                     sync_sp!();
-                    wrong_type_argument_violation::<{usize::MAX}>(thread, "char=?", 0, "char", a, 2, &[&mut a, &mut b]);
+                    wrong_type_argument_violation::<{ usize::MAX }>(
+                        thread,
+                        "char=?",
+                        0,
+                        "char",
+                        a,
+                        2,
+                        &[&mut a, &mut b],
+                    );
                 }
 
                 if !b.is_char() {
                     sync_ip!();
                     sync_sp!();
-                    wrong_type_argument_violation::<{usize::MAX}>(thread, "char=?", 1, "char", b, 2, &[&mut a, &mut b]);
+                    wrong_type_argument_violation::<{ usize::MAX }>(
+                        thread,
+                        "char=?",
+                        1,
+                        "char",
+                        b,
+                        2,
+                        &[&mut a, &mut b],
+                    );
                 }
 
-                sp_set!(char_equal.dst(), Value::encode_bool_value(a.get_char() == b.get_char()));
+                sp_set!(
+                    char_equal.dst(),
+                    Value::encode_bool_value(a.get_char() == b.get_char())
+                );
+                ip = ip.add(size_of::<OpCharEqual>());
             }
 
             OP_CHAR_LESS => {
                 let char_less = OpCharLess::read(ip);
-                ip = ip.add(size_of::<OpCharLess>());
-                
+
                 let mut a = sp_ref!(char_less.a());
                 let mut b = sp_ref!(char_less.b());
                 if !a.is_char() {
                     sync_ip!();
                     sync_sp!();
-                    wrong_type_argument_violation::<{usize::MAX}>(thread, "char<?", 0, "char", a, 2, &[&mut a, &mut b]);
+                    wrong_type_argument_violation::<{ usize::MAX }>(
+                        thread,
+                        "char<?",
+                        0,
+                        "char",
+                        a,
+                        2,
+                        &[&mut a, &mut b],
+                    );
                 }
 
                 if !b.is_char() {
                     sync_ip!();
                     sync_sp!();
-                    wrong_type_argument_violation::<{usize::MAX}>(thread, "char<?", 1, "char", b, 2, &[&mut a, &mut b]);
+                    wrong_type_argument_violation::<{ usize::MAX }>(
+                        thread,
+                        "char<?",
+                        1,
+                        "char",
+                        b,
+                        2,
+                        &[&mut a, &mut b],
+                    );
                 }
 
-                sp_set!(char_less.dst(), Value::encode_bool_value(a.get_char() < b.get_char()));
+                sp_set!(
+                    char_less.dst(),
+                    Value::encode_bool_value(a.get_char() < b.get_char())
+                );
+                ip = ip.add(size_of::<OpCharLess>());
             }
 
             OP_CHAR_GREATER => {
                 let char_greater = OpCharGreater::read(ip);
-                ip = ip.add(size_of::<OpCharGreater>());
-                
+
                 let mut a = sp_ref!(char_greater.a());
                 let mut b = sp_ref!(char_greater.b());
                 if !a.is_char() {
                     sync_ip!();
                     sync_sp!();
-                    wrong_type_argument_violation::<{usize::MAX}>(thread, "char>?", 0, "char", a, 2, &[&mut a, &mut b]);
+                    wrong_type_argument_violation::<{ usize::MAX }>(
+                        thread,
+                        "char>?",
+                        0,
+                        "char",
+                        a,
+                        2,
+                        &[&mut a, &mut b],
+                    );
                 }
 
                 if !b.is_char() {
                     sync_ip!();
                     sync_sp!();
-                    wrong_type_argument_violation::<{usize::MAX}>(thread, "char>?", 1, "char", b, 2, &[&mut a, &mut b]);
+                    wrong_type_argument_violation::<{ usize::MAX }>(
+                        thread,
+                        "char>?",
+                        1,
+                        "char",
+                        b,
+                        2,
+                        &[&mut a, &mut b],
+                    );
                 }
 
-                sp_set!(char_greater.dst(), Value::encode_bool_value(a.get_char() > b.get_char()));
+                sp_set!(
+                    char_greater.dst(),
+                    Value::encode_bool_value(a.get_char() > b.get_char())
+                );
+                ip = ip.add(size_of::<OpCharGreater>());
             }
 
             OP_CHAR_LESS_EQUAL => {
                 let char_less_equal = OpCharLessEqual::read(ip);
-                ip = ip.add(size_of::<OpCharLessEqual>());
-                
+
                 let mut a = sp_ref!(char_less_equal.a());
                 let mut b = sp_ref!(char_less_equal.b());
                 if !a.is_char() {
                     sync_ip!();
                     sync_sp!();
-                    wrong_type_argument_violation::<{usize::MAX}>(thread, "char<=?", 0, "char", a, 2, &[&mut a, &mut b]);
+                    wrong_type_argument_violation::<{ usize::MAX }>(
+                        thread,
+                        "char<=?",
+                        0,
+                        "char",
+                        a,
+                        2,
+                        &[&mut a, &mut b],
+                    );
                 }
 
                 if !b.is_char() {
                     sync_ip!();
                     sync_sp!();
-                    wrong_type_argument_violation::<{usize::MAX}>(thread, "char<=?", 1, "char", b, 2, &[&mut a, &mut b]);
+                    wrong_type_argument_violation::<{ usize::MAX }>(
+                        thread,
+                        "char<=?",
+                        1,
+                        "char",
+                        b,
+                        2,
+                        &[&mut a, &mut b],
+                    );
                 }
 
-                sp_set!(char_less_equal.dst(), Value::encode_bool_value(a.get_char() <= b.get_char()));
+                sp_set!(
+                    char_less_equal.dst(),
+                    Value::encode_bool_value(a.get_char() <= b.get_char())
+                );
+                ip = ip.add(size_of::<OpCharLessEqual>());
             }
 
             OP_CHAR_GREATER_EQUAL => {
                 let char_greater_equal = OpCharGreaterEqual::read(ip);
-                ip = ip.add(size_of::<OpCharGreaterEqual>());
-                
+
                 let mut a = sp_ref!(char_greater_equal.a());
                 let mut b = sp_ref!(char_greater_equal.b());
                 if !a.is_char() {
                     sync_ip!();
                     sync_sp!();
-                    wrong_type_argument_violation::<{usize::MAX}>(thread, "char>=?", 0, "char", a, 2, &[&mut a, &mut b]);
+                    wrong_type_argument_violation::<{ usize::MAX }>(
+                        thread,
+                        "char>=?",
+                        0,
+                        "char",
+                        a,
+                        2,
+                        &[&mut a, &mut b],
+                    );
                 }
 
                 if !b.is_char() {
                     sync_ip!();
                     sync_sp!();
-                    wrong_type_argument_violation::<{usize::MAX}>(thread, "char>=?", 1, "char", b, 2, &[&mut a, &mut b]);
+                    wrong_type_argument_violation::<{ usize::MAX }>(
+                        thread,
+                        "char>=?",
+                        1,
+                        "char",
+                        b,
+                        2,
+                        &[&mut a, &mut b],
+                    );
                 }
 
-                sp_set!(char_greater_equal.dst(), Value::encode_bool_value(a.get_char() >= b.get_char()));
+                sp_set!(
+                    char_greater_equal.dst(),
+                    Value::encode_bool_value(a.get_char() >= b.get_char())
+                );
+                ip = ip.add(size_of::<OpCharGreaterEqual>());
             }
 
             OP_BIND_OPTIONALS => {
                 let bind_optionals = OpBindOptionals::read(ip);
-                ip = ip.add(size_of::<OpBindOptionals>());
+
                 let nlocals = bind_optionals.nargs() as isize;
                 let mut nargs = frame_locals_count!();
                 if nargs < nlocals {
@@ -1424,11 +1683,11 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                         nargs += 1;
                     }
                 }
+                ip = ip.add(size_of::<OpBindOptionals>());
             }
 
             OP_SUBR_CALL => {
                 let subr_call = OpSubrCall::read(ip);
-                ip = ip.add(size_of::<OpSubrCall>());
 
                 let idx = subr_call.idx();
 
@@ -1436,17 +1695,18 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
 
                 reset_frame!(1);
                 sp_set!(0, ret);
+                ip = ip.add(size_of::<OpSubrCall>());
             }
 
             OP_EXPAND_APPLY_ARGUMENT => {
                 let _ = OpExpandApplyArgument::read(ip);
-                ip = ip.add(size_of::<OpExpandApplyArgument>());
 
                 thread.interpreter().ip = ip;
                 thread.interpreter().sp = sp;
                 intrinsics::expand_apply_argument(thread);
                 ip = thread.interpreter().ip;
                 sp = thread.interpreter().sp;
+                ip = ip.add(size_of::<OpExpandApplyArgument>());
             }
 
             OP_CONTINUATION_CALL => {

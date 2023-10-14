@@ -17,7 +17,7 @@ use crate::{
         subr_core,
         symbol::scm_intern,
         value::Value,
-    },
+    }, interpreter::stackframe,
 };
 
 use self::{
@@ -88,8 +88,8 @@ impl VirtualMachine {
                     ObjEdge::from_address(Address::from_mut_ptr(&mut self.interaction_environment));
                 edges.push(edge);
             }
-            //let edge = ObjEdge::from_address(Address::from_mut_ptr(&mut self.module_obarray));
-            //edges.push(edge);
+            
+            crate::runtime::load::visit_roots(factory);
         }
         factory.create_process_edge_roots_work(edges);
     }
@@ -141,7 +141,8 @@ pub fn scm_init(mmtk: mmtk::MMTK<CapyVM>, plan: GCPlan) -> &'static mut VirtualM
         control::init();
         equality::init();
         subr_core::init();
-
+        stackframe::init_frame_builtins();
+        crate::runtime::stacks::init_stack_builtins();
         this.initialized = true;
         this
     }

@@ -388,3 +388,4 @@
         (bitwise-if mask
                     (bitwise-arithmetic-shift ei3 ei2)
                     ei1)))
+

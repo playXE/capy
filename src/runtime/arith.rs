@@ -3,11 +3,10 @@ use std::{
     mem::{size_of, transmute},
 };
 
-use mmtk::{util::ObjectReference, AllocationSemantics, MutatorContext};
-
-use crate::{gc::CapyVM, gc_protect, raise_exn, utils::round_up, vm::thread::Thread};
+use crate::{gc_protect, raise_exn, utils::round_up, vm::thread::Thread};
 
 use super::{
+    control::invalid_argument_violation,
     object::{ScmCellHeader, ScmComplex, ScmRational, TypeId},
     value::Value,
 };
@@ -38,16 +37,89 @@ pub fn scm_to_u32(arg: Value) -> u32 {
     }
 }
 
-pub fn scm_to_usize(arg: Value) -> usize {
+pub fn scm_to_usize(mut arg: Value) -> usize {
     if arg.is_int32() {
         arg.get_int32() as usize
+    } else if arg.is_bignum() {
+        let bn = arg.get_bignum();
+        let opt;
+        #[cfg(target_pointer_width = "32")]
+        {
+            opt = bn.u32();
+        }
+
+        #[cfg(target_pointer_width = "64")]
+        {
+            opt = bn.u64();
+        }
+
+        match opt {
+            Some(x) => x as usize,
+            None => {
+                invalid_argument_violation::<{ usize::MAX }>(
+                    Thread::current(),
+                    "",
+                    "out of usize range",
+                    arg,
+                    1,
+                    1,
+                    &[&mut arg],
+                );
+            }
+        }
     } else {
-        raise_exn!(
-            FailContract,
-            &[],
-            "scm_to_usize: not an exact integer: {}",
-            arg
-        )
+        invalid_argument_violation::<{ usize::MAX }>(
+            Thread::current(),
+            "",
+            "exact integer",
+            arg,
+            1,
+            1,
+            &[&mut arg],
+        );
+    }
+}
+
+pub fn scm_to_usize_who(who: &str, mut arg: Value) -> usize {
+    if arg.is_int32() {
+        arg.get_int32() as usize
+    } else if arg.is_bignum() {
+        let bn = arg.get_bignum();
+        let opt;
+        #[cfg(target_pointer_width = "32")]
+        {
+            opt = bn.u32();
+        }
+
+        #[cfg(target_pointer_width = "64")]
+        {
+            opt = bn.u64();
+        }
+
+        match opt {
+            Some(x) => x as usize,
+            None => {
+                invalid_argument_violation::<{ usize::MAX }>(
+                    Thread::current(),
+                    who,
+                    "out of usize range",
+                    arg,
+                    1,
+                    1,
+                    &[&mut arg],
+                );
+            }
+        }
+    } else {
+        invalid_argument_violation::<{ usize::MAX }>(
+            Thread::current(),
+            who,
+            "exact integer",
+            arg,
+            1,
+            1,
+            &[&mut arg],
+        );
     }
 }
 
@@ -184,7 +256,7 @@ impl ScmBigInteger {
 
     pub fn to_string_base(&self, base: &BigIntBase) -> String {
         let radix = base.radix() as u32;
-        assert!(radix == 10);
+        
         if self.is_zero() {
             return "0".to_string();
         }
@@ -1272,24 +1344,17 @@ impl Thread {
         let size = round_up(size_of::<ScmRational>(), 8, 0);
 
         unsafe {
-            let semantics = if IMMORTAL {
-                AllocationSemantics::Immortal
+            let mem = if IMMORTAL {
+                self.alloc_immortal(size, TypeId::Rational)
             } else {
-                AllocationSemantics::Default
-            };
+                gc_protect!(self => numerator, denominator => self.alloc(size, TypeId::Rational))
+            }
+            .cast::<ScmRational>();
 
-            let ptr = gc_protect!(self => numerator, denominator => self.mutator().alloc(size, 8, 0, semantics));
+            (*mem).numerator = numerator;
+            (*mem).denominator = denominator;
 
-            ptr.store(ScmRational {
-                header: ScmCellHeader::new(TypeId::Rational),
-                numerator,
-                denominator,
-            });
-
-            let objref = ObjectReference::from_address::<CapyVM>(ptr);
-            self.mutator().post_alloc(objref, size, semantics);
-
-            transmute(objref)
+            transmute(mem)
         }
     }
 
@@ -1301,25 +1366,17 @@ impl Thread {
         let size = round_up(size_of::<ScmComplex>(), 8, 0);
 
         unsafe {
-            let semantics = if IMMORTAL {
-                AllocationSemantics::Immortal
+            let mem = if IMMORTAL {
+                self.alloc_immortal(size, TypeId::Complex)
             } else {
-                AllocationSemantics::Default
-            };
+                gc_protect!(self => real, imag => self.alloc(size, TypeId::Complex))
+            }
+            .cast::<ScmComplex>();
 
-            let ptr =
-                gc_protect!(self => real, imag => self.mutator().alloc(size, 8, 0, semantics));
+            (*mem).imag = imag;
+            (*mem).real = real;
 
-            ptr.store(ScmComplex {
-                header: ScmCellHeader::new(TypeId::Complex),
-                real,
-                imag,
-            });
-
-            let objref = ObjectReference::from_address::<CapyVM>(ptr);
-            self.mutator().post_alloc(objref, size, semantics);
-
-            transmute(objref)
+            transmute(mem)
         }
     }
 
@@ -1344,28 +1401,14 @@ impl Thread {
         );
 
         unsafe {
-            let semantics = if size > self.los_threshold {
-                AllocationSemantics::Los
-            } else {
-                AllocationSemantics::Default
-            };
+            let mem = self.alloc(size, TypeId::Bignum).cast::<ScmBigInteger>();
+            (*mem).negative = negative;
+            (*mem).count = ndigits;
+            for i in 0..ndigits as usize {
+                (*mem).digits_mut()[i] = 0;
+            }
 
-            let ptr = self.mutator().alloc(size, 8, 0, semantics);
-
-            ptr.store(ScmBigInteger {
-                header: ScmCellHeader::new(TypeId::Bignum),
-                negative,
-                count: ndigits,
-                uwords: [0],
-            });
-
-            let bn = ptr.to_mut_ptr::<ScmBigInteger>().as_mut().unwrap();
-            bn.digits_mut()[0..ndigits as usize].fill(0);
-
-            let objref = ObjectReference::from_address::<CapyVM>(ptr);
-            self.mutator().post_alloc(objref, size, semantics);
-
-            transmute(objref)
+            transmute(mem)
         }
     }
 
@@ -2720,7 +2763,7 @@ pub fn n_compare(thread: &mut Thread, mut lhs: Value, mut rhs: Value) -> Orderin
             }
         }
 
-        if rhs.is_double() {
+        if lhs.is_double() {
             'flonum_again: loop {
                 if rhs.is_int32() {
                     let d = lhs.get_double() - rhs.get_int32() as f64;
@@ -2780,10 +2823,10 @@ pub fn n_compare(thread: &mut Thread, mut lhs: Value, mut rhs: Value) -> Orderin
             }
         }
 
-        if rhs.is_bignum() {
+        if lhs.is_bignum() {
             'bignum_again: loop {
-                if lhs.is_int32() {
-                    let negative = lhs.get_int32() < 0;
+                if rhs.is_int32() {
+                    let negative = rhs.get_int32() < 0;
 
                     return if negative {
                         Ordering::Less
@@ -2792,8 +2835,8 @@ pub fn n_compare(thread: &mut Thread, mut lhs: Value, mut rhs: Value) -> Orderin
                     };
                 }
 
-                if lhs.is_double() {
-                    let negative = lhs.get_double() < 0.0;
+                if rhs.is_double() {
+                    let negative = rhs.get_double() < 0.0;
 
                     return if negative {
                         Ordering::Less
@@ -2802,22 +2845,22 @@ pub fn n_compare(thread: &mut Thread, mut lhs: Value, mut rhs: Value) -> Orderin
                     };
                 }
 
-                if lhs.is_bignum() {
+                if rhs.is_bignum() {
                     return ScmBigInteger::compare(&lhs.get_bignum(), &rhs.get_bignum());
                 }
 
-                if lhs.is_rational() {
-                    let mut nume = lhs.get_rational().numerator;
-                    let deno = lhs.get_rational().denominator;
+                if rhs.is_rational() {
+                    let mut nume = rhs.get_rational().numerator;
+                    let deno = rhs.get_rational().denominator;
 
                     let deno = gc_protect!(thread => nume => arith_mul(thread, deno, rhs));
 
                     return n_compare(thread, nume, deno);
                 }
 
-                if lhs.is_complex() {
-                    if n_zero_p(lhs.get_complex().imag) {
-                        lhs = lhs.get_complex().real;
+                if rhs.is_complex() {
+                    if n_zero_p(rhs.get_complex().imag) {
+                        lhs = rhs.get_complex().real;
                         continue 'bignum_again;
                     }
                 }
@@ -2826,7 +2869,7 @@ pub fn n_compare(thread: &mut Thread, mut lhs: Value, mut rhs: Value) -> Orderin
             }
         }
 
-        if rhs.is_rational() {
+        if lhs.is_rational() {
             let mut nume = rhs.get_rational().numerator;
             let mut deno = rhs.get_rational().denominator;
 
@@ -2877,9 +2920,9 @@ pub fn n_compare(thread: &mut Thread, mut lhs: Value, mut rhs: Value) -> Orderin
             }
         }
 
-        if rhs.is_complex() {
-            if n_zero_p(rhs.get_complex().imag) {
-                rhs = rhs.get_complex().real;
+        if lhs.is_complex() {
+            if n_zero_p(lhs.get_complex().imag) {
+                lhs = lhs.get_complex().real;
                 continue 'start_again;
             }
         }
@@ -2887,7 +2930,7 @@ pub fn n_compare(thread: &mut Thread, mut lhs: Value, mut rhs: Value) -> Orderin
         break;
     }
 
-    unreachable!()
+    unreachable!("{} {}", lhs, rhs)
 }
 
 pub fn arith_inverse(thread: &mut Thread, obj: Value) -> Value {

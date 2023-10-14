@@ -9,7 +9,7 @@ use crate::{
     },
     raise_exn,
     runtime::{
-        control::{ScmContinuation, VMCont},
+        control::{ScmContinuation, VMCont, invalid_argument_violation},
         environment::scm_define,
         gsubr::{scm_define_subr, Subr},
         list::scm_length,
@@ -66,7 +66,7 @@ pub unsafe extern "C-unwind" fn expand_apply_argument(thread: &mut Thread) {
             x = scm_cdr(x);
         }
     } else {
-        todo!("throw error");
+        invalid_argument_violation::<{usize::MAX}>(thread, "apply", "expected list as argument", x, 1, 1, &[&mut x])
     }
 }
 /// Jumps to the given continuation by unwinding to `scm_call_n` location.

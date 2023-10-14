@@ -438,8 +438,13 @@
             (else
               (> (vector-ref t1 i) (vector-ref t2 i)))))))
 
-(define (file-exists? filename)
-  (file-io/file-exists? filename))
+(define (mtime-newer? t1 t2)
+  (let loop ((i 0))
+    (cond ((= i (vector-length t1)) #f)
+          ((= (vector-ref t1 i) (vector-ref t2 i))
+           (loop (+ i 1)))
+          (else
+            (> (vector-ref t1 i) (vector-ref t2 i))))))
 
 (define (relative-path-string? filename)
   (file-io/relative-path-string? filename))

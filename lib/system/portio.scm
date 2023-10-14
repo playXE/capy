@@ -115,7 +115,8 @@
 
 (define (call-with-port p f)
   (call-with-values
-   (lambda () (f p))
+   (lambda () 
+    (f p))
    (lambda results
      (if (io/open-port? p) (io/close-port p))
      (apply values results))))
@@ -475,6 +476,7 @@
 
 (define (put-bytevector p bv . rest)
   (define (put-bytevector p bv start count)
+    
     (if (and (io/binary-port? p)
              (io/output-port? p)
              (bytevector? bv)
@@ -487,8 +489,9 @@
           (do ((i start (+ i 1)))
               ((= i n))
             (put-u8 p (bytevector-u8-ref bv i))))
-        (assertion-violation 'put-bytevector
-                             (errmsg 'msg:illegalargs) p bv start count)))
+        (begin 
+          (assertion-violation 'put-bytevector
+                             "illegal args" p bv start count))))
   (cond ((null? rest)
          (put-bytevector p bv 0 (bytevector-length bv)))
         ((null? (cdr rest))
@@ -499,7 +502,7 @@
          (put-bytevector p bv (car rest) (cadr rest)))
         (else
          (assertion-violation 'put-bytevector
-                              (errmsg 'msg:toomanyargs)
+                              "too many args"
                               (cons p (cons bv rest))))))
 
 (define (put-string p s . rest)

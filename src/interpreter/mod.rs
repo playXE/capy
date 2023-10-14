@@ -1,18 +1,20 @@
 use self::{
     engine::EngineConstParams,
-    entry_record::EntryFrame,
     stackframe::{
         frame_dynamic_link, frame_local, frame_previous_sp, set_frame_dynamic_link,
-        set_frame_virtual_return_address, StackElement, StackFrame,
+        set_frame_virtual_return_address, StackElement,
     },
 };
 use crate::{
     gc::{
+        shadow_stack::ShadowStack,
         virtual_memory::{PlatformVirtualMemory, VirtualMemory, VirtualMemoryImpl},
         CapyVM, ObjEdge,
     },
     runtime::{
         control::{restore_cont_jump, ScmContinuation},
+        environment::environment_get,
+        symbol::scm_intern,
         value::Value,
     },
     vm::{
@@ -55,8 +57,12 @@ pub struct InterpreterState {
     pub ip: *const u8,
     pub sp: *mut StackElement,
     pub fp: *mut StackElement,
-    pub top_entry_frame: *mut EntryFrame,
-    pub top_call_frame: *mut StackFrame,
+    pub inline_cursor: usize,
+    pub inline_limit: usize,
+    pub los_threshold: usize,
+    pub inline_alloc: bool,
+    pub needs_wb: bool,
+    pub shadow_stack: ShadowStack,
     pub stack_limit: *mut StackElement,
     pub entry_id: u64,
     /// Disable JIT
@@ -112,9 +118,13 @@ impl InterpreterState {
             ip: null(),
             registers: null_mut(),
             sp: null_mut(),
+            shadow_stack: ShadowStack::new(),
             fp: null_mut(),
-            top_call_frame: null_mut(),
-            top_entry_frame: null_mut(),
+            inline_cursor: 0,
+            inline_limit: 0,
+            los_threshold: 0,
+            inline_alloc: false,
+            needs_wb: true,
             entry_id: ENTRY.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
             stack_limit: null_mut(),
 
@@ -262,6 +272,19 @@ fn allocate_stack(mut size: usize) -> VirtualMemory {
     .expect("Failed to allocate stack")
 }
 
+pub fn scm_apply<const PROTECT: bool>(thread: &mut Thread, args: &[Value]) -> Result<Value, Value> {
+    let apply = environment_get(
+        scm_virtual_machine().interaction_environment,
+        scm_intern("apply"),
+    )
+    .unwrap();
+    if apply.is_undefined() {
+        panic!("apply is undefined")
+    }
+
+    scm_call_n::<PROTECT>(thread, apply, args)
+}
+
 pub fn scm_call_n<const PROTECT: bool>(
     thread: &mut Thread,
     proc: Value,
@@ -277,7 +300,7 @@ pub fn scm_call_n<const PROTECT: bool>(
     call.  */
     let stack_reserve_words = call_nlocals + frame_size + return_nlocals + frame_size;
     unsafe {
-        let off = thread.shadow_stack.offset_for_save();
+        let off = thread.interpreter().shadow_stack.offset_for_save();
 
         let prev_id = thread.interpreter().entry_id;
         if PROTECT {
@@ -341,7 +364,7 @@ pub fn scm_call_n<const PROTECT: bool>(
             };
             thread.interpreter().registers = prev_registers;
             thread.interpreter().entry_id = prev_id;
-            thread.shadow_stack.restore_from_offset(off);
+            thread.interpreter().shadow_stack.restore_from_offset(off);
 
             result
         }

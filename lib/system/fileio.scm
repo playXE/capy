@@ -123,10 +123,7 @@
           (file-io/install-port-position-as-binary! p data)
           (file-io/remember p)
           p)
-        (begin (raise-r6rs-exception (make-i/o-filename-error filename)
-                                     'open-file-input-port
-                                     (errmsg 'msg:openerror)
-                                     (list filename))
+        (begin (error 'open-file-input "file not found" filename)
                #t))))
 
 (define (file-io/open-file-output-port filename options bufmode transcoder)
@@ -141,7 +138,7 @@
                    (else 'block)))
          (exists? (file-io/file-exists? filename)))
     (cond ((and exists? (not dont-create) (not dont-fail))
-           (let* ((exec-mode (larceny:execution-mode)))
+           (let* ((exec-mode 'r5rs))
              (case exec-mode
               ((r5rs) #t)
               ((err5rs)
@@ -162,6 +159,7 @@
             'open-file-output-port
             (errmsg 'msg:nosuchfile)
             (list filename opts))))
+    
     (let ((fd (apply osdep/open-file filename 'output 'binary opts)))
       (if (>= fd 0)
           (let* ((data (file-io/data fd filename))
@@ -173,10 +171,7 @@
             (file-io/install-port-position-as-binary! p data)
             (file-io/remember p)
             p)
-          (begin (raise-r6rs-exception (make-i/o-filename-error filename)
-                                       'open-file-output-port
-                                       (errmsg 'msg:openerror)
-                                       (list filename))
+          (begin (error 'open-file-output "cannot open file" filename)
                  #t)))))
 
 ; FIXME:  This should be implemented better.
@@ -277,3 +272,12 @@
 (define (file-io/remember p)
   (if (io/output-port? p)
       (set! *files-open* #t)))
+
+(define (ensure-directory dir)
+  (let ([res (mkdir dir)])
+    (cond 
+      [(eq? res 0) #t]
+      [else 
+        (display (format "mkdir failed ~a ~%" res))
+        #f 
+      ])))

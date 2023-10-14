@@ -14,7 +14,7 @@ pub mod primitives;
 pub mod synrules;
 pub mod tree_il;
 
-use std::collections::HashMap;
+use std::{collections::HashMap, rc::Rc, cell::RefCell};
 
 pub use p::P;
 
@@ -118,15 +118,16 @@ pub enum Denotation {
 }
 
 #[derive(Clone)]
-pub struct Cenv<'a> {
+pub struct Cenv {
     pub syntax_env: P<SyntaxEnv>,
     pub frames: Sexpr,
-    pub source_loc: &'a SourceInfo,
+    pub source_loc: Rc<RefCell<SourceInfo>>,
+    pub expr_name: Sexpr,
 }
 
-impl Cenv<'_> {
+impl Cenv {
     pub fn maybe_source(&self, sexpr: &Sexpr) -> Option<SourceLoc> {
-        if let Some(loc) = self.source_loc.get(&EqSexpr(sexpr.clone())) {
+        if let Some(loc) = self.source_loc.borrow().get(&EqSexpr(sexpr.clone())) {
             Some(loc.clone())
         } else {
             None
@@ -188,7 +189,8 @@ impl Cenv<'_> {
         Self {
             syntax_env: self.syntax_env.clone(),
             frames: sexp_acons(typ, frame, self.frames.clone()),
-            source_loc: self.source_loc,
+            source_loc: self.source_loc.clone(),
+            expr_name: self.expr_name.clone(),
         }
     }
 
@@ -206,13 +208,15 @@ pub fn is_free_identifier_eq(id1: Sexpr, id2: Sexpr) -> bool {
             let b1 = Cenv {
                 syntax_env: id1.env.clone(),
                 frames: identifier_env(id1.clone()),
-                source_loc: &SourceInfo::new(),
+                source_loc: Rc::new(RefCell::new(SourceInfo::new())),
+                expr_name: Sexpr::Null
             }
             .lookup_int(id1.name.clone());
             let b2 = Cenv {
                 syntax_env: id2.env.clone(),
                 frames: identifier_env(id2.clone()),
-                source_loc: &SourceInfo::new(),
+                source_loc: Rc::new(RefCell::new(SourceInfo::new())),
+                expr_name: Sexpr::Null
             }
             .lookup_int(id2.name.clone());
 
@@ -235,13 +239,15 @@ pub fn er_compare(a: Sexpr, b: Sexpr, env: P<SyntaxEnv>, frames: Sexpr) -> bool 
         let a1 = Cenv {
             syntax_env: env.clone(),
             frames: frames.clone(),
-            source_loc: &SourceInfo::new(),
+            expr_name: Sexpr::Null,
+            source_loc: Rc::new(RefCell::new(SourceInfo::new())),
         }
         .lookup(a);
         let b1 = Cenv {
             syntax_env: env.clone(),
             frames: frames.clone(),
-            source_loc: &SourceInfo::new(),
+            source_loc: Rc::new(RefCell::new(SourceInfo::new())),
+            expr_name: Sexpr::Null
         }
         .lookup(b);
 

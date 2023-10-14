@@ -340,12 +340,12 @@ fn optimize_loop(lvar: P<LVar>, lambda: P<Lambda>, init: Vec<P<IForm>>) -> P<IFo
                         .map(|x| rewrite(x.clone(), lvar, formals, label.clone()))
                         .collect::<Vec<_>>();
                     let temps = P(IForm::Let(Let {
-                        src: call.src,
+                        src: call.src.clone(),
                         typ: LetType::Let,
                         lvars: temp_lvars,
                         inits,
                         body: P(IForm::Seq(Seq {
-                            src: call.src,
+                            src: call.src.clone(),
                             forms: set_vars,
                         })),
                     }));
@@ -444,7 +444,7 @@ fn optimize_loop(lvar: P<LVar>, lambda: P<Lambda>, init: Vec<P<IForm>>) -> P<IFo
     lbl_.body = body;
 
     let binding = P(IForm::Let(Let {
-        src: lambda.src,
+        src: lambda.src.clone(),
         typ: LetType::Let,
         lvars: lambda.lvars.clone(),
         inits: init,

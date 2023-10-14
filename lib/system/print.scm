@@ -160,8 +160,17 @@
       [(eof-object? x) (printeof x p slashify)]
       [(eq? (undefined) x) (printstr "undefined" p)]
       [(port? x) (printport x p slashify)]
+      [(frame? x) (printframe x p slashify level)]
       [(tuple? x) (printtuple x p slashify level)]
       [else (print-raw x)]))
+
+  (define (printframe x p slashify level)
+    (printstr "#<frame " p)
+    (printstr (number->string (frame-address x) 16) p)
+    (cond 
+      [(frame-procedure-name x) => (lambda (name) (printstr " " p) (print name p slashify level))]
+      [else #f])
+    (printstr ">" p))
 
   (define (printtuple x p slashify level)
     
@@ -241,7 +250,7 @@
               (printstr "x" p)
               (printstr (number->string k 16) p)])))
 
-  (define (printbytevecotr x p slashify level)
+  (define (printbytevector x p slashify level)
     (write-char #\# p)
     (write-char #\u p)
     (write-char #\8 p)

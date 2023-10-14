@@ -77,7 +77,7 @@ pub fn environment_get_cell(mut env: Value, mut name: Value) -> Result<Value, En
         Ok(cell)
     } else {
         let thread = Thread::current();
-        let mut cell = gc_protect!(thread => env, name => thread.make_gloc(Value::encode_undefined_value(), Value::encode_undefined_value()));
+        let mut cell = gc_protect!(thread => env, name => thread.make_gloc::<false>(Value::encode_undefined_value(), Value::encode_undefined_value()));
         let nsize = put_hashtable::<true>(env.environment().ht, name, cell);
         if nsize != 0 {
             gc_protect!(thread => cell, env, name => rehash_hashtable(thread, env.environment().ht, nsize));

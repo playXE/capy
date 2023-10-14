@@ -56,6 +56,7 @@ pub enum TypeId {
     VMCont,
     Continuation,
     EofObject,
+    Frame,
 }
 
 pub const HASH_STATE_UNHASHED: u8 = 0;

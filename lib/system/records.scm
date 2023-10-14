@@ -229,6 +229,8 @@
     (if (record? rec)
         (tuple-ref rec 0)
         (assertion-violation 'record-rtd (wrong-type-argument-message "non-opaque record" rec)))))
+
+
 (define make-nested-conser
   (lambda (desc rtd argc)
     ((rcd-protocol desc)
@@ -329,6 +331,8 @@
     (or (record-type? obj)
         (assertion-violation 'record-type-rtd (wrong-type-argument-message "record-type" obj)))
     (tuple-ref obj 2)))
+
+(define record-type-descriptor record-type-rtd)
 
 (define record-type-rcd
   (lambda (obj)

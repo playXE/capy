@@ -109,7 +109,7 @@ pub fn round_down<
     x: T,
     alignment: isize,
 ) -> T {
-    assert!(is_power_of_two(alignment));
+    debug_assert!(is_power_of_two(alignment));
 
     T::from_isize(x.to_isize().unwrap() & -alignment).unwrap()
 }
@@ -154,7 +154,7 @@ pub fn round_up<
     alignment: usize,
     offset: usize,
 ) -> T {
-    assert!(offset < alignment);
+    debug_assert!(offset < alignment);
     round_down(
         x + T::from_usize(alignment).unwrap() - T::one() + T::from_usize(offset).unwrap(),
         alignment as _,

@@ -172,7 +172,7 @@ macro_rules! gc_protect {
     ($thread: expr => $($var: ident),* => $e: expr) => {
         {
             $(
-                $thread.shadow_stack.push_to_save($var);
+                $thread.interpreter().shadow_stack.push_to_save($var);
             )*
 
             let result = {
@@ -182,7 +182,7 @@ macro_rules! gc_protect {
                     let t = $crate::vm::thread::Thread::current();
                     $(
                         stringify!($var);
-                        let _ =  t.shadow_stack.pop_to_restore();
+                        let _ =  t.interpreter().shadow_stack.pop_to_restore();
                     )*
                 });
                 let result = $e;
@@ -199,7 +199,7 @@ macro_rules! gc_protect {
         $(
             #[allow(unused_assignments)]
             {
-                $reversed = $thread.shadow_stack.pop_to_restore();
+                $reversed = $thread.interpreter().shadow_stack.pop_to_restore();
             }
         )*
     };

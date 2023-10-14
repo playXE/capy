@@ -25,7 +25,7 @@ extern "C-unwind" fn string_to_number(
             10 => 10,
             16 => 16,
             _ => {
-                invalid_argument_violation(
+                invalid_argument_violation::<{usize::MAX}>(
                     thread,
                     "string->number",
                     "radix can only be 2, 8, 10, 16",
@@ -37,7 +37,7 @@ extern "C-unwind" fn string_to_number(
             }
         }
     } else {
-        invalid_argument_violation(
+        invalid_argument_violation::<{usize::MAX}>(
             thread,
             "string->number",
             "exact nonnegative integer",
@@ -85,7 +85,7 @@ extern "C-unwind" fn number_to_string(
             10 => 10,
             16 => 16,
             _ => {
-                invalid_argument_violation(
+                invalid_argument_violation::<{usize::MAX}>(
                     thread,
                     "string->number",
                     "radix can only be 2, 8, 10, 16",
@@ -97,7 +97,7 @@ extern "C-unwind" fn number_to_string(
             }
         }
     } else {
-        invalid_argument_violation(
+        invalid_argument_violation::<{usize::MAX}>(
             thread,
             "string->number",
             "exact nonnegative integer",
@@ -248,7 +248,7 @@ pub(crate) extern "C-unwind" fn intrinsic_div(
     }
 
     if b == Value::encode_int32(0) {
-        invalid_argument_violation(thread, "/", "undefined for 0", b, 1, 2, &[&mut a, &mut b]);
+        invalid_argument_violation::<{usize::MAX}>(thread, "/", "undefined for 0", b, 1, 2, &[&mut a, &mut b]);
     }
 
     arith::arith_div(thread, a, b)
@@ -270,7 +270,7 @@ extern "C-unwind" fn subr_int_div(thread: &mut Thread, a: &mut Value, b: &mut Va
                 if arith::n_finite_p(*b) {
                     return arith::arith_integer_div(thread, *a, *b);
                 } else {
-                    invalid_argument_violation(
+                    invalid_argument_violation::<{usize::MAX}>(
                         thread,
                         "div",
                         "neither infinite nor a NaN",
@@ -292,7 +292,7 @@ extern "C-unwind" fn subr_int_div(thread: &mut Thread, a: &mut Value, b: &mut Va
                 )
             }
         } else {
-            invalid_argument_violation(
+            invalid_argument_violation::<{usize::MAX}>(
                 thread,
                 "div",
                 "neither infinite nor a NaN",
@@ -321,7 +321,7 @@ extern "C-unwind" fn subr_int_div0(thread: &mut Thread, lhs: &mut Value, rhs: &m
     }
 
     if !arith::n_finite_p(*lhs) {
-        invalid_argument_violation(
+        invalid_argument_violation::<{usize::MAX}>(
             thread,
             "div0",
             "neither infinite nor a NaN",
@@ -345,7 +345,7 @@ extern "C-unwind" fn subr_int_div0(thread: &mut Thread, lhs: &mut Value, rhs: &m
     }
 
     if !arith::n_finite_p(*rhs) {
-        invalid_argument_violation(
+        invalid_argument_violation::<{usize::MAX}>(
             thread,
             "div0",
             "neither infinite nor a NaN",
@@ -357,7 +357,7 @@ extern "C-unwind" fn subr_int_div0(thread: &mut Thread, lhs: &mut Value, rhs: &m
     }
 
     if !arith::n_zero_p(*rhs) {
-        invalid_argument_violation(thread, "div0", "not zero", *rhs, 1, 2, &[lhs, rhs]);
+        invalid_argument_violation::<{usize::MAX}>(thread, "div0", "not zero", *rhs, 1, 2, &[lhs, rhs]);
     }
 
     return arith::arith_integer_div(thread, *lhs, *rhs);
@@ -677,7 +677,7 @@ extern "C-unwind" fn subr_log(thread: &mut Thread, lhs: &mut Value, rhs: &mut Va
 
         if arith::number_p(*lhs) {
             if lhs.is_int32() && lhs.get_int32() == 0 {
-                invalid_argument_violation(thread, "log", "undefined for 0", *lhs, 0, 1, &[lhs]);
+                invalid_argument_violation::<{usize::MAX}>(thread, "log", "undefined for 0", *lhs, 0, 1, &[lhs]);
             }
             return arith::arith_log(thread, *lhs);
         } else {
@@ -706,7 +706,7 @@ extern "C-unwind" fn subr_log(thread: &mut Thread, lhs: &mut Value, rhs: &mut Va
     }
 
     if lhs.is_int32() && lhs.get_int32() == 0 {
-        invalid_argument_violation(thread, "log", "undefined for 0", *lhs, 0, 2, &[lhs, rhs]);
+        invalid_argument_violation::<{usize::MAX}>(thread, "log", "undefined for 0", *lhs, 0, 2, &[lhs, rhs]);
     }
 
     if !arith::number_p(*rhs) {

@@ -14,6 +14,8 @@ pub mod coroutine;
 pub mod environment;
 pub mod equality;
 pub mod error;
+pub mod load;
+pub mod stacks;
 pub mod fasl;
 pub mod fileio;
 pub mod gsubr;

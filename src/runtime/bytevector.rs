@@ -53,7 +53,7 @@ impl MutatorParam {
                 }
 
                 if args[1].is_int32() {
-                    invalid_argument_violation(
+                    invalid_argument_violation::<{usize::MAX}>(
                         thread,
                         subr,
                         "index out of bounds",
@@ -64,7 +64,7 @@ impl MutatorParam {
                     );
                 }
 
-                invalid_argument_violation(
+                invalid_argument_violation::<{usize::MAX}>(
                     thread,
                     subr,
                     "exact integer",
@@ -113,7 +113,7 @@ impl NativeMutatorParam {
                 }
 
                 if args[1].is_int32() {
-                    invalid_argument_violation(
+                    invalid_argument_violation::<{usize::MAX}>(
                         thread,
                         subr,
                         "index out of bounds",
@@ -124,7 +124,7 @@ impl NativeMutatorParam {
                     );
                 }
 
-                invalid_argument_violation(
+                invalid_argument_violation::<{usize::MAX}>(
                     thread,
                     subr,
                     "exact integer",
@@ -192,7 +192,7 @@ impl AccessorParam {
                 }
 
                 if args[1].is_int32() {
-                    invalid_argument_violation(
+                    invalid_argument_violation::<{usize::MAX}>(
                         thread,
                         subr,
                         "index out of bounds",
@@ -203,7 +203,7 @@ impl AccessorParam {
                     );
                 }
 
-                invalid_argument_violation(
+                invalid_argument_violation::<{usize::MAX}>(
                     thread,
                     subr,
                     "exact integer",
@@ -252,7 +252,7 @@ impl NativeAccessorParam {
                 }
 
                 if args[1].is_int32() {
-                    invalid_argument_violation(
+                    invalid_argument_violation::<{usize::MAX}>(
                         thread,
                         subr,
                         "index out of bounds",
@@ -263,7 +263,7 @@ impl NativeAccessorParam {
                     );
                 }
 
-                invalid_argument_violation(
+                invalid_argument_violation::<{usize::MAX}>(
                     thread,
                     subr,
                     "exact integer",
@@ -335,7 +335,7 @@ extern "C-unwind" fn bytevector_s8_set(
             }
             return Value::encode_undefined_value();
         } else {
-            invalid_argument_violation(
+            invalid_argument_violation::<{usize::MAX}>(
                 thread,
                 "bytevector-s8-set!",
                 "value out of range",
@@ -382,7 +382,7 @@ extern "C-unwind" fn bytevector_u8_set(
             }
             return Value::encode_undefined_value();
         } else {
-            invalid_argument_violation(
+            invalid_argument_violation::<{usize::MAX}>(
                 thread,
                 "bytevector-u8-set!",
                 "value out of range",
@@ -586,7 +586,7 @@ extern "C-unwind" fn bytevector_s16_set(
             }
             return Value::encode_undefined_value();
         } else {
-            invalid_argument_violation(
+            invalid_argument_violation::<{usize::MAX}>(
                 thread,
                 "bytevector-s16-set!",
                 "value out of range",
@@ -640,7 +640,7 @@ extern "C-unwind" fn bytevector_u16_set(
             }
             return Value::encode_undefined_value();
         } else {
-            invalid_argument_violation(
+            invalid_argument_violation::<{usize::MAX}>(
                 thread,
                 "bytevector-u16-set!",
                 "value out of range",
@@ -698,7 +698,7 @@ extern "C-unwind" fn bytevector_s32_set(
             }
             return Value::encode_undefined_value();
         } else {
-            invalid_argument_violation(
+            invalid_argument_violation::<{usize::MAX}>(
                 thread,
                 "bytevector-s32-set!",
                 "value out of range",
@@ -756,7 +756,7 @@ extern "C-unwind" fn bytevector_u32_set(
             }
             return Value::encode_undefined_value();
         } else {
-            invalid_argument_violation(
+            invalid_argument_violation::<{usize::MAX}>(
                 thread,
                 "bytevector-u32-set!",
                 "value out of range",
@@ -911,7 +911,7 @@ extern "C-unwind" fn bytevector_u16_native_set(
             }
             return Value::encode_undefined_value();
         } else {
-            invalid_argument_violation(
+            invalid_argument_violation::<{usize::MAX}>(
                 thread,
                 "bytevector-u16-native-set!",
                 "value out of range",
@@ -958,7 +958,7 @@ extern "C-unwind" fn bytevector_s16_native_set(
             }
             return Value::encode_undefined_value();
         } else {
-            invalid_argument_violation(
+            invalid_argument_violation::<{usize::MAX}>(
                 thread,
                 "bytevector-s16-native-set!",
                 "value out of range",
@@ -1007,7 +1007,7 @@ extern "C-unwind" fn bytevector_u32_native_set(
             }
             return Value::encode_undefined_value();
         } else {
-            invalid_argument_violation(
+            invalid_argument_violation::<{usize::MAX}>(
                 thread,
                 "bytevector-u32-native-set!",
                 "value out of range",
@@ -1056,7 +1056,7 @@ extern "C-unwind" fn bytevector_s32_native_set(
             }
             return Value::encode_undefined_value();
         } else {
-            invalid_argument_violation(
+            invalid_argument_violation::<{usize::MAX}>(
                 thread,
                 "bytevector-s32-native-set!",
                 "value out of range",
@@ -1103,7 +1103,7 @@ extern "C-unwind" fn make_bytevector(
         if val >= i8::MIN as i32 && val <= u8::MAX as i32 {
             val as u8
         } else {
-            invalid_argument_violation(
+            invalid_argument_violation::<{usize::MAX}>(
                 thread,
                 "make-bytevector",
                 "value out of range",
@@ -1132,7 +1132,7 @@ extern "C-unwind" fn make_bytevector(
             let bvector = thread.make_bytevector::<false>(length as _, val as _);
             return bvector;
         } else {
-            invalid_argument_violation(
+            invalid_argument_violation::<{usize::MAX}>(
                 thread,
                 "make-bytevector",
                 "negative length",
@@ -1214,7 +1214,7 @@ extern "C-unwind" fn bytevector_fill(
             if value >= i8::MIN as i32 && value <= u8::MAX as i32 {
                 value as u8
             } else {
-                invalid_argument_violation(
+                invalid_argument_violation::<{usize::MAX}>(
                     thread,
                     "bytevector-fill!",
                     "value out of range",
@@ -1330,7 +1330,7 @@ extern "C-unwind" fn bytevector_destructive_copy(
     let sz = size.get_int32();
 
     if src < 0 || src > bv1s.len() as i32 {
-        invalid_argument_violation(
+        invalid_argument_violation::<{usize::MAX}>(
             thread,
             "bytevector-copy!",
             "source out of range",
@@ -1342,7 +1342,7 @@ extern "C-unwind" fn bytevector_destructive_copy(
     }
 
     if dst < 0 || dst > bv2s.len() as i32 {
-        invalid_argument_violation(
+        invalid_argument_violation::<{usize::MAX}>(
             thread,
             "bytevector-copy!",
             "target out of range",
@@ -1366,7 +1366,7 @@ extern "C-unwind" fn bytevector_destructive_copy(
         }
         return Value::encode_undefined_value();
     } else {
-        invalid_argument_violation(
+        invalid_argument_violation::<{usize::MAX}>(
             thread,
             "bytevector-copy!",
             "source or target out of range",

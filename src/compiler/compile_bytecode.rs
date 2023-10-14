@@ -1,3 +1,4 @@
+
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -451,7 +452,7 @@ pub fn compile_closure(
         ctx: Context,
         state: &mut State,
     ) -> Option<P<Env>> {
-        asm.maybe_source(var.src);
+        asm.maybe_source(var.src.clone());
         match var.typ {
             LetType::Let => {
                 let mut env = env.clone();
@@ -490,7 +491,7 @@ pub fn compile_closure(
             !seq.forms.is_empty(),
             "empty sequence during bytecode generation"
         );
-        asm.maybe_source(seq.src);
+        asm.maybe_source(seq.src.clone());
         for i in 0..seq.forms.len() - 1 {
             for_effect(asm, &seq.forms[i], env, state);
         }
@@ -499,7 +500,7 @@ pub fn compile_closure(
     }
 
     fn visit_if(cond: &If, asm: &mut Assembler, env: &P<Env>, ctx: Context, state: &mut State) {
-        asm.maybe_source(cond.src);
+        asm.maybe_source(cond.src.clone());
         let value = for_value(asm, &cond.cond, env, state); // for_effect(asm, &cond.cond, env, state);
         let je = asm.emit_jnz(value.idx as _);
         for_context(asm, ctx, &cond.alternative, env, state);
@@ -527,7 +528,7 @@ pub fn compile_closure(
     ) {
         match &**exp {
             IForm::Call(call) => {
-                asm.maybe_source(call.src);
+                asm.maybe_source(call.src.clone());
                 let env = push_frame(env.clone());
                 let from = stack_height(&env, state);
                 let mut tmp = for_push(asm, &call.proc, &env, state);
@@ -624,19 +625,19 @@ pub fn compile_closure(
             }
 
             IForm::GSet(gset) => {
-                asm.maybe_source(gset.src);
+                asm.maybe_source(gset.src.clone());
                 for_effect(asm, exp, env, state);
                 asm.emit_make_immediate(dst as _, Value::encode_undefined_value().get_raw() as _);
             }
 
             IForm::Define(gset) => {
-                asm.maybe_source(gset.src);
+                asm.maybe_source(gset.src.clone());
                 for_effect(asm, exp, env, state);
                 asm.emit_make_immediate(dst as _, Value::encode_undefined_value().get_raw() as _);
             }
 
             IForm::Lambda(lam) => {
-                asm.maybe_source(lam.src);
+                asm.maybe_source(lam.src.clone());
                 let label = state
                     .closures
                     .iter()
@@ -691,7 +692,7 @@ pub fn compile_closure(
             }
 
             IForm::Call(call) => {
-                asm.maybe_source(call.src);
+                asm.maybe_source(call.src.clone());
                 let env = push_frame(env.clone());
 
                 let mut tmp = for_push(asm, &call.proc, &env, state);
@@ -709,7 +710,7 @@ pub fn compile_closure(
             }
 
             IForm::Label(label) => {
-                asm.maybe_source(label.src);
+                asm.maybe_source(label.src.clone());
                 let pos = asm.code.len();
                 state.labels.insert(exp.clone(), pos);
                 let off = state.data_start as i32 - asm.code.len() as i32;
@@ -722,7 +723,7 @@ pub fn compile_closure(
             }
 
             IForm::PrimCall(src, name, args) => {
-                asm.maybe_source(*src);
+                asm.maybe_source(src.clone());
                 match *name {
                     "list" => {
                         let args = for_args(asm, state, args, env);
@@ -876,7 +877,7 @@ pub fn compile_closure(
         state: &mut State,
         ctx: Context,
     ) {
-        asm.maybe_source(exp.src);
+        asm.maybe_source(exp.src.clone());
         for_values(asm, &exp.init, env, state);
         visit_values_handler(asm, &exp.lvars, exp.optarg, &exp.body, env, state, ctx);
     }
@@ -908,7 +909,7 @@ pub fn compile_closure(
             }
 
             IForm::Define(def) => {
-                asm.maybe_source(def.src);
+                asm.maybe_source(def.src.clone());
                 let env = for_value(asm, &def.value, env, state);
 
                 asm.emit_global_set(env.idx as _, def.name.unwrap_id());
@@ -916,7 +917,7 @@ pub fn compile_closure(
             }
 
             IForm::GSet(gset) => {
-                asm.maybe_source(gset.src);
+                asm.maybe_source(gset.src.clone());
                 let env = for_value(asm, &gset.value, env, state);
                 asm.emit_global_set(env.idx as _, gset.name.unwrap_id());
                 None
@@ -945,7 +946,7 @@ pub fn compile_closure(
             }
             IForm::Const(_) | IForm::Lambda(_) | IForm::It | IForm::LRef(_) => None,
             IForm::Call(call) => {
-                asm.maybe_source(call.src);
+                asm.maybe_source(call.src.clone());
                 let env = push_frame(env.clone());
                 let mut tmp = for_push(asm, &call.proc, &env, state);
                 for arg in call.args.iter() {
@@ -959,7 +960,7 @@ pub fn compile_closure(
             }
 
             IForm::Label(label) => {
-                asm.maybe_source(label.src);
+                asm.maybe_source(label.src.clone());
                 let pos = asm.code.len();
                 state.labels.insert(exp.clone(), pos);
                 let off = state.data_start as i32 - asm.code.len() as i32;
@@ -979,7 +980,7 @@ pub fn compile_closure(
             }
 
             IForm::PrimCall(src, name, args) => {
-                asm.maybe_source(*src);
+                asm.maybe_source(src.clone());
                 let prim = PRIMITIVES.get(*name);
                 if let Some(prim) = prim {
                     if args.len() as isize != prim.nargs && prim.nargs >= 0 {
@@ -1081,7 +1082,7 @@ pub fn compile_closure(
                 );
             }
             IForm::Call(call) => {
-                asm.maybe_source(call.src);
+                asm.maybe_source(call.src.clone());
                 // FIXME: Improve parallel moves, right now we can have code like this:
                 // (make-immediate 3 <smth>)
                 // (make-immediate 2 <smth>)
@@ -1111,7 +1112,7 @@ pub fn compile_closure(
                 for_effect(asm, exp, env, state);
             }
             IForm::Label(label) => {
-                asm.maybe_source(label.src);
+                asm.maybe_source(label.src.clone());
                 let pos = asm.code.len();
                 state.labels.insert(exp.clone(), pos);
                 let off = state.data_start as i32 - asm.code.len() as i32;
@@ -1153,7 +1154,7 @@ pub fn compile_closure(
         push_temp(env.clone())
     }
 
-    asm.maybe_source(lam.src);
+    asm.maybe_source(lam.src.clone());
     let off = data_start as i32 - (asm.code.len() as i32 + 5);
     asm.emit_enter(off);
     let size = compute_frame_size(lam.clone());
@@ -1230,6 +1231,7 @@ pub fn compile_bytecode(exp: P<IForm>, output: &mut Vec<u8>) {
         asm.write_u32(0); // end
 
         let pos = asm.code.len();
+        
         compile_closure(&mut asm, closure.clone(), &closures, data_pos);
         let end = asm.code.len();
 
@@ -1295,6 +1297,12 @@ pub fn compile_bytecode(exp: P<IForm>, output: &mut Vec<u8>) {
             ]))
         })
         .collect::<Vec<_>>();
+
+    // ensure offsets always increase
+    asm.sources.sort_by_key(|(off, _)| *off);
+
+    
+
     let label = actual_locations[&toplevel_ix];
     let entrypoint = Sexpr::Program(label as _);
     let mut filededup_table: HashMap<String, P<String>> = HashMap::new();

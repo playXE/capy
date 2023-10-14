@@ -1,3 +1,8 @@
-(load "test.scm")
+(define (fac n)
+    (let loop ((n n) (acc 1))
+        (if (= n 0)
+            acc
+            (loop (- n 1) (* acc n)))))
 
-(display (format "fac(5) = ~a ~%" (fac 5)))
+(display (fac 5))
+(newline)

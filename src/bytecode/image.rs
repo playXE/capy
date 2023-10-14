@@ -229,6 +229,41 @@ impl ImageRegistry {
         None
     }
 
+    pub fn data_for_addr(&self, ip: *const u8) -> Option<Value> {
+        let image = self.lookup_image(ip)?;
+        let target_pc = (ip as usize - image.code.as_ptr() as usize) as u32;
+
+        for data in scm_vector_as_slice(image.data) {
+            let start = scm_vector_ref(*data, 0).get_int32() as u32;
+            let end = scm_vector_ref(*data, 1).get_int32() as u32;
+
+            if target_pc >= start && target_pc < end {
+                return Some(*data);
+            }
+        }
+
+        None
+    }
+
+    pub fn program_name(&self, vcode: *const u8) -> Option<Value> {
+        let data = self.data_for_addr(vcode)?;
+        Some(scm_vector_ref(data, 4))
+    }
+
+    pub fn program_address_range(&self, vcode: *const u8) -> Option<(*const u8, *const u8)> {
+        let image = self.lookup_image(vcode)?;
+        let data = self.data_for_addr(vcode)?;
+        let start_pc = scm_vector_ref(data, 0).get_int32() as u32;
+        let end_pc = scm_vector_ref(data, 1).get_int32() as u32;
+
+        let start_ip = image.code.as_ptr() as usize + start_pc as usize;
+        let end_ip = image.code.as_ptr() as usize + end_pc as usize;
+        Some((
+            start_ip as *const u8,
+            end_ip as *const u8,
+        ))
+    }
+
     /// Searches for image where `ip` is located, and then searches
     /// for debug offset for `ip` in that image.
     ///

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, hash::Hash};
+use std::{collections::HashMap, hash::Hash, rc::Rc};
 
 use crate::{
     gc_protect,
@@ -25,6 +25,9 @@ pub enum Sexpr {
     Symbol(Value),
     Gensym(P<String>),
     Fixnum(i32),
+    BigInt(BigInt),
+    Rational(Rational32),
+    BigRational(BigRational),
     Char(char),
     Flonum(f64),
     Boolean(bool),
@@ -650,6 +653,7 @@ impl Sexpr {
     }
 }
 
+use num::{BigInt, Rational32, BigRational};
 use pretty::{BoxAllocator, DocAllocator, DocBuilder};
 use r7rs_parser::expr::{Expr, Interner};
 use termcolor::{Color, ColorSpec, WriteColor};
@@ -661,6 +665,9 @@ impl Sexpr {
         D::Doc: Clone,
     {
         match self {
+            Self::Rational(rat) => allocator.text(format!("{}", rat)),
+            Self::BigRational(rat) => allocator.text(format!("{}", rat)),
+            Self::BigInt(big) => allocator.text(format!("{}", big)),
             Self::Global(global) => {
                 allocator.text(format!("#<global {}>", scm_symbol_str(*global)))
             }
@@ -756,7 +763,7 @@ impl std::fmt::Display for Sexpr {
 
 pub fn r7rs_expr_to_sexpr<I: Interner>(
     interner: &I,
-    filename: Value,
+    filename: Rc<String>,
     expr: &Expr<I>,
     source_loc: &mut SourceInfo,
 ) -> Sexpr {
@@ -768,7 +775,7 @@ pub fn r7rs_expr_to_sexpr<I: Interner>(
         Expr::Str(x) => Sexpr::String(P::new(x.clone())),
         Expr::ByteVector(x) => Sexpr::Bytevector(P::new(x.to_vec())),
         Expr::Pair(x, y) => {
-            let x = r7rs_expr_to_sexpr(interner, filename, &x, source_loc);
+            let x = r7rs_expr_to_sexpr(interner, filename.clone(), &x, source_loc);
             let y = r7rs_expr_to_sexpr(interner, filename, &y, source_loc);
 
             Sexpr::cons(x, y)
@@ -776,16 +783,16 @@ pub fn r7rs_expr_to_sexpr<I: Interner>(
 
         Expr::ImmutableVector(vec) | Expr::GrowableVector(vec) => Sexpr::Vector(P(vec
             .iter()
-            .map(|x| r7rs_expr_to_sexpr(interner, filename, &x, source_loc))
+            .map(|x| r7rs_expr_to_sexpr(interner, filename.clone(), &x, source_loc))
             .collect())),
 
         Expr::Syntax(loc, expr) => {
-            let sexpr = r7rs_expr_to_sexpr(interner, filename, &expr, source_loc);
+            let sexpr = r7rs_expr_to_sexpr(interner, filename.clone(), &expr, source_loc);
             if let Sexpr::Pair(_) = sexpr {
                 source_loc.insert(
                     EqSexpr(sexpr.clone()),
                     SourceLoc {
-                        file: filename,
+                        file: filename.clone(),
                         line: loc.line,
                         column: loc.col,
                     },
@@ -920,9 +927,9 @@ pub fn sexpr_to_value(thread: &mut Thread, sexpr: &Sexpr) -> Value {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SourceLoc {
-    pub file: Value,
+    pub file: Rc<String>,
     pub line: u32,
     pub column: u32,
 }

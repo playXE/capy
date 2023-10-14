@@ -321,7 +321,101 @@ extern "C-unwind" fn absolute_path_string_p(thread: &mut Thread, path: &mut Valu
     Value::encode_bool_value(res)
 }
 
+extern "C-unwind" fn dirname(thread: &mut Thread, path: &mut Value) -> Value {
+    if !path.is_string() {
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "dirname",
+            0,
+            "string",
+            *path,
+            1,
+            &[path],
+        )
+    }
+
+    let path = scm_string_str(*path);
+    let path = std::path::Path::new(path);
+    let path = path.parent().unwrap_or(std::path::Path::new(""));
+
+    let path = path.to_str().unwrap();
+
+    thread.make_string::<false>(path)
+}
+
+extern "C-unwind" fn mkdir(thread: &mut Thread, path: &mut Value) -> Value {
+    if !path.is_string() {
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "mkdir",
+            0,
+            "string",
+            *path,
+            1,
+            &[path],
+        )
+    }
+
+    let path = scm_string_str(*path);
+    let path = std::path::Path::new(path);
+
+    let res = std::fs::create_dir_all(path);
+
+    match res {
+        Ok(_) => Value::encode_int32(0),
+        Err(err) => {
+            if let Some(code) = err.raw_os_error() {
+                Value::encode_int32(code)
+            } else {
+                Value::encode_int32(-1)
+            }
+        }
+    }
+}
+
+extern "C-unwind" fn canonicalize_path(thread: &mut Thread, path: &mut Value) -> Value {
+    if !path.is_string() {
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "canonicalize-path",
+            0,
+            "string",
+            *path,
+            1,
+            &[path],
+        )
+    }
+
+    let path = scm_string_str(*path);
+    let path = std::path::Path::new(path);
+
+    let res = std::fs::canonicalize(path);
+
+    match res {
+        Ok(path) => {
+            let path = path.to_str().unwrap();
+            thread.make_string::<false>(path)
+        }
+        Err(err) => {
+            if let Some(code) = err.raw_os_error() {
+                Value::encode_int32(code)
+            } else {
+                Value::encode_int32(-1)
+            }
+        }
+    }
+}
+
 pub(crate) fn init() {
+    scm_define_subr(
+        "canonicalize-path",
+        1,
+        0,
+        0,
+        Subr::F1(canonicalize_path),
+    );
+    scm_define_subr("dirname", 1, 0, 0, Subr::F1(dirname));
+    scm_define_subr("mkdir", 1, 0, 0, Subr::F1(mkdir));
     scm_define_subr("unix-open", 3, 0, 0, Subr::F3(unix_open));
     scm_define_subr("unix-close", 1, 0, 0, Subr::F1(unix_close));
     scm_define_subr("unix-read", 3, 0, 0, Subr::F3(unix_read));

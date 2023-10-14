@@ -2,7 +2,7 @@
 //!
 //! Convert S-expressions to Tree IL, expand macros and core forms.
 
-use std::collections::HashMap;
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use once_cell::sync::Lazy;
 
@@ -19,7 +19,7 @@ use crate::{
 
 use super::{
     make_identifier,
-    sexpr::{Sexpr, SourceInfo},
+    sexpr::{EqSexpr, Sexpr, SourceInfo},
     tree_il::*,
     unmangled, Cenv, SyntaxEnv, P,
 };
@@ -468,8 +468,9 @@ pub fn define_syntax() -> P<SyntaxEnv> {
                 let mut i = 0;
                 while ls.is_pair() {
                     let kv = ls.car();
-
-                    let init = pass1(&kv.cadr(), cenv)?;
+                    let mut cenv = cenv.clone();
+                    cenv.expr_name = kv.car().clone();
+                    let init = pass1(&kv.cadr(), &cenv)?;
 
                     inits.push(init);
                     vars[i].initval = Some(inits[i].clone());
@@ -591,6 +592,8 @@ pub fn define_syntax() -> P<SyntaxEnv> {
 
             while ls.is_pair() {
                 let kv = ls.car();
+                let mut argenv = argenv.clone();
+                argenv.expr_name = kv.car().clone();
                 cargs.push(pass1(&kv.cadr(), &argenv)?);
                 ls = ls.cdr();
             }
@@ -863,6 +866,12 @@ fn pass1_define(form: Sexpr, oform: Sexpr, cenv: &Cenv) -> Result<P<IForm>, Stri
 
         let lambda = Sexpr::list_star(&[Sexpr::Symbol(scm_intern("lambda")), args, body]);
 
+        if let Some(src) = cenv.maybe_source(&oform) {
+            cenv.source_loc
+                .borrow_mut()
+                .insert(EqSexpr(lambda.clone()), src);
+        }
+
         let define = Sexpr::list(&[Sexpr::Symbol(scm_intern("define")), name, lambda]);
 
         pass1_define(define, orig, cenv)
@@ -876,15 +885,16 @@ fn pass1_define(form: Sexpr, oform: Sexpr, cenv: &Cenv) -> Result<P<IForm>, Stri
             return Err(format!("illegal define: {}", oform));
         }
 
-        let id = if let Sexpr::Identifier(mut id) = name {
+        let id = if let Sexpr::Identifier(mut id) = name.clone() {
             let sym = Sexpr::Gensym(P(scm_symbol_str(unwrap_identifier(id.clone())).to_string()));
             id.name = sym;
             id
         } else {
-            make_identifier(name, cenv.syntax_env.clone(), Sexpr::Null)
+            make_identifier(name.clone(), cenv.syntax_env.clone(), Sexpr::Null)
         };
-
-        let mut value = pass1(&value, cenv)?;
+        let mut cenv = cenv.clone();
+        cenv.expr_name = name.clone();
+        let mut value = pass1(&value, &cenv)?;
 
         if let IForm::Lambda(ref mut lam) = &mut *value {
             lam.name = Some(unmangled(scm_symbol_str(unwrap_identifier(id.clone()))).to_string());
@@ -938,7 +948,11 @@ fn pass1_vanilla_lambda(
 
     Ok(P(IForm::Lambda(P(Lambda {
         src: cenv.maybe_source(&_form),
-        name: None,
+        name: match cenv.expr_name {
+            Sexpr::Identifier(id) => Some(unwrap_identifier(id).to_string()),
+            Sexpr::Symbol(sym) => Some(scm_symbol_str(sym).to_string()),
+            _ => None,
+        },
         reqargs: nreqs as _,
         optarg: nopts != 0,
         lvars,
@@ -1091,6 +1105,12 @@ fn pass1_body_rec(
                                                         formals,
                                                         body,
                                                     ]);
+                                                    if let Some(src) = cenv.maybe_source(&exprs) {
+                                                        cenv.source_loc
+                                                            .borrow_mut()
+                                                            .insert(EqSexpr(lam.clone()), src);
+                                                    }
+
                                                     let rec = Sexpr::list(&[
                                                         name,
                                                         Sexpr::Symbol(scm_intern(":rec")),
@@ -1276,9 +1296,10 @@ pub fn expand_default(expr: &Sexpr) -> Result<P<IForm>, String> {
     let res = pass1(
         expr,
         &Cenv {
-            source_loc: &SourceInfo::new(),
+            source_loc: Rc::new(RefCell::new(SourceInfo::new())),
             syntax_env: expander.env.clone(),
             frames: Sexpr::Null,
+            expr_name: Sexpr::Null,
         },
     );
 

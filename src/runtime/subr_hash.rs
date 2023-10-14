@@ -109,7 +109,7 @@ extern "C-unwind" fn make_core_hashtable(
                 if scm_vector_length(*size) == 14 {
                     return thread.make_hashtable_generic(nsize, *size);
                 } else {
-                    invalid_argument_violation(
+                    invalid_argument_violation::<{usize::MAX}>(
                         thread,
                         "make-core-hashtable",
                         "14 element vector",
@@ -355,7 +355,7 @@ extern "C-unwind" fn core_hashtable_set(
                 hash.lock.unlock();
                 return Value::encode_undefined_value();
             } else {
-                invalid_argument_violation(
+                invalid_argument_violation::<{usize::MAX}>(
                     thread,
                     "core-hashtable-set!",
                     "mutable hashtable expected",
@@ -444,7 +444,7 @@ extern "C-unwind" fn core_hashtable_delete(
             hash.lock.lock(true);
             if hash.immutable {
                 hash.lock.unlock();
-                invalid_argument_violation(
+                invalid_argument_violation::<{usize::MAX}>(
                     thread,
                     "core-hashtable-delete!",
                     "mutable hashtable expected",
@@ -516,7 +516,7 @@ extern "C-unwind" fn core_hashtable_clear(
             let hash = ht.cast_as::<ScmHashTable>();
 
             if hash.immutable {
-                invalid_argument_violation(
+                invalid_argument_violation::<{usize::MAX}>(
                     thread,
                     "core-hashtable-clear!",
                     "mutable hashtable expected",

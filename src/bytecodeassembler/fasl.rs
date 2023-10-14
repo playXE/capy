@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use num::bigint::Sign;
+
 use crate::{
     compiler::sexpr::Sexpr,
     runtime::object::{scm_symbol_str, TypeId},
@@ -148,6 +150,58 @@ impl<'a, W: std::io::Write> FASLPrinter<'a, W> {
             Sexpr::Flonum(flo) => {
                 self.emit_u8(TypeId::Double as _)?;
                 self.emit_u64(flo.to_bits())?;
+            }
+
+            Sexpr::BigInt(bigint) => {
+                self.emit_u8(TypeId::Bignum as _)?;
+                let (sign, digits) = bigint.to_u32_digits();
+                match sign {
+                    Sign::Minus => self.emit_u8(1)?,
+                    _ => self.emit_u8(0)?,
+                }
+
+                self.emit_u32(digits.len() as u32)?;
+
+                for digit in digits.iter() {
+                    self.emit_u32(*digit)?;
+                }
+            }
+
+            Sexpr::Rational(rat) => {
+                self.emit_u8(TypeId::Rational as _)?;
+                self.emit_u8(TypeId::Int32 as _)?;
+                self.emit_u32(*rat.numer() as u32)?;
+                self.emit_u8(TypeId::Int32 as _)?;
+                self.emit_u32(*rat.denom() as u32)?;
+            }
+
+            Sexpr::BigRational(rat) => {
+                self.emit_u8(TypeId::Rational as _)?;
+                self.emit_u8(TypeId::Bignum as _)?;
+                let (sign, digits) = rat.numer().to_u32_digits();
+                match sign {
+                    Sign::Minus => self.emit_u8(1)?,
+                    _ => self.emit_u8(0)?,
+                }
+
+                self.emit_u32(digits.len() as u32)?;
+
+                for digit in digits.iter() {
+                    self.emit_u32(*digit)?;
+                }
+
+                self.emit_u8(TypeId::Bignum as _)?;
+                let (sign, digits) = rat.denom().to_u32_digits();
+                match sign {
+                    Sign::Minus => self.emit_u8(1)?,
+                    _ => self.emit_u8(0)?,
+                }
+
+                self.emit_u32(digits.len() as u32)?;
+
+                for digit in digits.iter() {
+                    self.emit_u32(*digit)?;
+                }
             }
 
             Sexpr::Char(ch) => {

@@ -94,7 +94,7 @@ pub fn pass2_rec(
                     if let IForm::Lambda(second) = &*second {
                         ctx.changed = true;
                         let let_values = LetValues {
-                            src: *src,
+                            src: src.clone(),
                             body: second.body.clone(),
                             lvars: second.lvars.clone(),
                             init: lam.body.clone(),

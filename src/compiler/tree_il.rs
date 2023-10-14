@@ -51,16 +51,16 @@ impl Hash for IForm {
 impl IForm {
     pub fn src(&self) -> Option<SourceLoc> {
         match self {
-            Self::Define(def) => def.src,
-            Self::If(if_) => if_.src,
-            Self::GSet(gset) => gset.src,
-            Self::Seq(seq) => seq.src,
-            Self::Lambda(lambda) => lambda.src,
-            Self::Label(label) => label.src,
-            Self::Call(call) => call.src,
-            Self::PrimCall(src, _, _) => *src,
-            Self::Let(let_) => let_.src,
-            Self::LetValues(vals) => vals.src,
+            Self::Define(def) => def.src.clone(),
+            Self::If(if_) => if_.src.clone(),
+            Self::GSet(gset) => gset.src.clone(),
+            Self::Seq(seq) => seq.src.clone(),
+            Self::Lambda(lambda) => lambda.src.clone(),
+            Self::Label(label) => label.src.clone(),
+            Self::Call(call) => call.src.clone(),
+            Self::PrimCall(src, _, _) => src.clone(),
+            Self::Let(let_) => let_.src.clone(),
+            Self::LetValues(vals) => vals.src.clone(),
             _ => None,
         }
     }

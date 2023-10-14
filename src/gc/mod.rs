@@ -22,7 +22,7 @@ use mmtk::{
 };
 
 use crate::{
-    interpreter::stackframe::StackElement,
+    interpreter::stackframe::{FrameKind, ScmFrame, StackElement},
     runtime::{
         arith::ScmBigInteger,
         control::{ScmContinuation, VMCont},
@@ -267,6 +267,7 @@ impl ObjectModel<CapyVM> for ScmObjectModel {
                 TypeId::Complex => size_of::<ScmComplex>(),
                 TypeId::Continuation => size_of::<ScmContinuation>(),
                 TypeId::WeakMapping => size_of::<ScmWeakMapping>(),
+                TypeId::Frame => size_of::<ScmFrame>(),
                 _ => unreachable!(),
             },
             8,
@@ -333,7 +334,7 @@ impl ActivePlan<CapyVM> for ScmActivePlan {
                     .iter_unlocked()
                     .filter(|&&x| (*x).kind == ThreadKind::Mutator)
                     .map(|x| x)
-                    .map(|&thread| (*thread).mutator.assume_init_mut()),
+                    .map(|&thread| &mut **(*thread).mutator.assume_init_mut()),
             )
         }
     }
@@ -710,6 +711,23 @@ impl Scanning<CapyVM> for ScmScanning {
                     edge_visitor.visit_edge(edge);
                 }
             }
+
+            TypeId::Frame => {
+                let frame = reference.cast_as::<ScmFrame>();
+
+                match frame.kind {
+                    FrameKind::Cont => {
+                        /* trace VMCont type, it is heap allocated and stores stack copy */
+                        let cont = &mut frame.stack_holder as *mut *mut () as *mut *mut VMCont;
+                        let edge = ObjEdge::from_address(Address::from_mut_ptr(cont));
+                        edge_visitor.visit_edge(edge);
+                    }
+
+                    FrameKind::VM => {
+                        /* no need to trace frames with VM as holder, VM is not an object */
+                    }
+                }
+            }
             _ => (),
         }
     }
@@ -743,7 +761,7 @@ impl Scanning<CapyVM> for ScmScanning {
                 edges.push(edge);
             }
             tls.interpreter().mark_stack_for_roots(&mut factory);
-            tls.shadow_stack.walk_roots(&mut factory);
+            tls.interpreter().shadow_stack.walk_roots(&mut factory);
             factory.create_process_edge_roots_work(edges);
         }
     }

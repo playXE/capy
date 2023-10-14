@@ -13,6 +13,7 @@ pub struct Assembler {
     ///
     pub sources: Vec<(u32, SourceLoc)>,
     pub asm_start: u32,
+
     pub relocs: Vec<Reloc>,
     pub code: Vec<u8>,
     pub constants: Vec<Sexpr>,
@@ -141,7 +142,7 @@ impl Assembler {
     pub fn emit_make_program(&mut self, dst: u16, nfree: u32, closure_idx: u32) {
         OpMakeProgram::new(dst, nfree, 0).write(self);
         let reloc = Reloc::Label {
-            code_loc: self.code.len() as u32,
+            code_loc: self.code.len() as _,
             index: closure_idx,
         };
 

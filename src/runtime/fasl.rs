@@ -185,6 +185,24 @@ impl<'a, const IMMORTAL: bool, R: std::io::Read + AsRef<[u8]>> FASLReader<'a, IM
                 return Ok(v);
             }
 
+            x if x == TypeId::Bignum as u8 => {
+                let negative = self.read_u8()? != 0;
+                let len = self.read_u32()?;
+                let mut buf = vec![0u32; len as usize];
+                for i in 0..len {
+                    buf[i as usize] = self.read_u32()?;
+                }
+
+                return Ok(Thread::current().make_bignum_from_digits(&buf, negative));
+            }
+
+            x if x == TypeId::Rational as u8 => {
+                let numer = self.get_datum()?;
+                let denom = self.get_datum()?;
+
+                return Ok(Thread::current().make_rational::<IMMORTAL>(numer, denom));
+            }
+
             TAG_PLIST => {
                 let count = self.read_u32()?;
                 let mut lst = Value::encode_null_value();

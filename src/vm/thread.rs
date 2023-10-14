@@ -1,12 +1,13 @@
-use std::intrinsics::unlikely;
+use std::intrinsics::{unlikely, likely};
 use std::mem::transmute;
 use std::slice::Iter;
 use std::sync::atomic::{AtomicI8, Ordering};
 use std::{mem::MaybeUninit, panic::AssertUnwindSafe};
 
 use mmtk::memory_manager::bind_mutator;
+use mmtk::util::alloc::{AllocatorSelector, BumpAllocator, BumpPointer, ImmixAllocator};
 use mmtk::util::metadata::side_metadata::GLOBAL_SIDE_METADATA_VM_BASE_ADDRESS;
-use mmtk::util::ObjectReference;
+use mmtk::util::{Address, ObjectReference};
 use mmtk::{Mutator, MutatorContext};
 
 use crate::gc::{CapyVM, ObjEdge};
@@ -29,10 +30,10 @@ pub enum ThreadKind {
 #[repr(C)]
 pub struct Thread {
     pub interpreter: MaybeUninit<InterpreterState>,
-    pub los_threshold: usize,
-    pub needs_wb: bool,
-    pub mutator: MaybeUninit<Mutator<CapyVM>>,
-    pub shadow_stack: ShadowStack,
+
+    pub mutator: MaybeUninit<Box<Mutator<CapyVM>>>,
+    
+    pub selector: AllocatorSelector,
 
     pub id: u64,
     pub safepoint: *mut u8,
@@ -167,21 +168,201 @@ impl Thread {
         let mutator = bind_mutator(&scm_virtual_machine().mmtk, unsafe {
             transmute(Thread::current())
         });
-        self.mutator = MaybeUninit::new(*mutator);
+        self.mutator = MaybeUninit::new(mutator);
 
         self.handles = MaybeUninit::new(HandleMemory::new());
         let th = threads();
         th.add_thread(self as *mut Thread);
         self.interpreter = MaybeUninit::new(InterpreterState::new(self.mutator()));
-        self.shadow_stack.init();
+        self.interpreter().shadow_stack.init();
         self.local_finalization_queue = MaybeUninit::new(Vec::with_capacity(128));
         self.obj_handles = MaybeUninit::new(ObjStorage::new("thread-handles"));
-        self.needs_wb = scm_virtual_machine().needs_wb;
-        self.los_threshold = self
+        self.interpreter().needs_wb = scm_virtual_machine().needs_wb;
+        self.interpreter().los_threshold = self
             .mutator()
             .plan
             .constraints()
             .max_non_los_default_alloc_bytes;
+        self.selector = mmtk::memory_manager::get_allocator_mapping(
+            &scm_virtual_machine().mmtk,
+            mmtk::AllocationSemantics::Default,
+        );
+
+        self.fetch_bump_pointer();
+        if let AllocatorSelector::None = self.selector {
+            self.interpreter().inline_alloc = false;
+        } else {
+            self.interpreter().inline_alloc = true;
+        }
+    }
+
+    fn fetch_bump_pointer(&mut self) {
+        let bump_pointer = unsafe {
+            let selector = self.selector;
+            match selector {
+                AllocatorSelector::BumpPointer(_) => {
+                    self.mutator()
+                        .allocator_impl::<BumpAllocator<CapyVM>>(selector)
+                        .bump_pointer
+                }
+                AllocatorSelector::Immix(_) => {
+                    self.mutator()
+                        .allocator_impl::<ImmixAllocator<CapyVM>>(selector)
+                        .bump_pointer
+                }
+                _ => {
+                    self.selector = AllocatorSelector::None;
+                    self.interpreter().inline_alloc = false;
+                    return;
+                }
+            }
+        };
+
+        self.interpreter().inline_cursor = bump_pointer.cursor.as_usize();
+        self.interpreter().inline_limit = bump_pointer.limit.as_usize();
+    }
+
+    fn store_bump_pointer(&mut self) {
+        unsafe {
+            let selector = self.selector;
+            match selector {
+                AllocatorSelector::BumpPointer(_) => {
+                    self.mutator()
+                        .allocator_impl_mut::<BumpAllocator<CapyVM>>(selector)
+                        .bump_pointer = BumpPointer::new(
+                        Address::from_usize(self.interpreter().inline_cursor),
+                        Address::from_usize(self.interpreter().inline_limit),
+                    )
+                }
+                AllocatorSelector::Immix(_) => {
+                    self.mutator()
+                        .allocator_impl_mut::<ImmixAllocator<CapyVM>>(selector)
+                        .bump_pointer = BumpPointer::new(
+                        Address::from_usize(self.interpreter().inline_cursor),
+                        Address::from_usize(self.interpreter().inline_limit),
+                    )
+                }
+                _ => {}
+            }
+        };
+    }
+    #[inline]
+    pub fn alloc_small(&mut self, size: usize, type_id: TypeId) -> *mut ScmCellHeader {
+        debug_assert!(size <= self.interpreter().los_threshold);
+        //let size = round_up(size, std::mem::align_of::<usize>(), 0);
+        if likely(self.interpreter().inline_alloc) {
+            let res = self.interpreter().inline_cursor;
+            
+            if likely(res + size <= self.interpreter().inline_limit) {
+                let objref = res as *mut ScmCellHeader;
+                unsafe {
+                    objref.write(ScmCellHeader::new(type_id));
+
+                    self.interpreter().inline_cursor += size;
+
+                    return std::mem::transmute(objref);
+                }
+            }
+        }
+        self.alloc_slow(size, type_id)
+    }
+    #[inline]
+    pub fn alloc(&mut self, size: usize, type_id: TypeId) -> *mut ScmCellHeader {
+        //let size = round_up(size, std::mem::align_of::<usize>(), 0);
+        if likely(self.interpreter().inline_alloc) && likely(size <= self.interpreter().los_threshold) {
+            let res = self.interpreter().inline_cursor;
+            
+            if likely(res + size <= self.interpreter().inline_limit) {
+                let objref = res as *mut ScmCellHeader;
+                unsafe {
+                    objref.write(ScmCellHeader::new(type_id));
+
+                    self.interpreter().inline_cursor += size;
+
+                    return std::mem::transmute(objref);
+                }
+            }
+        }
+        self.alloc_slow(size, type_id)
+    }
+    #[cold]
+    #[inline(never)]
+    fn alloc_slow(&mut self, size: usize, type_id: TypeId) -> *mut ScmCellHeader {
+        if size > self.interpreter().los_threshold {
+            log::debug!(target: "capy", "LOS allocation of {} bytes for {:?} requested", size, type_id);
+            unsafe { transmute(self.alloc_los(size, type_id)) }
+        } else if self.interpreter().inline_alloc {
+            unsafe {
+                log::debug!(target: "capy", "Inline allocation of {} bytes failed for {:?}, falling back to slow path", size, type_id);
+                self.store_bump_pointer();
+                let mem = self.mutator().alloc_slow(
+                    size,
+                    std::mem::align_of::<usize>(),
+                    0,
+                    mmtk::AllocationSemantics::Default,
+                );
+                let objref = mem.to_mut_ptr::<ScmCellHeader>();
+                objref.write(ScmCellHeader::new(type_id));
+                let objref = std::mem::transmute(objref);
+                self.mutator()
+                    .post_alloc(objref, size, mmtk::AllocationSemantics::Default);
+                self.fetch_bump_pointer();
+                transmute(objref)
+            }
+        } else {
+            unsafe {
+                let mem = self.mutator().alloc(
+                    size,
+                    std::mem::align_of::<usize>(),
+                    0,
+                    mmtk::AllocationSemantics::Default,
+                );
+                let objref = mem.to_mut_ptr::<ScmCellHeader>();
+                objref.write(ScmCellHeader::new(type_id));
+                let objref = std::mem::transmute(objref);
+                
+                self.mutator()
+                    .post_alloc(objref, size, mmtk::AllocationSemantics::Default);
+                transmute(objref)
+            }
+        }
+    }
+
+    pub fn alloc_immortal(&mut self, size: usize, type_id: TypeId) -> *mut ScmCellHeader {
+        unsafe {
+            let mem = self.mutator().alloc(
+                size,
+                std::mem::align_of::<usize>(),
+                0,
+                mmtk::AllocationSemantics::Immortal,
+            );
+            let objref = mem.to_mut_ptr::<ScmCellHeader>();
+
+            objref.write(ScmCellHeader::new(type_id));
+            let objref = std::mem::transmute(objref);
+            self.mutator()
+                .post_alloc(objref, size, mmtk::AllocationSemantics::Immortal);
+            transmute(objref)
+        }
+    }
+
+    fn alloc_los(&mut self, size: usize, type_id: TypeId) -> ObjectReference {
+        
+        unsafe {
+            let mem = self.mutator().alloc(
+                size,
+                std::mem::align_of::<usize>(),
+                0,
+                mmtk::AllocationSemantics::Los,
+            );
+            let objref = mem.to_mut_ptr::<ScmCellHeader>();
+
+            objref.write(ScmCellHeader::new(type_id));
+            let objref = std::mem::transmute(objref);
+            self.mutator()
+                .post_alloc(objref, size, mmtk::AllocationSemantics::Los);
+            objref
+        }
     }
 
     #[allow(dead_code)]
@@ -255,7 +436,7 @@ impl Thread {
             // and we still want somewhat decent performance when developing without PGO.
             let addr = transmute::<_, *mut ObjectReference>(slot);
             addr.write(target);
-            if self.needs_wb {
+            if self.interpreter().needs_wb {
                 // load unlogged bit from side-metadata.
                 // if it is set then we invoke slow-path from MMTk.
                 let addr = transmute::<_, usize>(src);
@@ -276,9 +457,8 @@ impl Thread {
 
 use crate::gc::objstorage::ObjStorage;
 use crate::gc::refstorage::HandleMemory;
-use crate::gc::shadow_stack::ShadowStack;
 use crate::interpreter::InterpreterState;
-use crate::runtime::object::CleanerType;
+use crate::runtime::object::{CleanerType, ScmCellHeader, TypeId};
 use crate::vm::sync::mutex::*;
 
 use super::scm_virtual_machine;
@@ -396,13 +576,11 @@ static mut SINK: u8 = 0;
 #[thread_local]
 static mut THREAD: Thread = Thread {
     id: 0,
-    los_threshold: 0,
-    needs_wb: false,
+    selector: AllocatorSelector::None,
     interpreter: MaybeUninit::uninit(),
     mutator: MaybeUninit::uninit(),
     safepoint: std::ptr::null_mut(),
     gc_state: 2,
-    shadow_stack: ShadowStack::new(),
     kind: ThreadKind::None,
     handles: MaybeUninit::uninit(),
     obj_handles: MaybeUninit::uninit(),

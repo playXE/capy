@@ -26,6 +26,37 @@
                     (if (null? (cdr results))
                         (cont (car results))))
                 (apply cont results)))))))
+
+; FIXME: Very hacky implmenetation.
+;
+; We define our own continuation object in Rust
+; but in Scheme we wrap it inside lambda. So
+; we have to check captured variable to see if 
+; it is a continuation object. 
+(define continuation? 
+    ; save previous definition of continuation? to local variable,
+    ; it is a correct function but expects different type of continuation.
+    (let ([continuation? continuation?])
+        (lambda (x)
+            (and 
+                (procedure? x)
+                (= (program-num-free-vars x) 2)
+                (continuation? (program-ref x 1))))))
+
+(define (%extract-continuation-object x)
+    (unless (continuation? x)
+        (assertion-violation '%extract-continuation-object "not a continuation" x))
+    (program-ref x 1))
+
+(define make-stack 
+    ; wrapper over native `make-stack`. It extracts continuation object
+    ; from captured variable and passes it to Rust.
+    (let ([make-stack make-stack])
+        (lambda (obj . args)
+            (if (continuation? obj)
+                (apply make-stack (%extract-continuation-object obj) args)
+                (apply make-stack obj args)))))
+
 (define call/cc call-with-current-continuation)
 
 (define (reroot! there)
@@ -62,8 +93,63 @@
                     (apply values results))))))
 
 (define (unhandled-exception-error val)
-    (%raise val)) ; raise value to Rust runtime and panic
-
+   (let ([out (current-error-port)])
+    (display "An exception has been raised, but no exception handler is installed \n" out)
+    (if (continuation-condition? val)
+        (print-frames (stack->vector (make-stack (condition-continuation val))) out))
+    (flush-output-port out)
+    (print-condition val)
+    
+    (%raise val)
+    )
+   
+   ) 
+(define (print-condition exn)
+  (cond ((condition? exn)
+         (let ((c* (simple-conditions exn)))
+           (display "An unhandled condition was raised:\n")
+           (do ((i 1 (fx+ i 1))
+                (c* c* (cdr c*)))
+               ((null? c*))
+             (let* ((c (car c*))
+                    (rtd (record-rtd c)))
+               (display " ")
+               (let loop ((rtd rtd))
+                 (display (record-type-name rtd))
+                 (cond ((record-type-parent rtd) =>
+                        (lambda (rtd)
+                          (unless (eq? rtd (record-type-descriptor &condition))
+                            (display " ")
+                            (loop rtd))))))
+               (let loop ((rtd rtd))
+                 (do ((f* (record-type-field-names rtd))
+                      (i 0 (+ i 1)))
+                     ((= i (vector-length f*))
+                      (cond ((record-type-parent rtd) => loop)))
+                   (newline)
+                   (display "  ")
+                   (display (vector-ref f* i))
+                   (display ": ")
+                   (let ((x ((record-accessor rtd i) c)))
+                     (cond ((and #f (eq? rtd (record-type-descriptor &irritants))
+                                 (pair? x) (list? x))
+                            (display "(")
+                            (let ((list-x 0))
+                              (write (car x))
+                              (for-each (lambda (value)
+                                          (newline)
+                                          (display "     ")
+                                          (write value))
+                                        (cdr x)))
+                            
+                            (display ")"))
+                           (else
+                            
+                            (write x)))))))
+             (newline))))
+        (else
+         (display "A non-condition object was raised:\n")
+         (write exn))))
 (define *basic-exception-handlers*
   (list unhandled-exception-error))
 
@@ -97,3 +183,55 @@
   (let ((handlers *current-exception-handlers*))
     (with-exception-handlers (cdr handlers)
       (lambda () ((car handlers) obj)))))
+
+(define (stack-length stack)
+    (unless (stack? stack)
+        (error 'stack-length "not a stack" stack))
+    (tuple-ref stack 1))
+
+(define (stack-frame stack)
+    (unless (stack? stack)
+        (error 'stack-frame "not a stack" stack))
+    (tuple-ref stack 2))
+
+(define (stack->vector stack)
+  (let* ((len (stack-length stack))
+         (v (make-vector len)))
+    (if (positive? len)
+        (let lp ((i 0) (frame (stack-ref stack 0)))
+          (if (< i len)
+              (begin
+                (vector-set! v i frame)
+                (lp (+ i 1) (frame-previous frame))))))
+    v))
+
+(define (print-frame frame . rest)
+    (let ((p (if (pair? rest) (car rest) (current-output-port))))
+        (let ([return-address (number->string (frame-return-address frame) 16)]
+              [name (frame-procedure-name frame)]
+              [loc (frame-source-location frame)])
+            (cond 
+                [(and loc name) 
+                    (write-string 
+                        (format "   at ~a (~a:~a:~a)~%" name (vector-ref loc 0) (vector-ref loc 1) (vector-ref loc 2))
+                        p)]
+                [loc
+                    (write-string 
+                        (format "   at <anonymous> (~a:~a:~a)~%" (vector-ref loc 0) (vector-ref loc 1) (vector-ref loc 2))
+                        p)]
+                [name
+                    (write-string 
+                        (format "   at ~a~%" name)
+                        p)]
+                [else 
+                    (write-string 
+                        (format "   at <anonymous> at ~a" return-address) p)]))))
+
+(define (print-frames frames . rest)
+    (let ((p (if (pair? rest) (car rest) (current-output-port))))
+        (let ([len (vector-length frames)])
+            (let lp ((i 0))
+                (if (< i len)
+                    (begin
+                        (print-frame (vector-ref frames i) p)
+                        (lp (+ i 1))))))))

@@ -300,3 +300,12 @@
       (make-record-type '&no-nans rtd rcd))))
 (define make-no-nans-violation (record-constructor (record-type-rcd &no-nans)))
 (define no-nans-violation? (condition-predicate (record-type-rtd &no-nans)))
+
+(define &continuation
+  (let ((rtd (make-record-type-descriptor '&continuation (record-type-rtd &condition) (make-condition-uid) #f #f '#((immutable k)))))
+    (let ((rcd (make-record-constructor-descriptor rtd (record-type-rcd &condition) #f)))
+      (make-record-type '&continuation rtd rcd))))
+
+(define make-continuation-condition (record-constructor (record-type-rcd &continuation)))
+(define continuation-condition? (condition-predicate (record-type-rtd &continuation)))
+(define condition-continuation (condition-accessor (record-type-rtd &continuation) (record-accessor (record-type-rtd &continuation) 0)))

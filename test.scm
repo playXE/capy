@@ -1,6 +1,4 @@
-(display "Hello from loaded file!\n")
+(define (f x . rest)
+    (display (format "x: ~a, rest: ~a\n" x rest)))
 
-(define (fac n)
-  (if (= n 0)
-      1
-      (* n (fac (- n 1)))))
+(apply f 1 (list 1 2 3))

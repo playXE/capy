@@ -1,6 +1,8 @@
 //! Bootstrap compiler. Takes input files as arguments and outputs single bytecode file.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use capy::compiler::expand::define_syntax;
 use capy::compiler::sexpr::r7rs_expr_to_sexpr;
@@ -9,7 +11,6 @@ use capy::compiler::tree_il::*;
 use capy::compiler::Cenv;
 use capy::compiler::P;
 use capy::compiler::{compile, compile_bytecode::compile_bytecode};
-use capy::runtime::symbol::scm_intern;
 use capy::vm::scm_init;
 use r7rs_parser::expr::*;
 use r7rs_parser::parser::*;
@@ -33,7 +34,7 @@ fn main() {
 
     let mut toplevel_seq = vec![];
     let env = define_syntax();
-    let mut source_info = HashMap::new();
+    let source_info = Rc::new(RefCell::new(HashMap::new()));
     for filename in args.iter() {
         let src = match std::fs::read_to_string(filename) {
             Ok(src) => src,
@@ -49,20 +50,22 @@ fn main() {
             if parser.finished() {
                 break;
             }
+            let fname = Rc::new(filename.clone());
             let result = parser.parse(true);
             match result {
                 Ok(expr) => {
                     let interner = NoIntern;
                     let sexpr = r7rs_expr_to_sexpr(
                         &interner,
-                        scm_intern(filename),
+                        fname,
                         &expr,
-                        &mut source_info,
+                        &mut source_info.borrow_mut(),
                     );
                     let cenv = Cenv {
+                        expr_name: Sexpr::Null,
                         frames: Sexpr::Null,
                         syntax_env: env.clone(),
-                        source_loc: &source_info,
+                        source_loc: source_info.clone(),
                     };
                     let iform = match compile(&sexpr, &cenv, true, true) {
                         Ok(iform) => iform,
@@ -103,9 +106,7 @@ fn main() {
     let lam = P(IForm::Lambda(toplevel_lambda));
 
     let mut bcode = vec![];
-    //let mut out = termcolor::StandardStream::stderr(termcolor::ColorChoice::Never);
-    //lam.pretty_print::<true>(&mut out).unwrap();
-    //println!();
+
     compile_bytecode(lam, &mut bcode);
 
     match std::fs::write("boot.capy", bcode) {
