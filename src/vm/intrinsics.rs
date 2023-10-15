@@ -1,19 +1,21 @@
 use crate::{
     bytecode::opcodes::{
         OP_ASSERT_NARGS_GE, OP_EXPAND_APPLY_ARGUMENT, OP_RETURN_VALUES, OP_SHUFFLE_DOWN,
-        OP_TAIL_CALL,
+        OP_TAIL_CALL, OP_ASSERT_NARGS_EE, OP_ALLOC_FRAME, OP_MOV, OP_CALL, OP_LONG_FMOV,
     },
     gc_protect,
     interpreter::stackframe::{
         frame_local, frame_num_locals, frame_virtual_return_address, StackElement,
     },
-    raise_exn,
     runtime::{
-        control::{ScmContinuation, VMCont, invalid_argument_violation},
+        control::{
+            invalid_argument_violation, wrong_type_argument_violation_at_ip, ScmContinuation,
+            VMCont,
+        },
         environment::scm_define,
         gsubr::{scm_define_subr, Subr},
         list::scm_length,
-        object::{scm_car, scm_cdr, ScmPair, ScmProgram},
+        object::{scm_car, scm_cdr, ScmPair, ScmProgram, scm_values_length, scm_values_ref},
         symbol::scm_intern,
         value::Value,
     },
@@ -22,7 +24,7 @@ use crate::{
 use super::{scm_virtual_machine, thread::Thread};
 #[inline(never)]
 pub unsafe extern "C-unwind" fn get_callee_vcode(thread: &mut Thread) -> *const u8 {
-    let proc = *frame_local(thread.interpreter().fp, 0);
+    let mut proc = *frame_local(thread.interpreter().fp, 0);
 
     if proc.is_program() {
         return proc.get_object().cast_as::<ScmProgram>().vcode;
@@ -30,7 +32,15 @@ pub unsafe extern "C-unwind" fn get_callee_vcode(thread: &mut Thread) -> *const 
     let ip = thread.interpreter().ip;
     thread.interpreter().ip = frame_virtual_return_address(thread.interpreter().fp);
 
-    raise_exn!(Fail, &[], "not a procedure: {} {:p}", proc, ip);
+    wrong_type_argument_violation_at_ip::<{ usize::MAX }>(
+        thread,
+        ip,
+        0,
+        "procedure",
+        proc,
+        1,
+        &[&mut proc],
+    )
 }
 
 pub unsafe extern "C-unwind" fn cons_rest(thread: &mut Thread, base: u32) -> Value {
@@ -54,19 +64,37 @@ pub unsafe extern "C-unwind" fn cons_rest(thread: &mut Thread, base: u32) -> Val
 #[inline(never)]
 pub unsafe extern "C-unwind" fn expand_apply_argument(thread: &mut Thread) {
     let mut x = thread.interpreter().sp.read().as_value;
-    let len = scm_length(x);
-    if let Some(mut len) = len {
-        let n = frame_num_locals(thread.interpreter().fp, thread.interpreter().sp);
-        thread.interpreter().alloc_frame(n as u32 - 1 + len as u32);
-        while len != 0 {
-            len -= 1;
-            thread.interpreter().sp.add(len).write(StackElement {
-                as_value: scm_car(x),
-            });
-            x = scm_cdr(x);
-        }
-    } else {
-        invalid_argument_violation::<{usize::MAX}>(thread, "apply", "expected list as argument", x, 1, 1, &[&mut x])
+    let Some(mut len) = scm_length(x)
+    else {
+        invalid_argument_violation::<{ usize::MAX }>(
+            thread,
+            "apply",
+            "expected list as argument",
+            x,
+            0,
+            1,
+            &[&mut x],
+        )
+    };
+    
+    let n = thread.interpreter().frame_locals_count();
+    thread.interpreter().alloc_frame((n - 1 + len) as _);
+
+    while len != 0 {
+        len -= 1;
+        thread.interpreter().sp.add(len).write(StackElement {
+            as_value: scm_car(x),
+        });
+        x = scm_cdr(x);
+    }
+    
+}
+
+pub(crate) unsafe extern "C-unwind" fn unpack_values_object(thread: &mut Thread, obj: Value) {
+    let nvals = scm_values_length(obj);
+    thread.interpreter().alloc_frame(nvals);
+    for n in 0..nvals {
+        *frame_local(thread.interpreter().fp, n as _) = scm_values_ref(obj, n as _);
     }
 }
 /// Jumps to the given continuation by unwinding to `scm_call_n` location.
@@ -152,12 +180,40 @@ static APPLY_CODE: &'static [u8] = &[
     OP_TAIL_CALL,             /* (tail-call) */
 ];
 
+static CALL_WITH_VALUES_CODE: &'static [u8] = &[
+    OP_ASSERT_NARGS_EE,
+    3,
+    0,
+    OP_ALLOC_FRAME,
+    6,
+    0,
+    OP_MOV,
+    0,0,
+    4,0,
+    OP_MOV,
+    4,0,
+    3,0,
+    OP_CALL,
+    5,0,
+    1,0,
+    OP_LONG_FMOV,
+    0,0,
+    1,0,
+    OP_SHUFFLE_DOWN,
+    5,0,
+    1,0,
+    OP_TAIL_CALL,
+];
+
 pub(crate) fn init() {
     let program = Thread::current().make_program::<true>(VALUES_CODE.as_ptr(), 0);
     scm_define(scm_intern("values"), program);
 
     let program = Thread::current().make_program::<true>(APPLY_CODE.as_ptr(), 0);
     scm_define(scm_intern("apply"), program);
+
+    let program = Thread::current().make_program::<true>(CALL_WITH_VALUES_CODE.as_ptr(), 0);
+    scm_define(scm_intern("call-with-values"), program);
 
     scm_define_subr("garbage-collect", 0, 0, 0, Subr::F0(do_gc));
 }

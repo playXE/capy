@@ -184,7 +184,8 @@ pub fn pass1(program: &Sexpr, cenv: &Cenv) -> Result<P<IForm>, String> {
                 Denotation::Special(special) => special(program, cenv),
                 Denotation::Macro(sr) => {
                     let expanded =
-                        synrule_expand(program, cenv.syntax_env.clone(), cenv.frames.clone(), &sr)?;
+                        synrule_expand(program.clone(), cenv.syntax_env.clone(), cenv.frames.clone(), &sr)?;
+                  
                     pass1(&expanded, cenv)
                 }
             },
@@ -253,6 +254,7 @@ pub fn pass1(program: &Sexpr, cenv: &Cenv) -> Result<P<IForm>, String> {
                     &sr,
                 )?;
 
+             
                 pass1(&expanded, cenv)
             }
 
@@ -702,6 +704,7 @@ pub fn define_syntax() -> P<SyntaxEnv> {
         let mut bindings = form.cadr();
         let body = form.cddr();
         let mut transformers = vec![];
+       
         while bindings.is_pair() {
             let spec = bindings.car();
             let name = spec.car();
@@ -759,6 +762,90 @@ pub fn define_syntax() -> P<SyntaxEnv> {
         );
         pass1_body(&body, &mut ncenv)
     });
+
+    define_syntax!("letrec-syntax", form, cenv, {
+        let mut bindings = form.cadr();
+        let body = form.cddr();
+        let mut transformer_specs = vec![];
+        let saved = bindings.clone();
+        while bindings.is_pair() {
+            let spec = bindings.car();
+            let name = spec.car();
+            let synrules = spec.cadr();
+            
+            transformer_specs.push((name, synrules));
+            bindings = bindings.cdr();
+        }
+
+        let newenv = cenv.extend(
+            Sexpr::list_from_iter(
+                transformer_specs
+                    .drain(..)
+                    .map(|(id, spec)| sexp_cons(id,spec)),
+            ),
+            Sexpr::Symbol(scm_intern("SYNTAX")),
+        );
+
+        let mut trans = vec![];
+
+        bindings = saved;
+
+        while bindings.is_pair() {
+            let spec = bindings.car();
+            let name = spec.car();
+            let synrules = spec.cadr();
+            let transformer = {
+                let synrule_id = synrules.car();
+
+                if !sexp_eq(&synrule_id, &Sexpr::Symbol(scm_intern("syntax-rules"))) {
+                    return Err(format!("illegal define-syntax: {}: {}", form, synrule_id));
+                }
+
+                let mut literals = synrules.cadr();
+                let ellipsis = if matches!(literals, Sexpr::Symbol(_) | Sexpr::Identifier(_)) {
+                    literals = synrules.caddr();
+                    Some(synrules.cadr())
+                } else {
+                    None
+                };
+
+                let rules = if ellipsis.is_some() {
+                    synrules.cdddr()
+                } else {
+                    synrules.cddr()
+                };
+                
+
+                let Sexpr::SyntaxRules(sr) = compile_syntax_rules(
+                    name.clone(),
+                    ellipsis.unwrap_or(Sexpr::Boolean(true)),
+                    literals,
+                    rules,
+                    newenv.syntax_env.clone(),
+                    newenv.frames.clone(),
+                )?
+                else {
+                    unreachable!()
+                };
+
+                sr
+            };
+
+            let id = name;
+
+            let denotation = transformer;
+            trans.push((id, denotation));
+            bindings = bindings.cdr();
+        }
+        let mut frames = newenv.frames.car().cdr();
+        for (_, trans) in trans.iter() {
+            
+            frames.car().set_cdr(Sexpr::SyntaxRules(trans.clone()));
+            frames = frames.cdr();
+        }
+
+        pass1_body(&body, &newenv)
+    }); 
 
     define_syntax!("quote", form, _cenv, {
         let datum = form.cadr();
@@ -1009,13 +1096,14 @@ fn pass1_body_rec(
                         args
                     ));
                 }
-
+                
                 match head {
                     Sexpr::LVar(_) => return pass1_body_finish(exprs, mframe, vframe, cenv),
 
                     Sexpr::Special(_) => return pass1_body_finish(exprs, mframe, vframe, cenv),
 
                     Sexpr::SyntaxRules(sr) => {
+                       
                         let expanded = synrule_expand(
                             exprs.car(),
                             cenv.syntax_env.clone(),
@@ -1048,13 +1136,18 @@ fn pass1_body_rec(
                         let Sexpr::Identifier(head) = head else {
                             unreachable!()
                         };
+
+
                         let denotation = cenv.syntax_env.env.get(&Value::encode_object_value(
                             unwrap_identifier(head.clone()).get_object(),
                         ));
+
+                        
                         match denotation {
                             Some(denotation) => {
                                 match &**denotation {
                                     Denotation::Macro(sr) => {
+                                      
                                         let expanded = synrule_expand(
                                             exprs.car(),
                                             cenv.syntax_env.clone(),

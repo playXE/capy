@@ -188,7 +188,7 @@
                    (else 'block)))
          (exists? (file-io/file-exists? filename)))
     (cond ((and exists? (not dont-create) (not dont-fail))
-           (let* ((exec-mode (larceny:execution-mode)))
+           (let* ((exec-mode (capy:execution-mode)))
              (case exec-mode
               ((r5rs) #t)
               ((err5rs)

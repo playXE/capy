@@ -349,7 +349,7 @@ pub fn raise_assertion_violation(
                 Some(irritant) => format!("{}: {}: {}", who, message, irritant),
                 None => format!("{}: {}", who, message),
             };
-            eprintln!("Pre-boot error: {}", message);
+            eprintln!("Pre-boot error: {} at ip={:p}", message, thread.interpreter().ip);
             std::process::abort();
         }
     }
@@ -386,7 +386,7 @@ pub fn raise_assertion_violation_at(
                 Some(irritant) => format!("{}: {}: {}", who, message, irritant),
                 None => format!("{}: {}", who, message),
             };
-            eprintln!("Pre-boot error: {}", message);
+            eprintln!("Pre-boot error: {} ip={:p}", message, thread.interpreter().ip);
             std::process::abort();
         }
     }
@@ -650,6 +650,69 @@ pub fn wrong_type_argument_violation<const REST_AT: usize>(
     }
 
     let who = scm_intern(who);
+    let mut message = thread.make_string::<false>(&fmt);
+    if argc < 2 {
+        raise_assertion_violation(thread, who, message, None);
+    } else {
+        let mut irritants = if REST_AT == usize::MAX {
+            Value::encode_null_value()
+        } else {
+            *argv[REST_AT]
+        };
+        let mut last = if REST_AT == usize::MAX {
+            argc as isize
+        } else {
+            REST_AT as isize
+        };
+        while last > 0 {
+            last -= 1;
+            irritants = gc_protect!(thread => message => thread.make_cons::<false>(*argv[last as usize], irritants));
+        }
+
+        raise_assertion_violation(thread, who, message, Some(irritants))
+    }
+}
+
+#[inline(never)]
+#[cold]
+pub fn wrong_type_argument_violation_at_ip<const REST_AT: usize>(
+    thread: &mut Thread,
+    at: *const u8,
+    position: usize,
+    expected: &str,
+    got: Value,
+    argc: usize,
+    argv: &[&mut Value],
+) -> ! {
+    let fmt;
+
+    if argc < 2 {
+        fmt = if got.is_undefined() {
+            format!("expected {}, but missing", expected)
+        } else {
+            format!("expected {}, but got {}", expected, to_string(thread, got))
+        };
+    } else {
+        fmt = if got.is_undefined() {
+            format!(
+                "expected {}, but missing for argument {}",
+                expected,
+                position + 1
+            )
+        } else {
+            format!(
+                "expected {}, but got {}, as argument {}",
+                expected,
+                got,
+                position + 1
+            )
+        };
+    }
+    let who = scm_virtual_machine().images.program_name(at);
+    let who = match who {
+        Some(x) if x.is_symbol() || x.is_string() => x,
+        _ => Value::encode_bool_value(false)
+    };
     let mut message = thread.make_string::<false>(&fmt);
     if argc < 2 {
         raise_assertion_violation(thread, who, message, None);

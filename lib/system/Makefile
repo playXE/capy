@@ -29,7 +29,9 @@ SRCS += lib/system/reader.scm
 SRCS += lib/system/enum.scm
 SRCS += lib/system/require.scm
 SRCS += lib/system/load.scm
-
+SRCS += lib/system/expander/r7rs-includer.scm
+SRCS += lib/system/expander/runtime.scm
+SRCS += lib/system/expander/expand.scm
 SRCS += lib/system/main.scm
 
 

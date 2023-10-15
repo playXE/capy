@@ -195,3 +195,79 @@
         (if (memv key '(atoms ...))
             (begin result1 result2 ...)
             (case key clause clauses ...)))))
+
+;; in order to be fully compliant quasiquote shouldn't cons unless
+;; necessary, and punt to the implementation of quote, however I do
+;; not do this for simplicity
+
+(define-syntax quasiquote
+  (syntax-rules ()
+    ((quasiquote expr)
+     (quasiquote-helper expr ()))))
+
+(define-syntax quasiquote-helper
+  (syntax-rules (quasiquote unquote unquote-splicing)
+    ((quasiquote-helper (quasiquote expr) stack)
+     (list (quote quasiquote)
+           (quasiquote-helper expr (#f . stack))))
+    ((quasiquote-helper (unquote expr) ())
+     expr)
+    ((quasiquote-helper (unquote expr) (_ . rest))
+     (list (quote unquote)
+           ;; quasiquote-helper here so that multiple argument unquote
+           ;; or unquote-splicing gives an error
+           (quasiquote-helper expr rest)))
+    ((quasiquote-helper (unquote exprs ...) stack)
+     (syntax-violation 'unquote
+                       "Multiple arguments to unquote only allowed in a list or vector"
+                       (unquote exprs ...)))
+    ((quasiquote-helper (unquote-splicing exprs ...) stack)
+      (syntax-violation 'unquote-splicing
+                       "unquote-splicing forms only allowed in a list or vector"
+                       (unquote-splicing exprs ...)))
+    ((quasiquote-helper (car . cdr) stack)
+     (list-helper (car . cdr) stack))
+    ((quasiquote-helper expr stack)
+     (quote expr))))
+
+(define-syntax list-helper
+  (syntax-rules (quasiquote unquote unquote-splicing)
+    ;; Single argument unquote needs to be handled as it can appear at
+    ;; the end of a list, however multiple arguments and unquote
+    ;; splicing do not, as there is no outer list to splice into
+    ((list-helper (unquote expr) ())
+     expr)
+    ((list-helper (unquote expr) (_ . rest))
+     (list (quote unquote)
+           (quasiquote-helper expr rest)))
+
+    ((list-helper ((quasiquote expr) . cdr) stack)
+     (cons (quasiquote-helper (quasiquote expr) stack)
+           (list-helper cdr stack)))
+    ;; unquote & unquote splicing in cars need to be handled here in
+    ;; order to splice correctly
+    ((list-helper ((unquote exprs ...) . cdr) ())
+     (append (list exprs ...)
+             (list-helper cdr ())))
+    ((list-helper ((unquote . exprs) . cdr) (first . rest))
+     ;; needs to use list-helper on exprs, so that we can splice into
+     ;; unquote/unquote-splicing forms 
+     (cons (cons (quote unquote) (list-helper exprs rest))
+           (list-helper cdr (first . rest))))
+    ((list-helper ((unquote-splicing exprs ...) . cdr) ())
+     (append exprs ...
+             (list-helper cdr ())))
+    ((list-helper ((unquote-splicing . exprs) . cdr) (first . rest))
+     (cons (cons (quote unquote-splicing) (list-helper exprs rest))
+           (list-helper cdr (first . rest)))) ;; right?
+    ;; otherwise just make sure each list element gets deal with at
+    ;; the correct stack level
+    ((list-helper (car . cdr) ())
+     (cons (quasiquote-helper car ())
+           (list-helper cdr ())))
+    ((list-helper (car . cdr) (first . rest))
+     (cons (quasiquote-helper car rest)
+           (list-helper cdr (first . rest))))
+    ((list-helper () stack)
+     '())))
+

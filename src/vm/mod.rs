@@ -89,6 +89,7 @@ impl VirtualMachine {
                 edges.push(edge);
             }
             
+            crate::runtime::subr_hash::visit_roots(&mut edges);
             crate::runtime::load::visit_roots(factory);
         }
         factory.create_process_edge_roots_work(edges);

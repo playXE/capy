@@ -760,7 +760,7 @@
            (cond
              ((and (eq? type 'bytevector)
                    (or (eq? d^ 'reference)
-                       (not (and (fixnum? d) (fx<=? 0 d 255)))))
+                       (not (and (fixnum? d) (<= 0 d 255)))))
               (reader-warning p "Invalid datum in bytevector" x)
               (lp head head^ prev prev^ len))
              (else
@@ -780,8 +780,8 @@
                                             (set-car! new-prev d)
                                             (set-car! new-prev^ d^)))))
                 (if (pair? head)
-                    (lp head head^ new-prev new-prev^ (fx+ len 1))
-                    (lp new-prev new-prev^ new-prev new-prev^ (fx+ len 1))))))))))))
+                    (lp head head^ new-prev new-prev^ (+ len 1))
+                    (lp new-prev new-prev^ new-prev new-prev^ (+ len 1))))))))))))
 
 (define (handle-lexeme p lextype x labels allow-refs?)
   (let ((src (reader-source p)))
@@ -873,3 +873,34 @@
      (get-datum (car port))]
     [else
      (error 'read "too many arguments")]))
+
+(define source-location-table (make-weak-core-hashtable))
+
+
+; Removes the annotations from a dataum.
+; if 'save?' is #t then the annotation-source objects
+; are saved in the source-location-table.
+(define (strip-annotations expr save?)
+  (define (rec expr)
+    (cond 
+      [(annotation? expr)
+        (let ([stripped (rec (annotation-expression expr))])
+          (when (and save? (or (vector? stripped) (pair? stripped)))
+            (hashtable-set! source-location-table stripped (annotation-source expr)))
+          stripped)]
+      [(pair? expr)
+        (cons (rec (car expr)) (rec (cdr expr)))]
+      [(vector? expr)
+        (let ([len (vector-length expr)]
+              [v (make-vector (vector-length expr))])
+            (let lp ([i 0])
+              (when (< i len)
+                (vector-set! v i (rec (vector-ref expr i)))
+                (lp (+ i 1)))))]
+      [else expr]))
+      
+  (rec expr))
+
+; returns source location if available, #f otherwise
+(define (get-source-location expr)
+  (hashtable-ref source-location-table expr #f))

@@ -140,8 +140,9 @@ impl Cenv {
         let mut frames = self.frames.clone();
 
         loop {
-            while frames.is_pair() {
-                let fp1 = frames.clone();
+            let mut fp = frames.clone();
+            while fp.is_pair() {
+                let fp1 = fp.clone();
 
                 let mut vls = fp1.cdar();
 
@@ -155,16 +156,18 @@ impl Cenv {
                     vls = vls.cdr();
                 }
 
-                frames = frames.cdr();
+                fp = fp.cdr();
             }
 
             if let Sexpr::Identifier(ident) = y.clone() {
                 let inner = ident.name.clone();
+              
                 if let Sexpr::Identifier(ref ident) = inner {
                     frames = ident.frames.clone();
                 }
 
                 y = inner;
+                continue;
             } else {
                 break;
             }

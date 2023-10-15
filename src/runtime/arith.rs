@@ -6,7 +6,7 @@ use std::{
 use crate::{gc_protect, raise_exn, utils::round_up, vm::thread::Thread};
 
 use super::{
-    control::invalid_argument_violation,
+    control::{invalid_argument_violation, wrong_type_argument_violation},
     object::{ScmCellHeader, ScmComplex, ScmRational, TypeId},
     value::Value,
 };
@@ -24,16 +24,27 @@ pub fn scm_to_u64(arg: Value) -> u64 {
     }
 }
 
-pub fn scm_to_u32(arg: Value) -> u32 {
+pub fn scm_to_u32(mut arg: Value) -> u32 {
     if arg.is_int32() {
         arg.get_int32() as u32
+    } else if arg.is_bignum() {
+        let bn = arg.get_bignum();
+        match bn.u32() {
+            Some(x) => x,
+            None => {
+                invalid_argument_violation::<{ usize::MAX }>(
+                    Thread::current(),
+                    "",
+                    "out of u32 range",
+                    arg,
+                    1,
+                    1,
+                    &[&mut arg],
+                );
+            }
+        }
     } else {
-        raise_exn!(
-            FailContract,
-            &[],
-            "scm_to_u32: not an exact integer: {}",
-            arg
-        )
+        wrong_type_argument_violation::<{usize::MAX}>(Thread::current(), "", 0, "exact integer", arg, 1, &[&mut arg])
     }
 }
 

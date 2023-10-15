@@ -4,6 +4,11 @@
 ; use our bytecode pipeline for this because it is 
 ; quite expensive to compile code to bytecode and then
 ; load it into the VM. 
+;
+;
+; FIXME: Add a way to associate source-locations with closures.
+; right now stacktraces are not very useful if code runs inside
+; interpreter here.
 
 (define eval-core #f)
 (let ()
@@ -117,7 +122,7 @@
                                 (begin 
                                     (vector-set! rands i ((vector-ref rands i) renv))
                                     (loop (+ i 1) proc)))
-                            (apply (proc renv) (vector->list rands))))])))
+                            (apply proc (vector->list rands))))])))
     (define (interpret/var-address name env)
         (let r-loop ([env env] [i 0])
             (if (null? env)
@@ -129,16 +134,15 @@
                         [else 
                             (a-loop (cdr rib) (+ j 1))])))))
     (define (interpret/extend-env env names)
-        
         (cons names env))
 
     (define (interpret/global name find-global)
         (let ([cell (find-global name)])
             (lambda (renv)
                 (let ([v (variable-ref-value cell)])
-                    (if (undefined? v)
-                        (error 'interpret/global "undefined global variable" name)
-                        v)))))
+                    (when (undefined? v)
+                        (error 'interpret/global "undefined global variable" name))
+                        v))))
     (define (interpret/set-global name expr find-global)
         (let ([cell (find-global name)])
             (lambda (renv)
@@ -268,8 +272,11 @@
  
     ; (eval-core expr #:optional env)
     (set! eval-core (lambda (x . rest)
+        (write x)
+        (newline)
         (let ([env (if (null? rest) (interaction-environment) (car rest))])
             (let ([clos (interpret/preprocess (%core-preprocess x) '() (lambda (name) (environment-get-cell env name)))])
+                
                 (clos '()))))))
 
 

@@ -221,7 +221,8 @@
 
 (define record?
   (lambda (obj)
-    (and (record-type-descriptor? (tuple-ref obj 0))
+    (and (tuple? obj) 
+         (record-type-descriptor? (tuple-ref obj 0))
          (not (record-type-opaque? (tuple-ref obj 0))))))
 
 (define record-rtd
@@ -282,8 +283,8 @@
 (define make-predicate
   (lambda (rtd)
     (lambda (obj)
-      (or (eq? rtd (tuple-ref obj 0))
-          (rtd-ancestor? rtd (tuple-ref obj 0))))))
+      (and (tuple? obj) (or (eq? rtd (tuple-ref obj 0))
+          (rtd-ancestor? rtd (tuple-ref obj 0)))))))
 
 (define record-constructor
   (lambda (desc)

@@ -123,8 +123,13 @@
 
 (define (osdep/file-modification-time fn)
     (if (not (string? fn))
-        (error 'osdep/file-modification-time "not a file name: " fn))
+        (error 'osdep/file-modification-time "not a file name" fn))
     (let ([v (make-vector 6)])
         (if (= (mtime fn v) 0)
             v
             #f)))
+
+(define (osdep/delete-file fn)
+    (if (not (string? fn))
+        (error 'osdep/delete-file "not a file name" fn))
+    (= (unlink fn) 0))

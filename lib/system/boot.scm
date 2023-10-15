@@ -41,6 +41,8 @@
         '()
         (cons (car args) (cons* (cdr args)))))
 
+(define (cons x y)
+    (cons x y))
 
 (define (vector-ref v i)
     (vector-ref v i))
@@ -98,8 +100,6 @@
 (define (split-at ls n)
     (values (list-head ls n) (list-tail ls n)))
 
-
-
 (define any1
   (lambda (pred lst)
     (and (not (null? lst))
@@ -136,6 +136,30 @@
 (define (negative? x)
     (< x 0))
 
+(define (not x)
+  (not x))
+
+
+(define member
+  (lambda (item list0 . rest)
+    (define (member3 item list equal?)
+      (cond ((pair? list) (if (equal? item (car list))
+                              list
+                              (member3 item (cdr list) equal?)))
+            ((null? list) #f)
+            (else (error 'member (errmsg 'msg:notlist) list0))))
+    (cond ((pair? rest)
+           (let ((comp (car rest)))
+             (if (and (procedure? comp)
+                      (null? (cdr rest)))
+                 (member3 item list0 comp)
+                 (error 'member (errmsg 'msg:illegalargs)
+                                (cons item (cons list0 rest))))))
+          ((symbol? item) (memq item list0))
+          ((number? item) (memv item list0))
+          ((char? item) (memv item list0))
+          (else (member3 item list0 equal?)))))
+
 (define (memv obj list)
     (let loop ((list list))
         (if (null? list)
@@ -152,24 +176,83 @@
                 list
                 (loop (cdr list))))))
 
+(define (memp pred list)
+  (cond ((pair? list) (if (pred (car list))
+                          list
+                          (memp pred (cdr list))))
+        ((null? list) #f)
+        (else (error "memp: Improper list " list))))
+
+(define (memp-not pred list)
+  (cond ((pair? list) (if (pred (car list))
+                          (memp pred (cdr list))
+                          list))
+        ((null? list) #f)
+        (else (error "memp-not: Improper list " list))))
+
+(define (append . args)
+
+  (define (revapp x y)
+    (do ((x x (cdr x))
+         (r y (cons (car x) r)))
+        ((not (pair? x))
+         (if (null? x)
+             r
+             (assertion-violation 'append "illegal arguments" args)))))
+
+  (define (append2 x y)
+    (revapp (reverse x) y))
+
+  (define (loop rest tail)
+    (if (pair? rest)
+        (loop (cdr rest)
+              (append2 (car rest) tail))
+        tail))
+
+  (if (pair? args)
+      (let ((a (reverse! args)))
+        (loop (cdr a) (car a)))
+      '()))
+
+
+(define (unspecified) (undefined))
+
+;; Reverse L while appending to R.  Although this looks like an
+;; unusual thing to want to do, it comes in quite handy in a lot of
+;; code.
+
+(define (revappend left right)          ; non-destructive version
+  (cond ((pair? left) (revappend (cdr left) (cons (car left) right)))
+        ((null? left) right)
+        (else (error "revappend: improper list " left))))
+
 (define (reverse list)
-    (let loop ((list list) (acc '()))
-        (if (null? list)
-            acc
-            (loop (cdr list) (cons (car list) acc)))))
+  (revappend list '()))
 
-(define (append . lists)
-    (if (null? lists)
-        '()
-        (let loop ((lists lists))
-            (if (null? (cdr lists))
-                (car lists)
-                (append2 (car lists) (loop (cdr lists)))))))
+; Probably due to JonL White.
 
-(define (append2 list1 list2)
-    (if (null? list1)
-        list2
-        (cons (car list1) (append2 (cdr list1) list2))))
+(define (revappend! l r)
+  (define (loop0 prev curr next)
+    (set-cdr! curr prev)
+    (if (pair? next)
+        (loop1 (cdr next) curr next)
+        curr))
+  (define (loop1 next prev curr)
+    (set-cdr! curr prev)
+    (if (pair? next)
+        (loop2 next (cdr next) curr)
+        curr))
+  (define (loop2 curr next prev)
+    (set-cdr! curr prev)
+    (if (pair? next)
+        (loop0 curr next (cdr next))
+        curr))
+  (if (pair? l)
+      (loop0 r l (cdr l))
+      r))
+
+(define (reverse! l)
+  (revappend! l '()))
 
 ; 'primitive' procedures definition. Compiler recognizes calls to `car`, `cdr`, `+` etc. as primitive calls
 ; and is able to emit OP_CAR, OP_CDR, OP_PLUS and others. Originally these procedures are not defined
@@ -300,34 +383,158 @@
             len
             (loop (cdr list) (+ len 1)))))
 
-(define (map proc list)
-    (let loop ([list list] [acc '()])
+; FIXME:  The performance of map can be improved.
+; That doesn't matter so much because map is usually inlined.
+
+(define (map f x . rest)
+
+  (define (lists-of-different-lengths . args)
+    (if (or (and (eq? 'r6rs (capy:execution-mode))
+                 (not using-r7rs-semantics))
+            (not (every? (lambda (x) (or (null? x) (pair? x)))
+                         args)))
+        (assertion-violation 'map
+                             (errmsg 'msg:illegalargs)
+                             (cons f (cons x rest)))
+        '()))
+
+  (define (map1 f x)
+    (if (pair? x)
+        (let* ((a (f (car x)))
+               (b (map1 f (cdr x))))
+          (cons a b))
+        (if (null? x)
+            '()
+            (lists-of-different-lengths x))))
+
+  (define (map2 f x y)
+    (if (and (pair? x) (pair? y))
+        (let* ((a (f (car x) (car y)))
+               (b (map2 f (cdr x) (cdr y))))
+          (cons a b))
+        (if (and (null? x) (null? y))
+            '()
+            (lists-of-different-lengths x y))))
+
+  (define (map3 f x y z)
+    (if (and (pair? x) (pair? y) (pair? z))
+        (let* ((a (f (car x) (car y) (car z)))
+               (b (map3 f (cdr x) (cdr y) (cdr z))))
+          (cons a b))
+        (if (and (null? x) (null? y) (null? z))
+            '()
+            (lists-of-different-lengths x y z))))
+
+  (define (map4 f x y z w)
+    (if (and (pair? x) (pair? y) (pair? z) (pair? w))
+        (let* ((a (f (car x) (car y) (car z) (car w)))
+               (b (map4 f (cdr x) (cdr y) (cdr z) (cdr w))))
+          (cons a b))
+        (if (and (null? x) (null? y) (null? z) (null? w))
+            '()
+            (lists-of-different-lengths x y z w))))
+
+  (define (mapn f lists)
+    (cond ((every? pair? lists)
+           (let* ((a (apply f (map car lists)))
+                  (b (mapn f (map1 cdr lists))))
+             (cons a b)))
+          ((every? null? lists)
+           '())
+          (else
+           (apply lists-of-different-lengths lists))))
+
+  (case (length rest)
+    ((0)  (map1 f x))
+    ((1)  (map2 f x (car rest)))
+    ((2)  (map3 f x (car rest) (cadr rest)))
+    ((3)  (map4 f x (car rest) (cadr rest) (caddr rest)))
+    (else (mapn f (cons x rest)))))
+
+(define (or-map proc list)
+    (let loop ([list list])
         (if (null? list)
-            (reverse acc)
-            (loop (cdr list) (cons (proc (car list)) acc)))))
+            #f
+            (let ([res (proc (car list))])
+                (if res
+                    res
+                    (loop (cdr list)))))))
 
-(define (call-with-values producer consumer)
-    ; use call-with-values call that is recognized by 
-    ; compiler as a `let-values` form. This is a hack
-    ; to define call-with-values in Scheme instead of
-    ; in the VM using raw bytecode. Output Tree IL is like this:
-    ;
-    ; (let-values ((results (producer))
-    ;           (apply consumer results))) 
-    
-    (call-with-values 
-        (lambda () (producer))
-        (lambda results
-            (apply consumer results))))
-
-(define (for-each proc list)
+(define (and-map proc list)
     (let loop ([list list])
         (if (null? list)
             #t
-            (begin
-                (proc (car list))
-                (loop (cdr list))))))
+            (let ([res (proc (car list))])
+                (if res
+                    (loop (cdr list))
+                    res)))))
 
+
+
+(define (for-each f x . rest)
+
+  (define (lists-of-different-lengths . args)
+    (if (or (and (eq? 'r6rs (larceny:execution-mode))
+                 (not using-r7rs-semantics))
+            (not (every? (lambda (x) (or (null? x) (pair? x)))
+                         args)))
+        (assertion-violation 'for-each
+                             (errmsg 'msg:illegalargs)
+                             (cons f (cons x rest)))
+        (unspecified)))
+
+  (define (map1 f x)
+    (if (pair? x)
+        (cons (f (car x)) (map1 f (cdr x)))
+        '()))
+
+  (define (for-each1 f x)
+    (if (pair? x)
+        (begin (f (car x))
+               (for-each1 f (cdr x)))
+        (if (null? x)
+            (unspecified)
+            (lists-of-different-lengths x))))
+
+  (define (for-each2 f x y)
+    (if (and (pair? x) (pair? y))
+        (begin (f (car x) (car y))
+               (for-each2 f (cdr x) (cdr y)))
+        (if (and (null? x) (null? y))
+            (unspecified)
+            (lists-of-different-lengths x y))))
+
+  (define (for-each3 f x y z)
+    (if (and (pair? x) (pair? y) (pair? z))
+        (begin (f (car x) (car y) (car z))
+               (for-each3 f (cdr x) (cdr y) (cdr z)))
+        (if (and (null? x) (null? y) (null? z))
+            (unspecified)
+            (lists-of-different-lengths x y z))))
+
+  (define (for-each4 f x y z w)
+    (if (and (pair? x) (pair? y) (pair? z) (pair? w))
+        (begin (f (car x) (car y) (car z) (car w))
+               (for-each4 f (cdr x) (cdr y) (cdr z) (cdr w)))
+        (if (and (null? x) (null? y) (null? z) (null? z))
+            (unspecified)
+            (lists-of-different-lengths x y z w))))
+
+  (define (for-each-n f lists)
+    (cond ((every? pair? lists)
+           (apply f (map car lists))
+           (for-each-n f (map1 cdr lists)))
+          ((every? null? lists)
+           (unspecified))
+          (else
+           (apply lists-of-different-lengths lists))))
+
+  (case (length rest)
+    ((0)  (for-each1 f x))
+    ((1)  (for-each2 f x (car rest)))
+    ((2)  (for-each3 f x (car rest) (cadr rest)))
+    ((3)  (for-each4 f x (car rest) (cadr rest) (caddr rest)))
+    (else (for-each-n f (cons x rest)))))
 (define eof-object #f)
 (define eof-object? #f)
 
@@ -388,4 +595,112 @@
         (bitwise-if mask
                     (bitwise-arithmetic-shift ei3 ei2)
                     ei1)))
+
+(define (string-null? s)
+    (= (string-length s) 0))
+
+(define file-name-separator-string "/")
+(define (file-name-separator? c)
+  (char=? c #\/))
+(define (in-vicinity vicinity file)
+  (let ((tail (let ((len (string-length vicinity)))
+                (if (zero? len)
+                    #f
+                    (string-ref vicinity (- len 1))))))
+    (string-append vicinity
+                   (if (or (not tail) (file-name-separator? tail))
+                       ""
+                       file-name-separator-string)
+                   file)))
+
+(define (string-copy s)
+    (substring s 0 (string-length s)))
+
+(define (list . args) args)
+
+
+(define (every? p l . ls)
+
+  (define (complain)
+    (assertion-violation 'for-all "illegal arguments" (cons p (cons l ls))))
+
+  (define (every1 a)
+    (cond ((pair? a)
+           (if (null? (cdr a))
+               (p (car a))
+               (and (p (car a))
+                    (every1 (cdr a)))))
+          ((null? a) #t)
+          (else (complain))))
+
+  (define (every2 a b)
+    (cond ((and (pair? a) (pair? b))
+           (if (null? (cdr a))
+               (if (null? (cdr b))
+                   (p (car a) (car b))
+                   (complain))
+               (and (p (car a) (car b))
+                    (every2 (cdr a) (cdr b)))))
+          ((and (null? a) (null? b))
+           #t)
+          (else (complain))))
+
+  (define (every-n arglists)
+    (cond ((pair? arglists)
+           (if (null? (cdr arglists))
+               (apply p (car arglists))
+               (and (apply p (car arglists))
+                    (every-n (cdr arglists)))))
+          ((null? arglists) #t)
+          (else (complain))))
+
+  (cond ((null? ls) (every1 l))
+        ((null? (cdr ls))
+         (every2 l (car ls)))
+        (else
+         (let ((arglists (apply map list l ls)))
+           (every-n arglists)))))
+
+
+(define (some? p l . ls)
+
+  (define (complain)
+    (assertion-violation 'for-all "illegal arguments" (cons p (cons l ls))))
+
+  (define (some1 a)
+    (cond ((pair? a)
+           (if (null? (cdr a))
+               (p (car a))
+               (or (p (car a))
+                   (some1 (cdr a)))))
+          ((null? a) #f)
+          (else (complain))))
+
+  (define (some2 a b)
+    (cond ((and (pair? a) (pair? b))
+           (if (null? (cdr a))
+               (if (null? (cdr b))
+                   (p (car a) (car b))
+                   (complain))
+               (or (p (car a) (car b))
+                   (some2 (cdr a) (cdr b)))))
+          ((and (null? a) (null? b))
+           #f)
+          (else (complain))))
+
+  (define (some-n arglists)
+    (cond ((pair? arglists)
+           (if (null? (cdr arglists))
+               (apply p (car arglists))
+               (or (apply p (car arglists))
+                   (some-n (cdr arglists)))))
+          ((null? arglists) #f)
+          (else (complain))))
+
+  (cond ((null? ls) (some1 l))
+        ((null? (cdr ls))
+         (some2 l (car ls)))
+        (else
+         (let ((arglists (apply map list l ls)))
+           (some-n arglists)))))
 

@@ -1,4 +1,3 @@
-
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -233,6 +232,7 @@ pub fn compile_closure(
     lam: P<Lambda>,
     closures: &Vec<(P<Lambda>, usize)>,
     data_start: usize,
+    labels: &mut HashMap<P<IForm>, usize>,
 ) {
     fn lookup_lexical(sym: P<LVar>, mut env: &P<Env>) -> P<Env> {
         loop {
@@ -380,7 +380,7 @@ pub fn compile_closure(
             free_idx += 1;
         }
     }
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Copy, Debug)]
     #[allow(dead_code)]
     enum Context {
         Effect,
@@ -393,7 +393,7 @@ pub fn compile_closure(
     struct State<'a> {
         data_start: usize,
         frame_size: u32,
-        labels: HashMap<P<IForm>, usize>,
+        labels: &'a mut HashMap<P<IForm>, usize>,
         closures: &'a Vec<(P<Lambda>, usize)>,
     }
     fn stack_height_under_local(idx: u32, frame_size: u32) -> u32 {
@@ -900,7 +900,8 @@ pub fn compile_closure(
                     let env = for_value(asm, &lset.value, env, state);
 
                     //if l.closure {
-                    asm.emit_store_free_variable(1 - state.frame_size as u16, env.idx as _, l.idx);
+                    
+                    asm.emit_store_free_variable(state.frame_size as u16 - 1, env.idx as _, l.idx);
                     //} else {
                     asm.emit_mov(l.idx as _, env.idx);
                     //}
@@ -970,12 +971,17 @@ pub fn compile_closure(
 
             IForm::Goto(goto) => {
                 let label = goto.upgrade().expect("label must be alive!");
-                let pos = *state.labels.get(&label).unwrap();
+                let pos = state.labels.get(&label).cloned();
                 let start = asm.code.len() + 1;
                 asm.emit_j_known(0);
-                let diff = pos as i32 - asm.code.len() as i32;
-                let code = &mut asm.code[start..start + 4];
-                code.copy_from_slice(&diff.to_le_bytes());
+                if let Some(pos) = pos {
+                    let diff = pos as i32 - asm.code.len() as i32;
+                    let code = &mut asm.code[start..start + 4];
+                    code.copy_from_slice(&diff.to_le_bytes());
+                } else {
+                    println!("jump to {:p} from {:p} is not yet resolved", label.as_ptr(), exp.as_ptr());
+                    asm.relocs.push(Reloc::Jump { start: start as _, code_loc: asm.code.len() as _, label: label.clone() })
+                }
                 None
             }
 
@@ -1055,11 +1061,15 @@ pub fn compile_closure(
                 None
             }
 
+            Context::ValuesAt(height) => {
+                for_values_at(asm, exp, env, height, state);
+                None
+            }
+
             Context::Tail => {
                 for_tail(asm, exp, env, state);
                 None
             }
-            _ => todo!(),
         }
     }
 
@@ -1108,6 +1118,7 @@ pub fn compile_closure(
                 asm.emit_reset_frame(1 + call.args.len() as u16);
                 asm.emit_tail_call();
             }
+
             IForm::Goto(_) => {
                 for_effect(asm, exp, env, state);
             }
@@ -1163,7 +1174,7 @@ pub fn compile_closure(
 
     let mut state = State {
         data_start,
-        labels: HashMap::new(),
+        labels,
         closures,
         frame_size: size as _,
     };
@@ -1216,7 +1227,7 @@ pub fn compile_bytecode(exp: P<IForm>, output: &mut Vec<u8>) {
         name: Value,
     }
     let mut closure_data = Vec::new();
-
+    let mut labels = HashMap::new();
     for (closure, label) in closures.iter() {
         let data_pos = asm.code.len();
 
@@ -1231,8 +1242,8 @@ pub fn compile_bytecode(exp: P<IForm>, output: &mut Vec<u8>) {
         asm.write_u32(0); // end
 
         let pos = asm.code.len();
-        
-        compile_closure(&mut asm, closure.clone(), &closures, data_pos);
+
+        compile_closure(&mut asm, closure.clone(), &closures, data_pos, &mut labels);
         let end = asm.code.len();
 
         let diff_start = pos as i32 - data_pos as i32;
@@ -1259,6 +1270,7 @@ pub fn compile_bytecode(exp: P<IForm>, output: &mut Vec<u8>) {
     while let Some(reloc) = asm.relocs.pop() {
         match reloc {
             Reloc::Label { code_loc, index } => {
+
                 let label = *actual_locations.get(&(index as usize)).unwrap();
 
                 let diff = label as i32 - code_loc as i32;
@@ -1271,6 +1283,14 @@ pub fn compile_bytecode(exp: P<IForm>, output: &mut Vec<u8>) {
                 asm.code[code_loc as usize + 2] = diff[2];
                 asm.code[code_loc as usize + 3] = diff[3];
             } // TODO: More relocs for constants
+
+            Reloc::Jump { start, code_loc, label } => {
+                let pos = labels.get(&label).cloned().unwrap();
+                let diff = pos as i32 - code_loc as i32;
+                let code = &mut asm.code[start as usize..start as usize + 4];
+                code.copy_from_slice(&diff.to_le_bytes());
+                
+            }
         }
     }
 
@@ -1300,8 +1320,6 @@ pub fn compile_bytecode(exp: P<IForm>, output: &mut Vec<u8>) {
 
     // ensure offsets always increase
     asm.sources.sort_by_key(|(off, _)| *off);
-
-    
 
     let label = actual_locations[&toplevel_ix];
     let entrypoint = Sexpr::Program(label as _);

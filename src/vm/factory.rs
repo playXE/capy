@@ -67,6 +67,29 @@ impl Thread {
         }
     }
 
+    pub fn make_values<const IMMORTAL: bool>(&mut self, len: usize, fill: Value) -> Value {
+        let size = round_up(size_of::<ScmVector>() + len * size_of::<Value>(), 8, 0);
+
+        unsafe {
+            let objref = if IMMORTAL {
+                self.alloc_immortal(size, TypeId::Values)
+            } else {
+                self.alloc(size, TypeId::Values)
+            };
+
+            (*objref.cast::<ScmVector>()).length = len;
+            let mut cursor = (*objref.cast::<ScmVector>()).values.as_mut_ptr();
+            let end = cursor.add(len);
+
+            while cursor < end {
+                cursor.write(fill);
+                cursor = cursor.add(1);
+            }
+
+            Value::encode_object_value(ScmCellRef(objref as _))
+        }
+    }
+
     pub fn make_tuple<const IMMORTAL: bool>(&mut self, len: usize, fill: Value) -> Value {
         let size = round_up(size_of::<ScmTuple>() + len * size_of::<Value>(), 8, 0);
 

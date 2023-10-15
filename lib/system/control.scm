@@ -27,6 +27,39 @@
                         (cont (car results))))
                 (apply cont results)))))))
 
+
+(define call/cc call-with-current-continuation)
+
+(define (reroot! there)
+    (define (reroot-loop there)
+        (if (not (eq? there *here*))
+            (begin 
+                (reroot-loop (cdr there))
+                (let ([old-pair (car there)])
+                    (let ([before (car old-pair)] [after (cdr old-pair)])
+                        (set-car! *here* (cons after before))
+                        (set-cdr! *here* there)
+                        (set-car! there #f)
+                        (set-cdr! there '()) 
+                        (set! *here* there)
+                        (before)
+                    )))))
+    (reroot-loop there))
+
+(define (dynamic-wind before thunk after)
+    (let ([here *here*])
+        (let ([there (list #f)])
+            (before)
+            (set-car! *here* (cons after before))
+            (set-cdr! *here* there)
+            (set! *here* there)
+            (call-with-values 
+                thunk 
+                (lambda results
+                    (reroot! here)
+                    (apply values results))))))
+
+
 ; FIXME: Very hacky implmenetation.
 ;
 ; We define our own continuation object in Rust
@@ -57,43 +90,8 @@
                 (apply make-stack (%extract-continuation-object obj) args)
                 (apply make-stack obj args)))))
 
-(define call/cc call-with-current-continuation)
-
-(define (reroot! there)
-    (define (reroot-loop there)
-        (if (not (eq? there *here*))
-            (begin 
-                (reroot-loop (cdr there))
-                (let ([old-pair (car there)])
-                    (let ([before (car old-pair)] [after (cdr old-pair)])
-                        (set-car! *here* (cons after before))
-                        (set-cdr! *here* there)
-                        (set-car! there #f)
-                        (set-cdr! there '()) 
-                        (set! *here* there)
-                        (before)
-                    )))))
-    (reroot-loop there))
-
-(define (dynamic-wind before thunk after)
-    (let ([here *here*])
-        (let ([there (list #f)])
-            (before)
-            
-            (set-car! *here* (cons after before))
-            (set-cdr! *here* there)
-            (set! *here* there)
-            ;(let ([result (thunk)])
-            ;    (reroot! here)
-            ;    result))))
-            (call-with-values 
-                thunk 
-                (lambda results
-                    (reroot! here)
-                    (apply values results))))))
-
 (define (unhandled-exception-error val)
-   (let ([out (current-error-port)])
+   (let ([out (current-output-port)])
     (display "An exception has been raised, but no exception handler is installed \n" out)
     (if (continuation-condition? val)
         (print-frames (stack->vector (make-stack (condition-continuation val))) out))
@@ -207,13 +205,13 @@
 
 (define (print-frame frame . rest)
     (let ((p (if (pair? rest) (car rest) (current-output-port))))
-        (let ([return-address (number->string (frame-return-address frame) 16)]
+        (let ([ip (number->string (frame-instruction-pointer frame) 16)]
               [name (frame-procedure-name frame)]
               [loc (frame-source-location frame)])
             (cond 
                 [(and loc name) 
                     (write-string 
-                        (format "   at ~a (~a:~a:~a)~%" name (vector-ref loc 0) (vector-ref loc 1) (vector-ref loc 2))
+                        (format "   at ~a (~a:~a:~a) ip=~a~%" name (vector-ref loc 0) (vector-ref loc 1) (vector-ref loc 2) ip)
                         p)]
                 [loc
                     (write-string 
@@ -225,7 +223,7 @@
                         p)]
                 [else 
                     (write-string 
-                        (format "   at <anonymous> at ~a" return-address) p)]))))
+                        (format "   at <anonymous> at ~a~%" ip) p)]))))
 
 (define (print-frames frames . rest)
     (let ((p (if (pair? rest) (car rest) (current-output-port))))
@@ -235,3 +233,14 @@
                     (begin
                         (print-frame (vector-ref frames i) p)
                         (lp (+ i 1))))))))
+
+
+(define-syntax false-if-exception
+    (syntax-rules ()
+        ((_ body ...)
+            (call/cc (lambda (k)
+                (with-exception-handler
+                    (lambda (x)
+                        (k #f))
+                    (lambda ()
+                        body ...)))))))

@@ -7,7 +7,7 @@ use crate::{
     compiler::{
         compile_bytecode::compile_bytecode,
         expand, fix_letrec, pass2,
-        sexpr::{value_to_sexpr, Sexpr, SourceInfo},
+        sexpr::{Sexpr, SourceInfo, value_to_sexpr_with_source_loc},
         tree_il::{il_to_core_form, IForm, Lambda},
         Cenv, P,
     },
@@ -26,7 +26,7 @@ use super::{
     object::{
         scm_car, scm_cdr, scm_program_code, scm_program_num_free_vars, scm_string_mut_str,
         scm_string_str, scm_symbol_str, scm_tuple_ref, scm_tuple_set, ScmProgram, ScmTuple,
-        ScmWeakMapping, TypeId, scm_program_free_variable,
+        ScmWeakMapping, TypeId, scm_program_free_variable, scm_values_set,
     },
     symbol::scm_intern,
     value::Value,
@@ -757,7 +757,8 @@ extern "C-unwind" fn raw_raise(_thread: &mut Thread, val: &mut Value) -> Value {
 }
 
 extern "C-unwind" fn core_preprocess(thread: &mut Thread, code: &mut Value) -> Value {
-    let Some(sexpr) = value_to_sexpr(*code) else {
+    let mut source_info = SourceInfo::new();
+    let Some(sexpr) = value_to_sexpr_with_source_loc(*code, &mut source_info) else {
         invalid_argument_violation::<{usize::MAX}>(
             thread,
             "%core-preprocess",
@@ -776,7 +777,7 @@ extern "C-unwind" fn core_preprocess(thread: &mut Thread, code: &mut Value) -> V
 
     let cenv = Cenv {
         frames: Sexpr::Null,
-        source_loc: Rc::new(RefCell::new(SourceInfo::new())),
+        source_loc: Rc::new(RefCell::new(source_info)),
         syntax_env: synenv.clone(),
         expr_name: Sexpr::Null,
     };
@@ -801,7 +802,8 @@ extern "C-unwind" fn core_preprocess(thread: &mut Thread, code: &mut Value) -> V
 }
 
 extern "C-unwind" fn core_compile(thread: &mut Thread, sexpr: &mut Value) -> Value {
-    let Some(sexpr_) = value_to_sexpr(*sexpr) else {
+    let mut source_info = SourceInfo::new();
+    let Some(sexpr_) = value_to_sexpr_with_source_loc(*sexpr, &mut source_info) else {
         invalid_argument_violation::<{usize::MAX}>(
             thread,
             "%core-compile",
@@ -820,7 +822,7 @@ extern "C-unwind" fn core_compile(thread: &mut Thread, sexpr: &mut Value) -> Val
 
     let cenv = Cenv {
         frames: Sexpr::Null,
-        source_loc: Rc::new(RefCell::new(SourceInfo::new())),
+        source_loc: Rc::new(RefCell::new(source_info)),
         expr_name: Sexpr::Null,
         syntax_env: synenv.clone(),
     };
@@ -1349,6 +1351,11 @@ extern "C-unwind" fn make_condition_uid(_thread: &mut Thread) -> Value {
     sym
 }
 
+extern "C-unwind" fn make_cuid2(_thread: &mut Thread) -> Value {
+    let cuid = cuid2::create_id();
+    _thread.make_string::<false>(&cuid)
+}
+
 extern "C-unwind" fn capture_stacktrace(thread: &mut Thread) -> Value {
     unsafe { super::error::capture_stacktrace(thread) }
 }
@@ -1371,11 +1378,31 @@ extern "C-unwind" fn subr_symbol_hash(thread: &mut Thread, symbol: &mut Value) -
     Value::encode_int32(hash as _)
 }
 
+#[allow(dead_code)]
+extern "C-unwind" fn subr_values(thread: &mut Thread, args: &mut Value) -> Value {
+    let n = scm_length(*args).unwrap();
+
+    if n == 1 {
+        return scm_car(*args);
+    } else {
+        let result = thread.make_values::<false>(n, Value::encode_null_value());
+
+        for i in 0..n {
+            scm_values_set(result, thread, i as _, scm_car(*args));
+            *args = scm_cdr(*args);
+        }
+
+        result
+    }
+}
+
 pub(crate) fn init() {
+    //scm_define_subr("values", 0, 0, 1, Subr::F1(subr_values));
     scm_define_subr("%core-compile", 1, 0, 0, Subr::F1(core_compile));
     scm_define_subr("symbol-hash", 1, 0, 0, Subr::F1(subr_symbol_hash));
     scm_define_subr("%capture-stacktrace", 0, 0, 0, Subr::F0(capture_stacktrace));
     scm_define_subr("make-condition-uid", 0, 0, 0, Subr::F0(make_condition_uid));
+    scm_define_subr("make-cuid2", 0, 0, 0, Subr::F0(make_cuid2));
     scm_define_subr(".procedure->string", 1, 0, 0, Subr::F1(procedure_to_string));
     scm_define_subr("make-weakmapping", 2, 0, 0, Subr::F2(make_weakmapping));
     scm_define_subr("weakmapping?", 1, 0, 0, Subr::F1(weakmapping_p));
@@ -1417,7 +1444,7 @@ pub(crate) fn init() {
     scm_define_subr("%raise", 1, 0, 0, Subr::F1(raw_raise));
     scm_define_subr("%core-preprocess", 1, 0, 0, Subr::F1(core_preprocess));
     scm_define_subr(
-        "load-image-from-file",
+        "load-thunk-from-file",
         1,
         0,
         0,

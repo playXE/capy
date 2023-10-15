@@ -24,10 +24,6 @@ pub const TRANSPARENT_PRIMITIVE_NAMES: &[&str] = &[
 ];
 
 pub const INTERESTING_PRIMTIIVE_NAMES: &[&str] = &[
-    "call-with-values",
-    "call-with-current-continuation",
-    "call/cc",
-    "dynamic-wind",
     "eq?",
     "eqv?",
     "equal?",

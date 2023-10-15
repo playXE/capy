@@ -1,8 +1,10 @@
-(define (fac n)
-    (let loop ((n n) (acc 1))
-        (if (= n 0)
-            acc
-            (loop (- n 1) (* acc n)))))
+(ex:expand-file "lib/system/expander/standard-library.scm" "standard-library.exp")
 
-(display (fac 5))
-(newline)
+(ex:repl 
+'(
+    (library (foo bar)
+        (export)
+        (import (core primitives))
+        (define (foo x y) (+ x y)))))
+
+#f

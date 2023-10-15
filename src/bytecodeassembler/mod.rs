@@ -2,7 +2,7 @@ use std::{collections::HashMap, mem::size_of};
 
 use crate::{
     bytecode::{encode::InstructionStream, encode::*, opcodes::*},
-    compiler::sexpr::{Sexpr, SourceLoc},
+    compiler::{sexpr::{Sexpr, SourceLoc}, tree_il::IForm, P},
     runtime::value::Value,
 };
 
@@ -391,6 +391,7 @@ impl Assembler {
 
 pub enum Reloc {
     Label { code_loc: u32, index: u32 },
+    Jump { start: u32, code_loc: u32, label: P<IForm> },
 }
 
 pub fn link_assembler(asm: &mut Assembler) -> Vec<u8> {

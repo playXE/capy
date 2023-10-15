@@ -655,7 +655,6 @@ pub(crate) fn inplace_rehash_weak_hashtable(ht: Value) {
                 continue;
             }
 
-            println!("{:x} {}", elt.get_raw(), elt.is_undefined());
             assert!(
                 elt.type_of() == TypeId::WeakMapping,
                 "weakmapping expected but got {:?}",
@@ -851,7 +850,7 @@ pub fn lookup_weak_hashtable(ht: Value, key: Value) -> Value {
                 index -= nsize;
             }
             if index == hash1 {
-                panic!("lookup_weak_hashtable: table overflow")
+                break Value::encode_bool_value(false);
             }
         }
     }

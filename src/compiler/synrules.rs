@@ -316,6 +316,7 @@ impl PatternContext {
 
         if matches!(form, Sexpr::Symbol(_) | Sexpr::Identifier(_)) {
             if self.is_ellipsis(form.clone()) {
+                println!("WOOOW {}", form);
                 return Err(self.bad_ellipsis());
             }
 

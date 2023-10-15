@@ -37,8 +37,13 @@ fn is_misused(x: &IForm, tail: bool, lvar: P<LVar>, formals: &[P<LVar>]) -> bool
         IForm::Let(let_) => {
             let_.inits
                 .iter()
-                .any(|x| is_misused(x, tail, lvar.clone(), formals))
+                .any(|x| is_misused(x, false, lvar.clone(), formals))
                 || is_misused(&let_.body, tail, lvar, formals)
+        }
+
+        IForm::Fix(fix) => {
+            fix.rhs.iter().any(|rhs| is_misused(&rhs.body, true, lvar.clone(), formals))
+                || is_misused(&fix.body, tail, lvar.clone(), formals)
         }
 
         IForm::If(if_) => {

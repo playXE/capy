@@ -8,7 +8,7 @@ use crate::{
             scm_vector_length, scm_vector_ref, scm_vector_set,
         },
         symbol::scm_intern,
-        value::Value,
+        value::Value, arith::ScmBigInteger, subr_hash::get_source_location,
     },
     vm::thread::Thread,
 };
@@ -654,6 +654,7 @@ impl Sexpr {
 }
 
 use num::{BigInt, Rational32, BigRational};
+use num_traits::{Num, FromPrimitive};
 use pretty::{BoxAllocator, DocAllocator, DocBuilder};
 use r7rs_parser::expr::{Expr, Interner};
 use termcolor::{Color, ColorSpec, WriteColor};
@@ -936,11 +937,41 @@ pub struct SourceLoc {
 
 pub type SourceInfo = HashMap<EqSexpr, SourceLoc>;
 
+fn ratio_to_sexpr(numer: Value, denom: Value) -> Sexpr {
+    if numer.is_int32() && denom.is_int32() {
+        Sexpr::Rational(Rational32::new(numer.get_int32(), denom.get_int32()))
+    } else {
+        let numer = if numer.is_int32() {
+            BigInt::from_i32(numer.get_int32()).unwrap()
+        } else {
+            let bn_str = numer.get_bignum().to_string_base(&ScmBigInteger::DEC_BASE);
+            BigInt::from_str_radix(&bn_str, 10).expect("must succeed")
+        };
+
+        let denom = if denom.is_int32() {
+            BigInt::from_i32(denom.get_int32()).unwrap()
+        } else {
+            let bn_str = denom.get_bignum().to_string_base(&ScmBigInteger::DEC_BASE);
+            BigInt::from_str_radix(&bn_str, 10).expect("must succeed")
+        };
+
+        Sexpr::BigRational(BigRational::new(numer, denom))
+    }
+}
+
 pub fn value_to_sexpr(val: Value) -> Option<Sexpr> {
     Some(if val.is_int32() {
         Sexpr::Fixnum(val.get_int32())
     } else if val.is_double() {
         Sexpr::Flonum(val.get_double())
+    } else if val.is_bignum() {
+        let bn_str = val.get_bignum().to_string_base(&ScmBigInteger::DEC_BASE);
+        Sexpr::BigInt(BigInt::from_str_radix(&bn_str, 10).expect("must succeed"))
+    } else if val.is_rational() {
+        let numer = val.get_rational().numerator;
+        let denom = val.get_rational().denominator;
+
+        ratio_to_sexpr(numer, denom)
     } else if val.is_null() {
         Sexpr::Null
     } else if val.is_undefined() {
@@ -966,6 +997,65 @@ pub fn value_to_sexpr(val: Value) -> Option<Sexpr> {
         }
 
         Sexpr::Vector(P(vec))
+    } else {
+        todo!()
+    })
+}
+
+pub fn value_to_sexpr_with_source_loc(val: Value, source_info: &mut SourceInfo) -> Option<Sexpr> {
+    Some(if val.is_int32() {
+        Sexpr::Fixnum(val.get_int32())
+    } else if val.is_double() {
+        Sexpr::Flonum(val.get_double())
+    } else if val.is_bignum() {
+        let bn_str = val.get_bignum().to_string_base(&ScmBigInteger::DEC_BASE);
+        Sexpr::BigInt(BigInt::from_str_radix(&bn_str, 10).expect("must succeed"))
+    } else if val.is_rational() {
+        let numer = val.get_rational().numerator;
+        let denom = val.get_rational().denominator;
+
+        ratio_to_sexpr(numer, denom)
+    } else if val.is_null() {
+        Sexpr::Null
+    } else if val.is_undefined() {
+        Sexpr::Undefined
+    } else if val.is_boolean() {
+        Sexpr::Boolean(val.get_bool())
+    } else if val.is_char() {
+        Sexpr::Char(val.get_char())
+    } else if val.is_string() {
+        Sexpr::String(P(scm_string_str(val).to_string()))
+    } else if val.is_symbol() {
+        Sexpr::Symbol(val)
+    } else if val.is_pair() {
+         
+
+        let car = value_to_sexpr_with_source_loc(scm_car(val), source_info)?;
+        let cdr = value_to_sexpr_with_source_loc(scm_cdr(val), source_info)?;
+
+        let expr = Sexpr::Pair(P((car, cdr)));
+
+        if let Some((file, line, column)) = get_source_location(val) {
+            let file = Rc::new(scm_string_str(file).to_owned());
+            source_info.insert(EqSexpr(expr.clone()), SourceLoc { file, line, column });
+        } 
+
+        expr
+    } else if val.is_vector() {
+        let mut vec = vec![Sexpr::Null; scm_vector_length(val) as usize];
+
+        for i in 0..vec.len() {
+            vec[i] = value_to_sexpr_with_source_loc(scm_vector_ref(val, i as _), source_info)?;
+        }
+
+        let expr = Sexpr::Vector(P(vec));
+
+        if let Some((file, line, column)) = get_source_location(val) {
+            let file = Rc::new(scm_string_str(file).to_owned());
+            source_info.insert(EqSexpr(expr.clone()), SourceLoc { file, line, column });
+        }
+
+        expr
     } else {
         todo!()
     })

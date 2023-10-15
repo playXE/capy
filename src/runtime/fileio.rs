@@ -406,6 +406,24 @@ extern "C-unwind" fn canonicalize_path(thread: &mut Thread, path: &mut Value) ->
     }
 }
 
+extern "C-unwind" fn getcwd(thread: &mut Thread) -> Value {
+    let res = std::env::current_dir();
+
+    match res {
+        Ok(path) => {
+            let path = path.to_str().unwrap();
+            thread.make_string::<false>(path)
+        }
+        Err(err) => {
+            if let Some(code) = err.raw_os_error() {
+                Value::encode_int32(code)
+            } else {
+                Value::encode_int32(-1)
+            }
+        }
+    }
+}
+
 pub(crate) fn init() {
     scm_define_subr(
         "canonicalize-path",
@@ -440,4 +458,5 @@ pub(crate) fn init() {
         0,
         Subr::F1(absolute_path_string_p),
     );
+    scm_define_subr("getcwd", 0, 0, 0, Subr::F0(getcwd));
 }

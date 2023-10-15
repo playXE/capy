@@ -199,6 +199,11 @@ impl ObjectModel<CapyVM> for ScmObjectModel {
                         + size_of::<ScmVector>()
                 }
 
+                TypeId::Values => {
+                    (scm_values_length(reference.into()) as usize * size_of::<Value>())
+                        + size_of::<ScmVector>()
+                }
+
                 TypeId::Tuple => {
                     (reference.cast_as::<ScmTuple>().length * size_of::<Value>())
                         + size_of::<ScmTuple>()
@@ -561,6 +566,17 @@ impl Scanning<CapyVM> for ScmScanning {
 
                 for i in 0..scm_vector_length(vector) {
                     let element = scm_vector_ref_mut(vector, i);
+                    if element.is_object() {
+                        let edge = ObjEdge::from_address(Address::from_mut_ptr(element));
+                        edge_visitor.visit_edge(edge);
+                    }
+                }
+            }
+
+            TypeId::Values => {
+                let values = Value::encode_object_value(reference);
+                for i in 0..scm_values_length(values) {
+                    let element = scm_values_ref_mut(values, i);
                     if element.is_object() {
                         let edge = ObjEdge::from_address(Address::from_mut_ptr(element));
                         edge_visitor.visit_edge(edge);

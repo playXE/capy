@@ -34,6 +34,7 @@ pub enum TypeId {
     // heap obj start
     Pair,
     Vector,
+    Values,
     Tuple,
     String,
     Symbol,
@@ -331,6 +332,26 @@ pub fn scm_vector_ref(vector: Value, index: u32) -> Value {
     }
 }
 
+
+pub fn scm_values_ref(vector: Value, index: u32) -> Value {
+    debug_assert!(vector.type_of() == TypeId::Values);
+    unsafe {
+        debug_assert!(
+            index < vector.get_object().cast_as::<ScmVector>().length as u32,
+            "index out of bounds: {} >= {}",
+            index,
+            vector.get_object().cast_as::<ScmVector>().length as u32
+        );
+        vector
+            .get_object()
+            .cast_as::<ScmVector>()
+            .values
+            .as_ptr()
+            .add(index as usize)
+            .read()
+    }
+}
+
 pub fn scm_vector_ref_mut<'a>(vector: Value, index: u32) -> &'a mut Value {
     debug_assert!(vector.is_vector());
     unsafe {
@@ -344,8 +365,42 @@ pub fn scm_vector_ref_mut<'a>(vector: Value, index: u32) -> &'a mut Value {
     }
 }
 
+pub fn scm_values_ref_mut<'a>(vector: Value, index: u32) -> &'a mut Value {
+    debug_assert!(vector.type_of() == TypeId::Values);
+    unsafe {
+        debug_assert!(index < vector.get_object().cast_as::<ScmVector>().length as u32);
+        &mut *vector
+            .get_object()
+            .cast_as::<ScmVector>()
+            .values
+            .as_mut_ptr()
+            .add(index as usize)
+    }
+}
+
 pub fn scm_vector_set(vector: Value, thread: &mut Thread, index: u32, value: Value) {
     debug_assert!(vector.is_vector());
+    debug_assert!(index < vector.get_object().cast_as::<ScmVector>().length as u32);
+    let mut v = vector.get_object();
+    let vec = v.cast_as::<ScmVector>();
+
+    if value.is_object() {
+        unsafe {
+            thread.reference_write(
+                transmute(vector),
+                transmute(vec.values.as_mut_ptr().add(index as usize)),
+                transmute(value),
+            );
+        }
+    } else {
+        unsafe {
+            vec.values.as_mut_ptr().add(index as usize).write(value);
+        }
+    }
+}
+
+pub fn scm_values_set(vector: Value, thread: &mut Thread, index: u32, value: Value) {
+    debug_assert!(vector.type_of() == TypeId::Values);
     debug_assert!(index < vector.get_object().cast_as::<ScmVector>().length as u32);
     let mut v = vector.get_object();
     let vec = v.cast_as::<ScmVector>();
@@ -468,6 +523,12 @@ pub fn scm_vector_length(vector: Value) -> u32 {
     debug_assert!(vector.is_vector());
     vector.get_object().cast_as::<ScmVector>().length as _
 }
+
+pub fn scm_values_length(vector: Value) -> u32 {
+    debug_assert!(vector.type_of() == TypeId::Values);
+    vector.get_object().cast_as::<ScmVector>().length as _
+}
+
 
 pub fn scm_vector_as_slice<'a>(vector: Value) -> &'a [Value] {
     unsafe {

@@ -446,17 +446,11 @@
           (else
             (> (vector-ref t1 i) (vector-ref t2 i))))))
 
-(define (relative-path-string? filename)
-  (file-io/relative-path-string? filename))
-
-(define (absolute-path-string? filename)
-  (file-io/absolute-path-string? filename))
-
 (define (rename-file from to)
   (file-io/rename-file from to))
 
 (define (delete-file filename)
-  (file-io/delete-file filename))
+  (osdep/delete-file filename))
 
 (define port-position io/port-position)
 

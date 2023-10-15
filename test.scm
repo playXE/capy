@@ -1,4 +1,10 @@
-(define (f x . rest)
-    (display (format "x: ~a, rest: ~a\n" x rest)))
-
-(apply f 1 (list 1 2 3))
+(call-with-values 
+  (lambda ()
+    (call-with-values 
+      (lambda () (values 1 2))
+      (lambda results 
+        (apply values results))))
+  (lambda (A B)
+    42
+  )
+)

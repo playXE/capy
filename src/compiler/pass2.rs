@@ -834,34 +834,7 @@ pub fn pass2(mut iform: P<IForm>, recover_loops: bool) -> Result<P<IForm>, Strin
         inline: false,
         lambda_lift: false,
     };
-    /*loop {
-        iform.count_refs();
-        scan_toplevel::<true>(iform.clone()); // compute bound and free variables in each lambda
-        iform = resolve_primitives(iform.clone());
-        if recover_loops {
-            ctx.changed = false;
-            ctx.inline = !true;
-            ctx.lambda_lift = false;
-            iform = pass2_rec(iform.clone(), &mut Vec::with_capacity(4), true, &mut ctx)?;
-            // TODO: recover loops here
-            scan_toplevel::<true>(iform.clone()); // compute bound and free variables in each lambda
-            iform.count_refs();
-            iform = recover_loops_rec(iform, &mut vec![], false, &mut ctx.changed);
-            scan_toplevel::<true>(iform.clone()); // compute bound and free variables in each lambda
-            iform.count_refs();
-        } else {
-            // can perform lambda lifting and inlining at the same time if we don't need to recover loops
-            ctx.changed = false;
-            ctx.inline = !true;
-            ctx.lambda_lift = !true;
-            iform = pass2_rec(iform.clone(), &mut Vec::with_capacity(4), true, &mut ctx)?;
-        }
-
-        if !ctx.changed || _passes >= 3 {
-            return Ok(iform);
-        }
-        _passes += 1;
-    }*/
+  
     iform.count_refs();
     scan_toplevel::<true>(iform.clone()); // compute bound and free variables in each lambda
     iform = resolve_primitives(iform.clone());

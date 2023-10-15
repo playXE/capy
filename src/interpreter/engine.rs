@@ -16,7 +16,7 @@ use crate::runtime::subr_arith::{
 };
 use crate::runtime::value::Value;
 use crate::runtime::{arith, object::*};
-use crate::vm::intrinsics::{self, cons_rest, get_callee_vcode, reinstate_continuation_x};
+use crate::vm::intrinsics::{self, cons_rest, get_callee_vcode, reinstate_continuation_x, unpack_values_object};
 use crate::vm::thread::Thread;
 use mmtk::util::metadata::side_metadata::GLOBAL_SIDE_METADATA_VM_BASE_ADDRESS;
 use mmtk::util::ObjectReference;
@@ -84,6 +84,7 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
             frame_local(thread.interpreter().fp, $i as usize)
         };
     }
+
 
     macro_rules! fp_set {
         ($i: expr, $val: expr) => {
@@ -156,7 +157,7 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
 
     loop {
         op = ip.read();
-
+    
         match op {
             OP_HALT => {
                 let frame_size = 2;
@@ -168,8 +169,8 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                 } else {
                     sync_ip!();
                     // todo: values
-                    ////todo!()
-                    Value::encode_null_value()
+                    todo!("values: {}", nvals)
+                    //Value::encode_null_value()
                 };
 
                 let fp = thread.interpreter().fp;
@@ -204,12 +205,11 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
 
             OP_CALL => {
                 let call = OpCall::read(ip);
-                ip = ip.add(size_of::<OpCall>());
 
                 let old_fp = thread.interpreter().fp;
                 let new_fp = frame_slot(old_fp, call.proc() as usize - 1);
                 set_frame_dynamic_link(new_fp, old_fp);
-                set_frame_virtual_return_address(new_fp, ip);
+                set_frame_virtual_return_address(new_fp, ip.add(size_of::<OpCall>()));
                 thread.interpreter().fp = new_fp;
 
                 reset_frame!(call.nlocals() as isize);
@@ -222,6 +222,7 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
 
             OP_TAIL_CALL => {
                 thread.interpreter().ip = ip;
+            
                 ip = get_callee_vcode(thread);
 
                 cache_sp!();
@@ -230,7 +231,6 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
             OP_RETURN_VALUES => {
                 let old_fp = thread.interpreter().fp;
                 thread.interpreter().fp = frame_dynamic_link(old_fp).cast();
-
                 ip = frame_virtual_return_address(old_fp);
             }
 
@@ -416,6 +416,7 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
 
                 let src = *fp_ref!(long_fmov.src());
                 fp_set!(long_fmov.dst(), src);
+              
                 ip = ip.add(size_of::<OpLongFmov>());
             }
 
@@ -452,15 +453,25 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                 let nlocals = frame_locals_count!();
                 let from = shuffle_down.from() as u32;
                 let to = shuffle_down.to() as u32;
-
+               
                 let mut n = 0;
                 while from + n < nlocals as u32 {
                     fp_set!(to + n, *fp_ref!(from + n));
                     n += 1;
                 }
-
                 reset_frame!(to + n);
                 ip = ip.add(size_of::<OpShuffleDown>());
+            }
+
+            OP_EXPAND_APPLY_ARGUMENT => {
+                let _ = OpExpandApplyArgument::read(ip);
+
+                thread.interpreter().ip = ip;
+
+                intrinsics::expand_apply_argument(thread);
+                sp = thread.interpreter().sp;
+
+                ip = ip.add(size_of::<OpExpandApplyArgument>());
             }
 
             OP_J => {
@@ -909,7 +920,7 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
 
                 let program = sp_ref!(program_ref_imm.src());
                 let var = scm_program_free_variable(program, program_ref_imm.idx());
-                //println!("{:p}: get {} at {} from {} to {}", ip, var, program_ref_imm.idx(), program_ref_imm.src(), program_ref_imm.dst());
+              
                 sp_set!(program_ref_imm.dst(), var);
                 ip = ip.add(size_of::<OpProgramRefImm>());
             }
@@ -1692,22 +1703,19 @@ pub unsafe extern "C-unwind" fn rust_engine<const CONST_PARAMS: EngineConstParam
                 let idx = subr_call.idx();
 
                 let ret = scm_apply_subr(thread, sp, idx);
-
-                reset_frame!(1);
-                sp_set!(0, ret);
-                ip = ip.add(size_of::<OpSubrCall>());
+                if unlikely(ret.type_of() == TypeId::Values) {
+                    unpack_values_object(thread, ret);
+                  
+                    cache_sp!();
+                    ip = ip.add(size_of::<OpSubrCall>());
+                } else {
+                    reset_frame!(1);
+                    sp_set!(0, ret);
+                    ip = ip.add(size_of::<OpSubrCall>());
+                }
             }
 
-            OP_EXPAND_APPLY_ARGUMENT => {
-                let _ = OpExpandApplyArgument::read(ip);
-
-                thread.interpreter().ip = ip;
-                thread.interpreter().sp = sp;
-                intrinsics::expand_apply_argument(thread);
-                ip = thread.interpreter().ip;
-                sp = thread.interpreter().sp;
-                ip = ip.add(size_of::<OpExpandApplyArgument>());
-            }
+            
 
             OP_CONTINUATION_CALL => {
                 let continuation_call = OpContinuationCall::read(ip);

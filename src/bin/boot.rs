@@ -55,12 +55,8 @@ fn main() {
             match result {
                 Ok(expr) => {
                     let interner = NoIntern;
-                    let sexpr = r7rs_expr_to_sexpr(
-                        &interner,
-                        fname,
-                        &expr,
-                        &mut source_info.borrow_mut(),
-                    );
+                    let sexpr =
+                        r7rs_expr_to_sexpr(&interner, fname, &expr, &mut source_info.borrow_mut());
                     let cenv = Cenv {
                         expr_name: Sexpr::Null,
                         frames: Sexpr::Null,
@@ -106,7 +102,11 @@ fn main() {
     let lam = P(IForm::Lambda(toplevel_lambda));
 
     let mut bcode = vec![];
-
+    if let Ok(_) = std::env::var("DUMP_IL") {
+        let mut out = termcolor::StandardStream::stderr(termcolor::ColorChoice::Never);
+        lam.pretty_print::<true>(&mut out).unwrap();
+        println!();
+    }
     compile_bytecode(lam, &mut bcode);
 
     match std::fs::write("boot.capy", bcode) {

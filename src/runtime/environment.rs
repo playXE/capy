@@ -6,8 +6,9 @@ use crate::{
 };
 
 use super::{
+    control::{invalid_argument_violation, raise_error, wrong_type_argument_violation},
     gsubr::{scm_define_subr, scm_make_subr, Subr},
-    hashtable::{get_hashtable, hashtable_lock, hashtable_unlock, put_hashtable, ScmHashTable},
+    hashtable::{get_hashtable, hashtable_lock, hashtable_unlock, put_hashtable},
     object::*,
     symbol::scm_intern,
     value::Value,
@@ -177,59 +178,62 @@ extern "C-unwind" fn environment_name_subr(_thread: &mut Thread, val: &mut Value
 }
 
 extern "C-unwind" fn environment_get_cell_proc(
-    _: &mut Thread,
+    thread: &mut Thread,
     env: &mut Value,
     key: &mut Value,
 ) -> Value {
     if !env.is_environment() {
-        raise_exn!(
-            Fail,
-            &[],
-            "environment-get-cell: expected environment, but got {}",
-            env
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "environment-get-cell",
+            0,
+            "environment",
+            *env,
+            2,
+            &[env, key],
         );
     }
 
     if !key.is_symbol() {
-        raise_exn!(
-            Fail,
-            &[],
-            "environment-get-cell: expected symbol, but got {}",
-            key
+        wrong_type_argument_violation::<{ usize::MAX }>(
+            thread,
+            "environment-get-cell",
+            1,
+            "symbol",
+            *key,
+            2,
+            &[env, key],
         );
     }
-    let might_rehash = env
-        .cast_as::<ScmEnvironment>()
-        .ht
-        .cast_as::<ScmHashTable>()
-        .rehash;
+
     let cell = environment_get_cell(*env, *key);
     match cell {
         Ok(cell) => {
-            assert!(
-                cell.type_of() == TypeId::GLOC,
-                "'{}' why not GLOC?: {:?}, would rehash?={}",
-                key,
-                cell.type_of() as u8,
-                might_rehash
-            );
             cell
         }
         Err(err) => match err {
-            EnvironmentError::Undefined => raise_exn!(
-                Fail,
-                &[],
-                "environment-get-cell: undefined variable {}",
-                key
-            ),
-            EnvironmentError::DenotesMacro => {
-                raise_exn!(Fail, &[], "environment-get-cell: denotes macro {}", key)
+            EnvironmentError::Undefined => {
+                raise_error(thread, "environment-get-cell", "undefiend variable", 0)
             }
-            EnvironmentError::ImmutableEnv => raise_exn!(
-                Fail,
-                &[],
-                "environment-get-cell: immutable environment {}",
-                env
+            EnvironmentError::DenotesMacro => {
+                invalid_argument_violation::<{ usize::MAX }>(
+                    thread,
+                    "environment-get-cell",
+                    "denotes macro",
+                    *key,
+                    1,
+                    2,
+                    &[env, key],
+                );
+            }
+            EnvironmentError::ImmutableEnv => invalid_argument_violation::<{ usize::MAX }>(
+                thread,
+                "environment-get-cell",
+                "immutable environment",
+                *env,
+                0,
+                2,
+                &[env, key],
             ),
         },
     }

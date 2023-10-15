@@ -2,7 +2,7 @@ use self::{
     engine::EngineConstParams,
     stackframe::{
         frame_dynamic_link, frame_local, frame_previous_sp, set_frame_dynamic_link,
-        set_frame_virtual_return_address, StackElement,
+        set_frame_virtual_return_address, StackElement, frame_num_locals,
     },
 };
 use crate::{
@@ -15,7 +15,7 @@ use crate::{
         control::{restore_cont_jump, ScmContinuation},
         environment::environment_get,
         symbol::scm_intern,
-        value::Value,
+        value::Value, error::capture_stacktrace,
     },
     vm::{
         intrinsics::{get_callee_vcode, UnwindAndContinue},
@@ -153,6 +153,10 @@ impl InterpreterState {
         self.sp = sp;
     }
 
+    pub unsafe fn frame_locals_count(&self) -> usize {
+        frame_num_locals(self.fp, self.sp) as _
+    }
+
     pub unsafe fn mark_stack_for_roots(&mut self, factory: &mut impl RootsWorkFactory<ObjEdge>) {
         // walk slots between fp and sp, repeat until stack top
 
@@ -232,7 +236,7 @@ impl InterpreterState {
 
     unsafe fn prepare_stack(&mut self) {
         self.stack_size =
-            VirtualMemory::<PlatformVirtualMemory>::page_size() / size_of::<StackElement>();
+            (VirtualMemory::<PlatformVirtualMemory>::page_size() * 4) / size_of::<StackElement>();
         self.stack_memory = allocate_stack(self.stack_size);
         self.stack_bottom = self.stack_memory.address().cast::<StackElement>();
         self.stack_top = self.stack_memory.end() as *mut StackElement;
@@ -252,7 +256,9 @@ impl InterpreterState {
 
     unsafe fn increase_sp(&mut self, new_sp: *mut StackElement, restore: bool) {
         if !restore && new_sp < self.stack_limit {
-            // FIXME: Expand stack
+            //let ip = self.ip;
+            let trace = capture_stacktrace(Thread::current());
+            eprintln!("stack overflow\n{}", trace);
             std::process::abort();
         } else {
             self.sp = new_sp;

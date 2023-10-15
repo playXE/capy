@@ -478,6 +478,8 @@ impl IForm {
                 allocator
                     .text("goto")
                     .append(allocator.space())
+                    .append(format!("(from {:p})", self))
+                    .append(allocator.space())
                     .append(allocator.text(format!("{:p}", &*label)))
                     .group()
                     .parens()

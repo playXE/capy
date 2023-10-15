@@ -1,5 +1,6 @@
 use crate::runtime::object::ScmProgram;
 use crate::runtime::value::Value;
+use crate::vm::scm_virtual_machine;
 
 use super::encode::*;
 
@@ -389,11 +390,17 @@ pub fn disassemble<const ADDR_INSN: bool>(vcode: &[u8]) {
                     disassemble_from_stream(op, &mut pc, &mut out).unwrap();
                 }
             }
+            let loc = scm_virtual_machine().images.debug_info(pc);
+            let loc_fmt = if let Some(loc) = loc {
+                format!("    ;    at {}:{}:{}", loc.0, loc.1, loc.2)
+            } else {
+                format!("")
+            };
             if !ADDR_INSN {
                 let diff = start.offset_from(start_pc);
-                println!("{:<02}:\t{}", diff, out);
+                println!("{:<02}:\t{}{}", diff, out, loc_fmt);
             } else {
-                println!("{:p}:\t{}", start, out);
+                println!("{:p}:\t{}{}", start, out, loc_fmt);
             }
         }
     }

@@ -1,18 +1,21 @@
+use mmtk::util::Address;
+use once_cell::sync::Lazy;
+
 use crate::{
     gc_protect,
     interpreter::scm_call_n,
     runtime::object::ScmPair,
-    vm::{scm_virtual_machine, thread::Thread},
+    vm::{scm_virtual_machine, thread::Thread}, gc::ObjEdge,
 };
 
 use super::{
     control::{invalid_argument_violation, scheme_raise, wrong_type_argument_violation},
-    environment::environment_get,
+    environment::{environment_get, environment_get_cell},
     gsubr::{scm_define_subr, Subr},
     hashtable::*,
-    object::{scm_vector_length, scm_vector_ref, ScmWeakMapping, TypeId},
+    object::{scm_vector_length, scm_vector_ref, ScmWeakMapping, TypeId, ScmGloc},
     symbol::scm_intern,
-    value::Value,
+    value::Value, arith::scm_to_u32,
 };
 
 extern "C-unwind" fn make_weak_hashtable(thread: &mut Thread) -> Value {
@@ -727,6 +730,56 @@ extern "C-unwind" fn core_hashtable_to_alist(thread: &mut Thread, ht: &mut Value
             &[ht],
         )
     }
+}
+
+static mut SCM_LOC_SOURCE_LOCATION_TABLE: Lazy<Value> = Lazy::new(|| {
+    let name = scm_intern("source-location-table");
+    let env = scm_virtual_machine().interaction_environment;
+    let table = environment_get_cell(env, name).unwrap();
+
+    table
+});
+
+pub(crate) fn visit_roots(edges: &mut Vec<ObjEdge>) {
+    unsafe {
+        if let Some(val) = Lazy::get_mut(&mut SCM_LOC_SOURCE_LOCATION_TABLE) {
+            if val.is_object() {
+                let edge = ObjEdge::from_address(Address::from_mut_ptr(val));
+                edges.push(edge);
+            }
+        }
+    }
+}
+
+pub fn scm_source_location_table() -> Value {
+    unsafe {
+        SCM_LOC_SOURCE_LOCATION_TABLE.cast_as::<ScmGloc>().value
+    }
+}
+
+pub fn get_source_location(expr: Value) -> Option<(Value, u32, u32)> {
+    let table = scm_source_location_table();
+    if table.type_of() != TypeId::WeakHashTable {
+        return None;
+    }
+
+    let val = lookup_weak_hashtable(table, expr);
+    if val.is_false() {
+        return None;
+    }
+
+    if !val.is_vector() {
+        return None;
+    }
+
+    let file = scm_vector_ref(val, 0);
+    let line = scm_vector_ref(val, 1);
+    let col = scm_vector_ref(val, 2);
+
+    let line = scm_to_u32(line);
+    let col = scm_to_u32(col);
+
+    Some((file, line, col))
 }
 
 pub(crate) fn init() {

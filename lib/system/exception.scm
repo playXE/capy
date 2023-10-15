@@ -1,6 +1,7 @@
 (define assertion-violation
   (lambda (who message . irritants)
-    (if (or (not who) (string? who) (symbol? who) (identifier? who))
+    ;(display (format "assertion violation: ~a: ~a ~%" who message))
+    (if (or (null? who) (not who) (string? who) (symbol? who) (identifier? who))
         (if (string? message)
             (raise
               (call/cc 
@@ -9,6 +10,11 @@
                     (condition 
                       (make-assertion-violation)
                       (make-who-condition who)
+                      (make-message-condition message)
+                      (make-irritants-condition irritants)
+                      (make-continuation-condition k))
+                    (condition 
+                      (make-assertion-violation)
                       (make-message-condition message)
                       (make-irritants-condition irritants)
                       (make-continuation-condition k))))))
@@ -71,7 +77,7 @@
 
 (define error
   (lambda (who message . irritants)
-    (if (or (not who) (string? who) (symbol? who) (identifier? who))
+    (if (or (null? who) (not who) (string? who) (symbol? who) (identifier? who))
         (if (string? message)
             (raise
               (apply
@@ -85,3 +91,9 @@
                     (make-irritants-condition irritants)))))
             (assertion-violation 'error (wrong-type-argument-message "string" message 2)))
         (assertion-violation 'error (wrong-type-argument-message "string, symbol, or #f" who 1)))))
+
+(define wrong-type-argument-message
+  (lambda (expect got . nth)
+    (if (null? nth)
+        (format "expected ~a, but got ~a" expect got)
+        (format "expected ~a, but got ~a, as argument ~a" expect got (car nth)))))

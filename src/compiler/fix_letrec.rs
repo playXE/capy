@@ -497,7 +497,7 @@ fn fix1(
         }
     } else {
         // l - contains lambdas, c - complex expressions
-        let (l, mut c): (Vec<VertexId>, Vec<VertexId>) = scc
+        let (mut l, mut c): (Vec<VertexId>, Vec<VertexId>) = scc
             .to_vec()
             .into_iter()
             .partition(|v| pass.graph.unassigned_procedure(*v));
@@ -512,16 +512,17 @@ fn fix1(
             }
 
             // <var_c,init_c> otherwise.
-            fixes.extend(&l);
-            let new_fixes = make_fixes(&pass.graph, fixes, body);
-            fixes.clear();
-            let mutations = pass.graph.make_mutations(&c, new_fixes);
             let bind = P(IForm::Let(Let {
                 src,
                 typ: LetType::Let,
                 lvars: c.iter().map(|v| pass.graph[*v].lhs.clone()).collect(),
                 inits: vec![P(IForm::Const(Sexpr::Undefined)); c.len()],
-                body: mutations,
+                body: {
+                    let mut fixes = fixes.clone();
+                    fixes.append(&mut l);
+                    let mutations = pass.graph.make_mutations(&c, body);
+                    make_fixes(&pass.graph, &fixes, mutations)
+                }
             }));
 
             bind
