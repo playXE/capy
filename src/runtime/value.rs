@@ -1,26 +1,10 @@
-use std::{hash::Hash, mem::transmute};
-
-use mmtk::{
-    util::Address,
-    vm::{EdgeVisitor, ObjectTracer, ObjectTracerContext},
-};
-
-use crate::{
-    gc::{CapyVM, ObjEdge},
-    runtime::{arith::ScmBigInteger, object::*},
-    vm::thread::Thread,
-};
-
-use super::{
-    object::TypeId,
-    pure_nan::{pure_nan, purify_nan},
-};
+use super::{pure_nan::*, cell::CellReference};
 
 #[derive(Clone, Copy)]
 #[repr(transparent)]
 pub struct Value(pub EncodedValueDescriptor);
 
-impl Hash for Value {
+impl std::hash::Hash for Value {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         unsafe { self.0.as_int64.hash(state) }
     }
@@ -44,8 +28,6 @@ impl std::fmt::Debug for Value {
         write!(f, "Value({:x})", unsafe { self.0.as_int64 })
     }
 }
-
-impl Eq for Value {}
 
 impl Value {
     /*
@@ -95,7 +77,7 @@ impl Value {
      *   same value, allowing null & undefined to be quickly detected.
      *
      * No valid Value will have the bit pattern 0x0, this is used to represent array
-     * holes, and as a C++ 'no value' result (e.g. Value() has an internal value of 0).
+     * holes, and as a Scheme 'unspecified' result (e.g. Value::unspecified() has an internal value of 0).
      *
      * When USE(BIGINT32), we have a special representation for BigInts that are small (32-bit at most):
      *      0000:XXXX:XXXX:0012
@@ -130,37 +112,39 @@ impl Value {
     pub const VALUE_EMPTY: i64 = 0x0;
     pub const VALUE_DELETED: i64 = 0x4;
 
-    pub const UNDEFINED: Value = Self::encode_undefined_value();
+    pub const UNDEFINED: Value = Self::undefined();
+    pub const UNSPECIFIED: Value = Self::unspecified();
+
 
     #[inline(always)]
-    pub const fn encode_empty_value() -> Self {
+    pub const fn unspecified() -> Self {
         Self(EncodedValueDescriptor {
             as_int64: Self::VALUE_EMPTY,
         })
     }
     #[inline(always)]
-    pub fn encode_object_value(reference: ScmCellRef) -> Self {
+    pub fn cell<T>(reference: CellReference<T>) -> Self {
         Self(EncodedValueDescriptor {
             ptr: unsafe { std::mem::transmute(reference) },
         })
     }
 
     #[inline(always)]
-    pub const fn encode_undefined_value() -> Self {
+    pub const fn undefined() -> Self {
         Self(EncodedValueDescriptor {
             as_int64: Self::VALUE_UNDEFINED as _,
         })
     }
 
     #[inline(always)]
-    pub const fn encode_null_value() -> Self {
+    pub const fn null() -> Self {
         Self(EncodedValueDescriptor {
             as_int64: Self::VALUE_NULL as _,
         })
     }
 
     #[inline(always)]
-    pub fn encode_bool_value(x: bool) -> Self {
+    pub fn bool(x: bool) -> Self {
         if x {
             Self(EncodedValueDescriptor {
                 as_int64: Self::VALUE_TRUE as _,
@@ -178,20 +162,20 @@ impl Value {
 
     #[inline(always)]
     pub fn is_undefined(self) -> bool {
-        self == Self::encode_undefined_value()
+        self == Self::undefined()
     }
     #[inline(always)]
     pub fn is_null(self) -> bool {
-        self == Self::encode_null_value()
+        self == Self::null()
     }
     #[inline(always)]
     pub fn is_true(self) -> bool {
-        self == Self::encode_bool_value(true)
+        self == Self::bool(true)
     }
 
     #[inline(always)]
     pub fn is_false(self) -> bool {
-        self == Self::encode_bool_value(false)
+        self == Self::bool(false)
     }
 
     #[inline(always)]
@@ -215,14 +199,14 @@ impl Value {
     }
 
     #[inline(always)]
-    pub fn get_object(self) -> ScmCellRef {
-        debug_assert!(self.is_object(), "{:?}", self);
+    pub fn get_cell(self) -> CellReference {
+        debug_assert!(self.is_cell(), "{:?}", self);
 
         unsafe { std::mem::transmute(self.0.ptr) }
     }
 
     #[inline(always)]
-    pub fn is_object(self) -> bool {
+    pub fn is_cell(self) -> bool {
         self.is_pointer() && !self.is_empty()
     }
     #[inline(always)]
@@ -231,22 +215,22 @@ impl Value {
     }
 
     #[inline(always)]
-    pub fn get_number(self) -> f64 {
+    pub fn get_inline_number(self) -> f64 {
         if self.is_int32() {
-            return self.get_int32() as _;
-        } else if self.is_double() {
-            self.get_double()
+            self.get_int32() as _
+        } else if self.is_f64() {
+            self.get_f64()
         } else {
             pure_nan()
         }
     }
     #[inline(always)]
-    pub fn get_double(self) -> f64 {
-        assert!(self.is_double());
+    pub fn get_f64(self) -> f64 {
+        assert!(self.is_f64());
         f64::from_bits((unsafe { self.0.as_int64 - Self::DOUBLE_ENCODE_OFFSET }) as u64)
     }
     #[inline(always)]
-    pub fn is_double(self) -> bool {
+    pub fn is_f64(self) -> bool {
         self.is_inline_number() && !self.is_int32()
     }
 
@@ -256,24 +240,24 @@ impl Value {
     }
 
     #[inline(always)]
-    pub fn encode_f64_value(x: f64) -> Self {
+    pub fn f64(x: f64) -> Self {
         Self(EncodedValueDescriptor {
             as_int64: x.to_bits() as i64 + Self::DOUBLE_ENCODE_OFFSET,
         })
     }
 
     #[inline(always)]
-    pub fn encode_untrusted_f64_value(x: f64) -> Self {
-        Self::encode_f64_value(purify_nan(x))
+    pub fn untrusted_f64(x: f64) -> Self {
+        Self::f64(purify_nan(x))
     }
 
     #[inline(always)]
-    pub fn encode_nan_value() -> Self {
-        Self::encode_f64_value(pure_nan())
+    pub fn nan() -> Self {
+        Self::f64(pure_nan())
     }
 
     #[inline(always)]
-    pub fn encode_int32(x: i32) -> Self {
+    pub fn int32(x: i32) -> Self {
         Self(EncodedValueDescriptor {
             as_int64: Self::NUMBER_TAG | x as u32 as u64 as i64,
         })
@@ -290,7 +274,7 @@ impl Value {
     }
 
     #[inline(always)]
-    pub fn encode_char(x: char) -> Self {
+    pub fn char(x: char) -> Self {
         Self(EncodedValueDescriptor {
             as_int64: (((x as u32 as u64) << 16) | Self::NATIVE32_TAG as u64) as i64,
         })
@@ -303,198 +287,53 @@ impl Value {
     #[inline(always)]
     pub fn get_bool(self) -> bool {
         assert!(self.is_bool());
-        self == Self::encode_bool_value(true)
-    }
-}
-
-impl Into<Value> for bool {
-    fn into(self) -> Value {
-        Value::encode_bool_value(self)
+        self == Self::bool(true)
     }
 }
 
 impl Into<Value> for i32 {
     fn into(self) -> Value {
-        Value::encode_int32(self)
+        Value::int32(self)
     }
 }
 
 impl Into<Value> for f64 {
     fn into(self) -> Value {
-        Value::encode_f64_value(self)
+        Value::f64(self)
+    }
+}
+
+impl Into<Value> for bool {
+    fn into(self) -> Value {
+        Value::bool(self)
+    }
+}
+
+impl Into<Value> for char {
+    fn into(self) -> Value {
+        Value::char(self)
+    }
+}
+
+impl Into<Value> for () {
+    fn into(self) -> Value {
+        Value::null()
+    }
+}
+
+impl<T> Into<Value> for CellReference<T> {
+    fn into(self) -> Value {
+        Value::cell(self)
     }
 }
 
 impl Value {
-    pub fn visit_edge<EV: EdgeVisitor<ObjEdge>>(&mut self, visitor: &mut EV) {
-        if self.is_object() {
-            // Pointers in Value are transparent, we can directly pass them as edge
-            visitor.visit_edge(ObjEdge::from_address(Address::from_mut_ptr(self)));
-        }
-    }
-
-    pub fn cast_as<'a, T>(self) -> &'a mut T {
-        unsafe {
-            debug_assert!(self.is_object());
-            &mut *(self.0.ptr as *mut T)
-        }
-    }
-
-    pub fn type_of(self) -> TypeId {
-        if self.is_object() {
-            self.get_object().header().type_id()
-        } else {
-            if self.is_true() {
-                TypeId::True
-            } else if self.is_false() {
-                TypeId::False
-            } else if self.is_int32() {
-                TypeId::Int32
-            } else if self.is_double() {
-                TypeId::Double
-            } else if self.is_char() {
-                TypeId::Char
-            } else if self.is_undefined() {
-                TypeId::Undefined
-            } else if self.is_null() {
-                TypeId::Null
-            } else if self.is_empty() {
-                panic!("Empty")
-            } else {
-                unreachable!()
-            }
-        }
-    }
-
-    pub fn assign(&mut self, src: Value, other: Value) {
-        let thr = Thread::current();
-        unsafe {
-            debug_assert!(src.is_object());
-            if other.is_object() {
-                thr.reference_write(
-                    transmute(src),
-                    ObjEdge::from_address_unchecked(Address::from_mut_ptr(self)),
-                    transmute(other),
-                );
-            } else {
-                *self = other;
-            }
-        }
-    }
-
-    pub fn is_syntax_expander(self) -> bool {
-        self.type_of() == TypeId::SyntaxExpander
-    }
-
-    pub fn syntax_expander<'a>(self) -> &'a mut ScmSyntaxExpander {
-        self.cast_as()
-    }
-
-    pub fn trace_value<T: ObjectTracerContext<CapyVM>>(self, context: &mut T::TracerType) -> Value {
-        if self.is_object() {
-            let obj = self.get_object();
-            Value::encode_object_value(ScmCellRef::from_address(
-                context
-                    .trace_object(obj.object_reference())
-                    .to_address::<CapyVM>(),
-            ))
-        } else {
-            self
-        }
+    pub fn new(x: impl Into<Value>) -> Self {
+        x.into()
     }
 }
 
-impl std::fmt::Display for Value {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.is_null() {
-            write!(f, "()")
-        } else if self.is_undefined() {
-            write!(f, "#<undefined>")
-        } else if self.is_true() {
-            write!(f, "#t")
-        } else if self.is_false() {
-            write!(f, "#f")
-        } else if self.is_int32() {
-            write!(f, "{}", self.get_int32())
-        } else if self.is_double() {
-            write!(f, "{}", self.get_double())
-        } else if self.is_rational() {
-            write!(
-                f,
-                "{}/{}",
-                self.get_rational().numerator,
-                self.get_rational().denominator
-            )
-        } else if self.is_pair() {
-            let mut lst = *self;
-
-            write!(f, "(")?;
-
-            loop {
-                write!(f, "{}", scm_car(lst))?;
-
-                lst = scm_cdr(lst);
-
-                if lst.is_null() {
-                    break;
-                }
-
-                if lst.is_pair() {
-                    write!(f, " ")?;
-                } else {
-                    write!(f, " . {}", lst)?;
-                    break;
-                }
-            }
-
-            write!(f, ")")
-        } else if self.is_vector() {
-            let vec = *self;
-
-            write!(f, "#(")?;
-
-            for i in 0..scm_vector_length(vec) {
-                write!(f, "{}", scm_vector_ref(vec, i))?;
-                if i != scm_vector_length(vec) - 1 {
-                    write!(f, " ")?;
-                }
-            }
-
-            write!(f, ")")
-        } else if self.is_string() {
-            write!(f, "\"{}\"", scm_string_str(*self))
-        } else if self.is_symbol() {
-            write!(f, "{}", scm_symbol_str(*self))
-        } else if self.is_char() {
-            write!(f, "#\\ {}", self.get_char())
-        } else if self.is_box() {
-            write!(f, "#<box {}>", self.cast_as::<ScmBox>().value)
-        } else if self.is_program() {
-            write!(f, "#<program at {:p}>", self.cast_as::<ScmProgram>().vcode)
-        } else if self.is_empty() {
-            write!(f, "#<empty>")
-        } else if self.is_bignum() {
-            write!(
-                f,
-                "{}",
-                self.cast_as::<ScmBigInteger>()
-                    .to_string_base(&ScmBigInteger::DEC_BASE)
-            )
-        } else if self.is_tuple() {
-            let t = self.cast_as::<ScmTuple>();
-            write!(f, "#<tuple")?;
-            for i in 0..t.length {
-                let val = scm_tuple_ref(*self, i as _);
-                write!(f, " {}", val)?;
-            }
-            write!(f, ">")
-        } else {
-            write!(
-                f,
-                "#<unknown {:x}:{:?}>",
-                self.get_raw(),
-                self.get_object().header().type_id()
-            )
-        }
-    }
+pub fn value(x: impl Into<Value>) -> Value {
+    x.into()
 }
+

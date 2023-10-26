@@ -8,11 +8,12 @@
 
 use std::intrinsics::unlikely;
 
-use mmtk::{util::Address, vm::RootsWorkFactory};
+use mmtk::{
+    util::Address,
+    vm::{edge_shape::SimpleEdge, RootsWorkFactory},
+};
 
 use crate::runtime::value::Value;
-
-use super::ObjEdge;
 
 /// Implementation of shadow-stack that uses separate stack for roots.
 /// Roots are appended to the stack before operation that may trigger GC and
@@ -26,6 +27,7 @@ use super::ObjEdge;
 /// Default size is 1024 values.
 ///
 pub struct ShadowStack {
+    root_stack_index: usize,
     root_stack_base: *mut Value,
     root_stack_top: *mut Value,
     root_stack_limit: *mut Value,
@@ -40,12 +42,14 @@ impl ShadowStack {
             root_stack_top: std::ptr::null_mut(),
             root_stack_limit: std::ptr::null_mut(),
             root_stack_memory: std::ptr::null_mut(),
+            root_stack_index: 0,
             root_stack_size: 0,
         }
     }
 
     pub(crate) fn init(&mut self) {
         self.root_stack_size = 1024;
+        self.root_stack_index = 1024;
         self.root_stack_memory = {
             mmtk::memory_manager::malloc(self.root_stack_size * std::mem::size_of::<Value>())
                 .to_mut_ptr::<Value>()
@@ -82,7 +86,7 @@ impl ShadowStack {
     #[inline(always)]
     pub fn push_to_save(&mut self, value: Value) {
         unsafe {
-            if unlikely(self.root_stack_top == self.root_stack_limit) {
+            if unlikely(self.root_stack_top >= self.root_stack_limit) {
                 self.expand();
             }
             self.root_stack_top.write(value);
@@ -130,12 +134,14 @@ impl ShadowStack {
     /// # Safety
     ///
     /// Should be invoked only by GC code.
-    pub unsafe fn walk_roots(&mut self, factory: &mut impl RootsWorkFactory<ObjEdge>) {
+    pub unsafe fn mark_roots(&mut self, factory: &mut impl RootsWorkFactory<SimpleEdge>) {
         let mut edges = Vec::with_capacity(64);
         let mut ptr = self.root_stack_base;
+        println!("approx {} roots", self.root_stack_top.offset_from(self.root_stack_base));
         while ptr < self.root_stack_top {
-            if (*ptr).is_object() {
-                edges.push(ObjEdge::from_address(Address::from_mut_ptr(ptr)));
+            println!("{:x}", (*ptr).get_raw());
+            if (*ptr).is_cell() {
+                edges.push(SimpleEdge::from_address(Address::from_mut_ptr(ptr)));
             }
             if edges.len() > 64 {
                 factory.create_process_edge_roots_work(std::mem::take(&mut edges));
@@ -158,6 +164,14 @@ impl ShadowStack {
     }
 }
 
+
+#[macro_export]
+macro_rules! count {
+    () => { 0 };
+    ($x: ident) => { 1 };
+    ($x: ident, $($xs: ident),*) => { 1 + count!($($xs),*) };
+}
+
 /// Pushes variables onto the shadow-stack and pops them once expression is evaluated.
 ///
 /// # Example
@@ -171,18 +185,20 @@ impl ShadowStack {
 macro_rules! gc_protect {
     ($thread: expr => $($var: ident),* => $e: expr) => {
         {
-            $(
-                $thread.interpreter().shadow_stack.push_to_save($var);
-            )*
+            /*$(
+                $thread.shadow_stack().push_to_save($var);
+            )&*/
+
+            $thread.shadow_stack().push_many(&[$($var),*]);
 
             let result = {
                 #[allow(unused_variables)]
                 let mut guard = $crate::gc::shadow_stack::DropGuard::new(|| {
 
-                    let t = $crate::vm::thread::Thread::current();
+                    let t = $crate::runtime::thread::Thread::current();
                     $(
                         stringify!($var);
-                        let _ =  t.interpreter().shadow_stack.pop_to_restore();
+                        let _ =  t.shadow_stack().pop_to_restore();
                     )*
                 });
                 let result = $e;
@@ -199,7 +215,7 @@ macro_rules! gc_protect {
         $(
             #[allow(unused_assignments)]
             {
-                $reversed = $thread.interpreter().shadow_stack.pop_to_restore();
+                $reversed = $thread.shadow_stack().pop_to_restore();
             }
         )*
     };
@@ -235,3 +251,4 @@ where
         }
     }
 }
+

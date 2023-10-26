@@ -1,5 +1,5 @@
 use super::memory_region::MemoryRegion;
-use crate::utils::*;
+use crate::runtime::utils::{is_aligned, round_down};
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Protection {
     NoAccess,
@@ -197,12 +197,7 @@ static PAGE_SIZE: AtomicUsize = AtomicUsize::new(0);
 #[cfg(all(unix, not(target_os = "fuchsia")))]
 pub mod posix {
     use crate::{
-        gc::memory_region::MemoryRegion,
-        gc::virtual_memory::VirtualMemory,
-        utils::{
-            is_aligned, is_aligned_usize, is_power_of_two, round_down, round_down_usize, round_up,
-            round_up_usize,
-        },
+        gc::memory_region::MemoryRegion, gc::virtual_memory::VirtualMemory, runtime::utils::*,
     };
     use core::ptr::null_mut;
 

@@ -1,18 +1,10 @@
-#![allow(incomplete_features)]
-#![feature(
-    thread_local,
-    offset_of,
-    core_intrinsics,
-    adt_const_params,
-    c_unwind,
-    explicit_tail_calls
-)]
-pub mod bytecode;
-pub mod bytecodeassembler;
-pub mod compiler;
-pub mod gc;
-pub mod interpreter;
-pub mod jit;
+#![feature(core_intrinsics, thread_local, ptr_metadata)]
+#![recursion_limit = "256"]
 pub mod runtime;
-pub mod utils;
-pub mod vm;
+pub mod gc;
+pub mod bytecode;
+pub mod sync;
+pub mod interpreter;
+
+#[cfg(target_pointer_width="32")]
+compile_error!("32-bit targets are not supported"); 
