@@ -1,0 +1,13 @@
+[package]
+name = "r5rscomp"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+r7rs-parser = { git = "https://github.com/playxe/r7rs-parser" }
+num = "0.4"
+pretty = { version = "0.12", features = ["termcolor"] }
+termcolor = "1.3"
+once_cell = "1.8"

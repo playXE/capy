@@ -1,9 +1,6 @@
 use std::{marker::PhantomData, mem::transmute};
-
 use mmtk::{vm::Scanning, MutatorContext};
-
 use crate::runtime::{cell::{CellReference, CellTag, CellFeature, Pair, Rational}, thread::Thread};
-
 use super::CapyVM;
 
 pub struct VMScanning;
@@ -84,7 +81,7 @@ impl Scanning<CapyVM> for VMScanning {
         }
     }
 
-    fn scan_vm_specific_roots(tls: mmtk::util::VMWorkerThread, factory: impl mmtk::vm::RootsWorkFactory<<CapyVM as mmtk::vm::VMBinding>::VMEdge>) {
+    fn scan_vm_specific_roots(_tls: mmtk::util::VMWorkerThread, _factory: impl mmtk::vm::RootsWorkFactory<<CapyVM as mmtk::vm::VMBinding>::VMEdge>) {
         
     }
     

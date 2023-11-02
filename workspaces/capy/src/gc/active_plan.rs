@@ -2,20 +2,13 @@ use std::mem::transmute;
 
 use mmtk::vm::ActivePlan;
 
-use crate::runtime::{
-    thread::{threads, Thread, ThreadKind},
-    Runtime,
-};
+use crate::runtime::thread::{threads, Thread, ThreadKind};
 
 use super::CapyVM;
 
 pub struct VMActivePlan;
 
 impl ActivePlan<CapyVM> for VMActivePlan {
-    fn global() -> &'static dyn mmtk::Plan<VM = CapyVM> {
-        Runtime::get().mmtk().get_plan()
-    }
-
     fn is_mutator(tls: mmtk::util::VMThread) -> bool {
         unsafe {
             let thread = transmute::<_, &'static Thread>(tls);
@@ -36,10 +29,7 @@ impl ActivePlan<CapyVM> for VMActivePlan {
                 .iter_unlocked()
                 .filter(|&&x| (*x).kind == ThreadKind::Mutator)
                 .copied()
-                .map(|thread| {
-                    
-                    &mut *(*thread).mmtk().mutator
-                })
+                .map(|thread| &mut *(*thread).mmtk().mutator)
         })
     }
 

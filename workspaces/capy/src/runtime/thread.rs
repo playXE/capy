@@ -14,7 +14,7 @@ use crate::{
 use mmtk::{
     memory_manager::bind_mutator,
     util::{
-        alloc::{AllocatorSelector, BumpAllocator, BumpPointer, ImmixAllocator},
+        alloc::{AllocatorSelector, BumpAllocator, ImmixAllocator},
         metadata::side_metadata::GLOBAL_SIDE_METADATA_VM_BASE_ADDRESS,
         Address,
     },
@@ -46,7 +46,7 @@ pub enum ThreadKind {
 #[repr(C)]
 pub struct Thread {
     pub vm: MaybeUninit<VirtualMachine>,
-    
+
     pub mmtk: MaybeUninit<MMTKLocalState>,
     pub selector: AllocatorSelector,
     pub id: u64,
@@ -200,7 +200,7 @@ impl Thread {
         unsafe {
             self.vm().prepare_stack();
         }
-    
+
         self.mmtk = MaybeUninit::new(local_state);
 
         self.mmtk().init();
@@ -331,28 +331,28 @@ impl MMTKLocalState {
 
         self.bump_pointer = bump_pointer.cursor.as_usize();
         self.bump_limit = bump_pointer.limit.as_usize();
-
     }
 
     fn store_bump_pointer(&mut self) {
         unsafe {
             let selector = self.selector;
             match selector {
-                AllocatorSelector::BumpPointer(_) => {
-                    self.mutator
-                        .allocator_impl_mut::<BumpAllocator<CapyVM>>(selector)
-                        .bump_pointer = BumpPointer::new(
+                AllocatorSelector::BumpPointer(_) => self
+                    .mutator
+                    .allocator_impl_mut::<BumpAllocator<CapyVM>>(selector)
+                    .bump_pointer
+                    .reset(
                         Address::from_usize(self.bump_pointer),
                         Address::from_usize(self.bump_limit),
-                    )
-                }
+                    ),
                 AllocatorSelector::Immix(_) => {
                     self.mutator
                         .allocator_impl_mut::<ImmixAllocator<CapyVM>>(selector)
-                        .bump_pointer = BumpPointer::new(
-                        Address::from_usize(self.bump_pointer),
-                        Address::from_usize(self.bump_limit),
-                    )
+                        .bump_pointer
+                        .reset(
+                            Address::from_usize(self.bump_pointer),
+                            Address::from_usize(self.bump_limit),
+                        );
                 }
                 _ => {}
             }
@@ -582,8 +582,6 @@ pub fn safepoint_scope_conditional<R>(enter: bool, cb: impl FnOnce() -> R) -> R 
 
         result
     }
-    
- 
 }
 
 /// Enters safepoint scope. This means that current thread is in "safe" state and GC can run.
@@ -600,7 +598,7 @@ static mut THREAD: Thread = Thread {
     id: 0,
     selector: AllocatorSelector::None,
     vm: MaybeUninit::uninit(),
-   
+
     mmtk: MaybeUninit::uninit(),
     safepoint_addr: null_mut(),
     gc_state: 2,

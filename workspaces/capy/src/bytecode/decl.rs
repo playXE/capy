@@ -7,6 +7,8 @@ macro_rules! for_each_opcode {
             (op_loop_hint,                  "loop-hint",                { data: i32 }),
             (op_call,                       "call",                     { proc: u16, nlocals: u16 }),
             (op_tail_call,                  "tail-call",                { }),
+            (op_call_label,                 "call-label",               { offset: i32 }),
+            (op_tail_call_label,            "tail-call-label",          { offset: i32 }),
             (op_return_values,              "return-values",            { }),
             (op_receive,                    "receive",                  { dst: u16, proc: u16, nlocals: u16 }),
             (op_recieve_values,             "receive-values",           { proc: u16, allow_extra: bool, nvalues: u16 }),
