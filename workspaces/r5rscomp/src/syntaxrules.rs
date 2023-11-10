@@ -8,6 +8,11 @@ use crate::{
 };
 use once_cell::unsync::OnceCell;
 /// A SyntaxRules object defines hygienic macros.
+/// 
+/// Implemented as simple pattern matcher over S-expression. No "compilation"
+/// step takes place. It is used to simplify macro implementation. It is expected
+/// that CapyScheme will be used with a macro expander written in CapyScheme.
+#[derive(Debug)]
 pub struct SyntaxRules {
     pub name: Option<Rc<Symbol>>,
     pub ellipsis: Rc<Symbol>,
@@ -83,7 +88,6 @@ impl SyntaxRules {
                         return false;
                     }
                 } else {
-                  
                     matches.put(sym.clone(), input.clone());
                     return true;
                 }
@@ -99,13 +103,12 @@ impl SyntaxRules {
                 let mut inp = input.clone();
 
                 while let Some((token, rest)) = pat.pair() {
-  
                     if token
                         .symbol()
                         .map(|s| Symbol::root(s) == &self.ellipsis)
                         .unwrap_or(false)
                     {
-
+                       
                         // ignore ellipsis
                     } else {
                         if let Some((Sexpr::Symbol(_), tail)) = rest.pair().filter(|(s, _)| {
@@ -375,6 +378,7 @@ impl SyntaxRules {
 /// Objects of class `Matches` contain a mapping from symbols to values in the input expression
 /// as well as symbols to generated symbols. Generated symbols are needed to guarantee the
 /// hygiene property of Scheme's macros.
+#[derive(Debug)]
 struct Matches {
     generated_sym: HashMap<Rc<Symbol>, Rc<Symbol>>,
     matched_val: HashMap<Rc<Symbol>, Rc<MatchTree>>,
@@ -464,6 +468,7 @@ impl Matches {
 
 /// A match tree is a data structure that is used to construct the value matching a particular
 /// pattern variable
+#[derive(Debug)]
 struct MatchTree {
     root: Node,
     depth: usize,
@@ -565,7 +570,7 @@ impl MatchTree {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 enum Node {
     Leaf(Sexpr),
     Parent(Rc<Vec<Node>>),

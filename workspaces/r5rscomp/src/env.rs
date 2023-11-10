@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use crate::{rc::Rc, tree_il::{Variable, TreeNode}, syntaxrules::SyntaxRules, sexpr::{Symbol, Sexpr, ScmError}, expander::Cenv};
 
+#[derive(Debug)]
 pub enum Environment {
     Expired,
     Lexical(Lexical),
@@ -41,11 +42,13 @@ impl Environment {
     
 }
 
+#[derive(Debug)]
 pub struct Lexical {
     pub parent: Rc<Environment>,
     pub bindings: HashMap<Rc<Symbol>, Definition>,
 }
 
+#[derive(Debug)]
 pub struct Global {
     pub bindings: HashMap<Rc<Symbol>, Definition>,
 
@@ -53,7 +56,7 @@ pub struct Global {
 
 pub type Special = fn(&Sexpr, &Cenv) -> Result<Rc<TreeNode>, ScmError>;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Definition {
     Variable(Rc<Variable>),
     Macro(Rc<SyntaxRules>),

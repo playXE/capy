@@ -137,9 +137,8 @@ impl ShadowStack {
     pub unsafe fn mark_roots(&mut self, factory: &mut impl RootsWorkFactory<SimpleEdge>) {
         let mut edges = Vec::with_capacity(64);
         let mut ptr = self.root_stack_base;
-        println!("approx {} roots", self.root_stack_top.offset_from(self.root_stack_base));
+
         while ptr < self.root_stack_top {
-            println!("{:x}", (*ptr).get_raw());
             if (*ptr).is_cell() {
                 edges.push(SimpleEdge::from_address(Address::from_mut_ptr(ptr)));
             }

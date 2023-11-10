@@ -20,6 +20,8 @@ macro_rules! alloc_small {
             let res = mmtk.bump_pointer;
             if !$immortal {
                 if unlikely(res + $size > mmtk.bump_limit) {
+                    // slow-path: push $save variables to shadow-stack
+                    // and invoke `alloc_slow`, may trigger GC
                     let res = gc_protect!($thread => $($save),* => {
                         $thread.mmtk().alloc_slow($size, $tag)
                     });

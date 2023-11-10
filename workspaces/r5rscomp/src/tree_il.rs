@@ -5,13 +5,14 @@
 //! that is producing a brand new tree after each pass. This is done to simplify passes and
 //! remove the need to do any kind of mutation.
 
+use std::hash::Hash;
 use std::sync::atomic::AtomicU64;
 
 use pretty::{BoxAllocator, DocAllocator, DocBuilder};
 use termcolor::{Color, ColorSpec, WriteColor};
 
 use crate::rc::{Rc, Weak};
-use crate::reader::{SourceLocation, SymbolInterner};
+use crate::reader::SourceLocation;
 use crate::sexpr::{Sexpr, Symbol};
 
 #[derive(Debug, Clone)]
@@ -39,11 +40,10 @@ impl Proc {
 
         doc = doc.append(allocator.line());
 
-        let cases = allocator
-            .intersperse(
-                self.cases.iter().map(|case| case.pretty(allocator)),
-                allocator.line(),
-            );
+        let cases = allocator.intersperse(
+            self.cases.iter().map(|case| case.pretty(allocator)),
+            allocator.line(),
+        );
 
         doc = doc.append(cases.nest(1));
 
@@ -65,13 +65,13 @@ impl ProcCase {
     {
         let mut doc = allocator.nil();
 
-        let normal_args = if self.info.rest {
+        let normal_args = if !self.info.proper {
             &self.info.formals[..self.info.formals.len() - 1]
         } else {
             &self.info.formals[..]
         };
 
-        let rest_arg = if self.info.rest {
+        let rest_arg = if !self.info.proper {
             Some(&self.info.formals[self.info.formals.len() - 1])
         } else {
             None
@@ -105,7 +105,6 @@ impl ProcCase {
 #[derive(Debug, Clone)]
 pub struct CaseInfo {
     pub formals: Vec<Rc<Variable>>,
-    pub rest: bool,
     pub proper: bool,
 }
 
@@ -114,20 +113,43 @@ pub struct CaseInfo {
 /// Each node stores source-location if present.
 #[derive(Debug, Clone)]
 pub enum TreeNode {
-    Constant(Sexpr),
-    PrimRef(Rc<Symbol>),
+    Constant(Sexpr, Option<SourceLocation>),
+    PrimRef(Rc<String>, Option<SourceLocation>),
     Proc(Rc<Proc>),
     FunCall(Rc<TreeNode>, Vec<Rc<TreeNode>>, Option<SourceLocation>),
-    Rec(Vec<(Rc<Variable>, Rc<TreeNode>)>, Rc<TreeNode>),
-    RecStar(Vec<(Rc<Variable>, Rc<TreeNode>)>, Rc<TreeNode>),
-    Seq(Vec<Rc<TreeNode>>),
-    Test(Rc<TreeNode>, Rc<TreeNode>, Rc<TreeNode>),
-    Ref(Rc<Variable>),
-    Mutate(Rc<Variable>, Rc<TreeNode>),
-    Bind(Vec<Rc<Variable>>, Vec<Rc<TreeNode>>, Rc<TreeNode>),
+    Rec(
+        Vec<(Rc<Variable>, Rc<TreeNode>)>,
+        Rc<TreeNode>,
+        Option<SourceLocation>,
+    ),
+    RecStar(
+        Vec<(Rc<Variable>, Rc<TreeNode>)>,
+        Rc<TreeNode>,
+        Option<SourceLocation>,
+    ),
+    Seq(Vec<Rc<TreeNode>>, Option<SourceLocation>),
+    Test(
+        Rc<TreeNode>,
+        Rc<TreeNode>,
+        Rc<TreeNode>,
+        Option<SourceLocation>,
+    ),
+    Ref(Rc<Variable>, Option<SourceLocation>),
+    Mutate(Rc<Variable>, Rc<TreeNode>, Option<SourceLocation>),
+    Bind(
+        Vec<Rc<Variable>>,
+        Vec<Rc<TreeNode>>,
+        Rc<TreeNode>,
+        Option<SourceLocation>,
+    ),
     /// Intorduced after "fixing letrec" pass. Basically a `let` binding
     /// that only contains mutually recursive functions.
-    Fix(Vec<Rc<Variable>>, Vec<Rc<Proc>>, Rc<TreeNode>),
+    Fix(
+        Vec<Rc<Variable>>, /* lhs */
+        Vec<Rc<Proc>>,     /* rhs */
+        Rc<TreeNode>,      /* body */
+        Option<SourceLocation>,
+    ),
     /// Represents `(call-with-values producer consumer)` expression.
     MultiValueCall(Rc<TreeNode>, Rc<TreeNode>, Option<SourceLocation>),
     /// Represents `(let-values ((x1 x2 xN ...) expr) body)``
@@ -152,38 +174,89 @@ pub enum TreeNode {
     Goto(Weak<TreeNode>, Option<SourceLocation>),
 }
 
+impl PartialEq for TreeNode {
+    fn eq(&self, other: &Self) -> bool {
+        self as *const Self == other as *const Self
+    }
+}
+
+impl Eq for TreeNode {}
+
+impl Hash for TreeNode {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        (self as *const Self as usize).hash(state);
+    }
+}
+
 impl TreeNode {
+    pub fn might_cause_side_effects(&self) -> bool {
+        match self {
+            Self::Constant(_, _)
+            | Self::PrimRef(_, _)
+            | Self::Ref(_, _)
+            | Self::MultiValues(_, _) => false,
+            Self::Proc(_) => false,
+            Self::Seq(seq, _) => seq.iter().any(|x| x.might_cause_side_effects()),
+            Self::Bind(_, inits, body, _) => {
+                inits.iter().any(|x| x.might_cause_side_effects())
+                    || body.might_cause_side_effects()
+            }
+            Self::Fix(_, _, body, _) => body.might_cause_side_effects(),
+
+            _ => true,
+        }
+    }
+
+    pub fn src(&self) -> Option<&SourceLocation> {
+        match self {
+            Self::FunCall(_, _, src) => src.as_ref(),
+            Self::MultiValueCall(_, _, src) => src.as_ref(),
+            Self::MultiValueLet(_, _, _, src) => src.as_ref(),
+            Self::MultiValues(_, src) => src.as_ref(),
+            Self::TagBody(_, src) => src.as_ref(),
+            Self::Goto(_, src) => src.as_ref(),
+            _ => None,
+        }
+    }
+
+    pub fn proc(&self) -> Option<&Rc<Proc>> {
+        match self {
+            TreeNode::Proc(p) => Some(p),
+            _ => None,
+        }
+    }
+
     pub fn is_primref(&self) -> bool {
         match self {
-            TreeNode::PrimRef(_) => true,
+            TreeNode::PrimRef(_, _) => true,
             _ => false,
         }
     }
 
     pub fn is_primref_of(&self, name: &str) -> bool {
         match self {
-            TreeNode::PrimRef(n) => &***n == name,
+            TreeNode::PrimRef(n, _) => &***n == name,
             _ => false,
         }
     }
 
     pub fn is_constant(&self) -> bool {
         match self {
-            TreeNode::Constant(_) => true,
+            TreeNode::Constant(_, _) => true,
             _ => false,
         }
     }
 
-    pub fn primref(&self) -> Option<&Rc<Symbol>> {
+    pub fn primref(&self) -> Option<&Rc<String>> {
         match self {
-            TreeNode::PrimRef(n) => Some(n),
+            TreeNode::PrimRef(n, _) => Some(n),
             _ => None,
         }
     }
 
     pub fn constant(&self) -> Option<&Sexpr> {
         match self {
-            TreeNode::Constant(c) => Some(c),
+            TreeNode::Constant(c, _) => Some(c),
             _ => None,
         }
     }
@@ -192,6 +265,20 @@ impl TreeNode {
         match self {
             TreeNode::FunCall(_, _, _) => true,
             _ => false,
+        }
+    }
+
+    pub fn funcall_operands(&self) -> &[Rc<TreeNode>] {
+        match self {
+            TreeNode::FunCall(_, ops, _) => &ops,
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn funcall_operantor(&self) -> &Rc<TreeNode> {
+        match self {
+            TreeNode::FunCall(ops, _, _) => &ops,
+            _ => unreachable!(),
         }
     }
 
@@ -204,63 +291,63 @@ impl TreeNode {
 
     pub fn is_rec(&self) -> bool {
         match self {
-            TreeNode::Rec(_, _) => true,
+            TreeNode::Rec(_, _, _) => true,
             _ => false,
         }
     }
 
     pub fn is_rec_star(&self) -> bool {
         match self {
-            TreeNode::RecStar(_, _) => true,
+            TreeNode::RecStar(_, _, _) => true,
             _ => false,
         }
     }
 
     pub fn is_seq(&self) -> bool {
         match self {
-            TreeNode::Seq(_) => true,
+            TreeNode::Seq(_, _) => true,
             _ => false,
         }
     }
 
     pub fn is_test(&self) -> bool {
         match self {
-            TreeNode::Test(_, _, _) => true,
+            TreeNode::Test(_, _, _, _) => true,
             _ => false,
         }
     }
 
     pub fn is_ref(&self) -> bool {
         match self {
-            TreeNode::Ref(_) => true,
+            TreeNode::Ref(_, _) => true,
             _ => false,
         }
     }
 
     pub fn ref_variable(&self) -> Option<&Rc<Variable>> {
         match self {
-            TreeNode::Ref(v) => Some(v),
+            TreeNode::Ref(v, _) => Some(v),
             _ => None,
         }
     }
 
     pub fn is_mutate(&self) -> bool {
         match self {
-            TreeNode::Mutate(_, _) => true,
+            TreeNode::Mutate(_, _, _) => true,
             _ => false,
         }
     }
 
     pub fn is_bind(&self) -> bool {
         match self {
-            TreeNode::Bind(_, _, _) => true,
+            TreeNode::Bind(_, _, _, _) => true,
             _ => false,
         }
     }
 
     pub fn is_fix(&self) -> bool {
         match self {
-            TreeNode::Fix(_, _, _) => true,
+            TreeNode::Fix(_, _, _, _) => true,
             _ => false,
         }
     }
@@ -315,6 +402,12 @@ pub struct Variable {
     pub residual_single_referenced: bool,
 }
 
+impl Hash for Variable {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        (self as *const Self as usize).hash(state);
+    }
+}
+
 impl Variable {
     pub fn pretty<'a, D>(&self, allocator: &'a D) -> DocBuilder<'a, D, ColorSpec>
     where
@@ -322,17 +415,10 @@ impl Variable {
         D::Doc: Clone,
     {
         allocator
-            .text("variable")
-            .annotate(fg(Color::Yellow))
-            .append(allocator.space())
-            .append(
-                allocator
-                    .text((*self.name).as_ref().to_string())
-                    .annotate(kw(Color::Blue)),
-            )
+            .text(self.name.to_string())
             .append(allocator.text("@"))
             .append(allocator.text(format!("{:x}", self.unique_id)))
-            .parens()
+            .annotate(kw(Color::Blue))
     }
 }
 
@@ -364,14 +450,14 @@ impl TreeNode {
         D::Doc: Clone,
     {
         match self {
-            Self::Constant(constant) => allocator
+            Self::Constant(constant, _) => allocator
                 .text("const")
                 .annotate(fg(Color::Green))
                 .append(allocator.space())
                 .append(constant.pretty(allocator))
                 .group()
                 .parens(),
-            Self::PrimRef(name) => allocator
+            Self::PrimRef(name, _) => allocator
                 .text("primref")
                 .append(allocator.space())
                 .append(allocator.text(name.to_string()).annotate(kw(Color::Blue)))
@@ -381,21 +467,21 @@ impl TreeNode {
                     .text("funcall")
                     .annotate(fg(Color::Green))
                     .append(allocator.space())
-                    .append(func.pretty(allocator))
-                    .append(allocator.line());
-                let operands = allocator.intersperse(
-                    operands.iter().map(|operand| operand.pretty(allocator)),
-                    allocator.line(),
-                );
-                doc = doc.append(operands).nest(1).group().parens();
-                doc.align()
+                    .append(func.pretty(allocator));
+                //.append(allocator.line());
+                if !operands.is_empty() {
+                    let operands = allocator.intersperse(
+                        operands.iter().map(|operand| operand.pretty(allocator)),
+                        allocator.line(),
+                    );
+                    doc = doc.append(allocator.softline()).append(operands).nest(1);
+                }
+                doc.align().group().parens()
             }
 
-            Self::Proc(proc) => {
-                proc.pretty(allocator)
-            }
+            Self::Proc(proc) => proc.pretty(allocator),
 
-            Self::Seq(seq) => {
+            Self::Seq(seq, _) => {
                 let mut doc = allocator
                     .text("seq")
                     .annotate(fg(Color::Green))
@@ -408,7 +494,7 @@ impl TreeNode {
                 doc.group().parens()
             }
 
-            Self::Rec(bindings, body) => {
+            Self::Rec(bindings, body, _) => {
                 let mut doc = allocator
                     .text("rec")
                     .annotate(fg(Color::Green))
@@ -432,7 +518,7 @@ impl TreeNode {
                 doc.align().group().parens()
             }
 
-            Self::RecStar(bindings, body) => {
+            Self::RecStar(bindings, body, _) => {
                 let mut doc = allocator
                     .text("rec*")
                     .annotate(fg(Color::Green))
@@ -454,24 +540,19 @@ impl TreeNode {
                 doc.group().parens()
             }
 
-            Self::Test(cond, then, else_) => {
+            Self::Test(cond, then, else_, _) => {
                 let mut doc = allocator
                     .text("test")
                     .annotate(fg(Color::Green))
                     .append(allocator.space())
                     .append(cond.pretty(allocator))
                     .append(allocator.line());
-                doc = doc
-                    .append(then.pretty(allocator))
-                    .append(allocator.line());
-                doc = doc
-                    .append(else_.pretty(allocator)).nest(1)
-                    .group()
-                    .parens();
+                doc = doc.append(then.pretty(allocator)).append(allocator.line());
+                doc = doc.append(else_.pretty(allocator)).nest(1).group().parens();
                 doc
             }
 
-            Self::Ref(variable) => allocator
+            Self::Ref(variable, _) => allocator
                 .text("ref")
                 .annotate(fg(Color::Green))
                 .append(allocator.space())
@@ -479,7 +560,7 @@ impl TreeNode {
                 .group()
                 .parens(),
 
-            Self::Mutate(variable, value) => allocator
+            Self::Mutate(variable, value, _) => allocator
                 .text("mutate")
                 .annotate(fg(Color::Green))
                 .append(allocator.space())
@@ -490,7 +571,7 @@ impl TreeNode {
                 .group()
                 .parens(),
 
-            Self::Bind(variables, values, body) => {
+            Self::Bind(variables, values, body, _) => {
                 let mut doc = allocator
                     .text("bind")
                     .annotate(fg(Color::Green))
@@ -514,8 +595,8 @@ impl TreeNode {
                 doc.align().group().parens()
             }
 
-            Self::Fix(variables, procs, body) => {
-                let mut doc = allocator
+            Self::Fix(variables, procs, body, _) => {
+                /*let mut doc = allocator
                     .text("fix")
                     .annotate(fg(Color::Green))
                     .append(allocator.space());
@@ -531,6 +612,27 @@ impl TreeNode {
                 );
                 doc = doc.nest(2).append(variables).append(allocator.line());
                 doc = doc.nest(-1).append(body.pretty(allocator)).group().parens();
+                doc.align().group().parens()*/
+                let mut doc = allocator
+                    .text("fix")
+                    .annotate(fg(Color::Green))
+                    .append(allocator.line());
+                let variables = allocator
+                    .intersperse(
+                        variables.iter().zip(procs.iter()).map(|(var, val)| {
+                            allocator
+                                .nil()
+                                .append(var.pretty(allocator))
+                                .append(allocator.space())
+                                .append(val.pretty(allocator))
+                                .group()
+                                .parens()
+                        }),
+                        allocator.line(),
+                    )
+                    .parens();
+                doc = doc.append(variables).nest(2).append(allocator.line());
+                doc = doc.append(body.pretty(allocator).nest(1)).align();
                 doc.align().group().parens()
             }
 
@@ -568,6 +670,33 @@ impl TreeNode {
                 doc.group().parens()
             }
 
+            Self::TagBody(body, _) => {
+                let doc = allocator
+                    .text("label")
+                    .append(allocator.space())
+                    .append(format!("{:p}", self))
+                    .append(allocator.line())
+                    
+                    .append(body.pretty(allocator))
+                    .nest(1)
+                    .parens()
+                    .group()
+                    .align();
+
+                doc
+            }
+
+            Self::Goto(body, _) => {
+                let node = body.upgrade().unwrap();
+                allocator
+                    .text("goto")
+                    .append(allocator.space())
+                    .append(format!("{:p}", &*node))
+                    .parens()
+                    .group()
+                    .align()
+            }
+
             _ => todo!(),
         }
     }
@@ -580,8 +709,6 @@ impl TreeNode {
         Ok(())
     }
 }
-
-
 
 pub fn make_variable(name: Rc<Symbol>) -> Rc<Variable> {
     static ID: AtomicU64 = AtomicU64::new(0);
@@ -611,12 +738,12 @@ pub fn make_proc_case(info: CaseInfo, body: Rc<TreeNode>) -> Rc<ProcCase> {
     Rc::new(ProcCase { info, body })
 }
 
-pub fn make_constant(constant: Sexpr) -> Rc<TreeNode> {
-    Rc::new(TreeNode::Constant(constant))
+pub fn make_constant(constant: Sexpr, source: Option<SourceLocation>) -> Rc<TreeNode> {
+    Rc::new(TreeNode::Constant(constant, source))
 }
 
-pub fn make_primref(name: Rc<Symbol>) -> Rc<TreeNode> {
-    Rc::new(TreeNode::PrimRef(name))
+pub fn make_primref(name: Rc<String>, source: Option<SourceLocation>) -> Rc<TreeNode> {
+    Rc::new(TreeNode::PrimRef(name, source))
 }
 
 pub fn make_fun_call(
@@ -627,50 +754,68 @@ pub fn make_fun_call(
     Rc::new(TreeNode::FunCall(func, operands.to_vec(), source))
 }
 
-pub fn make_rec(bindings: Vec<(Rc<Variable>, Rc<TreeNode>)>, body: Rc<TreeNode>) -> Rc<TreeNode> {
-    Rc::new(TreeNode::Rec(bindings, body))
+pub fn make_rec(
+    bindings: Vec<(Rc<Variable>, Rc<TreeNode>)>,
+    body: Rc<TreeNode>,
+    source: Option<SourceLocation>,
+) -> Rc<TreeNode> {
+    Rc::new(TreeNode::Rec(bindings, body, source))
 }
 
 pub fn make_rec_star(
     bindings: Vec<(Rc<Variable>, Rc<TreeNode>)>,
     body: Rc<TreeNode>,
+    source: Option<SourceLocation>,
 ) -> Rc<TreeNode> {
-    Rc::new(TreeNode::RecStar(bindings, body))
+    Rc::new(TreeNode::RecStar(bindings, body, source))
 }
 
-pub fn make_seq(seq: Vec<Rc<TreeNode>>) -> Rc<TreeNode> {
+pub fn make_seq(seq: Vec<Rc<TreeNode>>, source: Option<SourceLocation>) -> Rc<TreeNode> {
     if seq.len() == 1 {
         return seq[0].clone();
     }
-    Rc::new(TreeNode::Seq(seq))
+    Rc::new(TreeNode::Seq(seq, source))
 }
 
-pub fn make_test(cond: Rc<TreeNode>, then: Rc<TreeNode>, else_: Rc<TreeNode>) -> Rc<TreeNode> {
-    Rc::new(TreeNode::Test(cond, then, else_))
+pub fn make_test(
+    cond: Rc<TreeNode>,
+    then: Rc<TreeNode>,
+    else_: Rc<TreeNode>,
+    source: Option<SourceLocation>,
+) -> Rc<TreeNode> {
+    Rc::new(TreeNode::Test(cond, then, else_, source))
 }
 
-pub fn make_ref(variable: Rc<Variable>) -> Rc<TreeNode> {
-    Rc::new(TreeNode::Ref(variable))
+pub fn make_ref(mut variable: Rc<Variable>, source: Option<SourceLocation>) -> Rc<TreeNode> {
+    variable.referenced = true;
+    Rc::new(TreeNode::Ref(variable, source))
 }
 
-pub fn make_mutate(variable: Rc<Variable>, value: Rc<TreeNode>) -> Rc<TreeNode> {
-    Rc::new(TreeNode::Mutate(variable, value))
+pub fn make_mutate(
+    mut variable: Rc<Variable>,
+    value: Rc<TreeNode>,
+    source: Option<SourceLocation>,
+) -> Rc<TreeNode> {
+    variable.mutated = true;
+    Rc::new(TreeNode::Mutate(variable, value, source))
 }
 
 pub fn make_bind(
     variables: Vec<Rc<Variable>>,
     values: Vec<Rc<TreeNode>>,
     body: Rc<TreeNode>,
+    source: Option<SourceLocation>,
 ) -> Rc<TreeNode> {
-    Rc::new(TreeNode::Bind(variables, values, body))
+    Rc::new(TreeNode::Bind(variables, values, body, source))
 }
 
 pub fn make_fix(
     variables: Vec<Rc<Variable>>,
     procs: Vec<Rc<Proc>>,
     body: Rc<TreeNode>,
+    source: Option<SourceLocation>,
 ) -> Rc<TreeNode> {
-    Rc::new(TreeNode::Fix(variables, procs, body))
+    Rc::new(TreeNode::Fix(variables, procs, body, source))
 }
 
 pub fn make_multi_value_call(
@@ -705,27 +850,22 @@ pub fn make_goto(body: Rc<TreeNode>, source: Option<SourceLocation>) -> Rc<TreeN
     Rc::new(TreeNode::Goto(Rc::downgrade(&body), source))
 }
 
-pub fn make_global_ref(
-    interner: &SymbolInterner,
-    name: Rc<Symbol>,
-    source: Option<SourceLocation>,
-) -> Rc<TreeNode> {
+pub fn make_global_ref(name: Rc<Symbol>, source: Option<SourceLocation>) -> Rc<TreeNode> {
     make_fun_call(
-        make_primref(interner.intern("$global-ref")),
-        &[make_constant(Sexpr::Symbol(name))],
+        make_primref(Rc::new("$global-ref".to_string()), source.clone()),
+        &[make_constant(Sexpr::Symbol(name), source.clone())],
         source,
     )
 }
 
 pub fn make_global_set(
-    interner: &SymbolInterner,
     name: Rc<Symbol>,
     value: Rc<TreeNode>,
     source: Option<SourceLocation>,
 ) -> Rc<TreeNode> {
     make_fun_call(
-        make_primref(interner.intern("$global-set!")),
-        &[make_constant(Sexpr::Symbol(name)), value],
+        make_primref(Rc::new("$global-set!".to_string()), source.clone()),
+        &[make_constant(Sexpr::Symbol(name), source.clone()), value],
         source,
     )
 }

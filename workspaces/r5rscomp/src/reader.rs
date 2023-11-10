@@ -45,6 +45,7 @@ impl SourceProvider {
     }
 }
 
+#[derive(Debug)]
 pub struct SymbolInterner {
     pub symbols: RefCell<HashMap<&'static str, Rc<Symbol>>>,
 }

@@ -3,11 +3,14 @@
 //! Not only includes expressions but simulates interned/uninterned symbols to be
 //! used in the macro expansion.
 
-use std::hash::Hash;
 use crate::env::Environment;
 use crate::rc::Rc;
 use crate::rc::Weak;
+use crate::reader::SourceLocation;
+use crate::reader::SourceProvider;
 use crate::reader::SymbolInterner;
+use std::borrow::Cow;
+use std::hash::Hash;
 
 use num::BigInt;
 use num::BigRational;
@@ -17,7 +20,7 @@ use num::Rational32;
 #[derive(Clone)]
 pub enum Symbol {
     Interned(String),
-    Uninterned(String),
+    Uninterned(Cow<'static, str>),
     Generated(Rc<Symbol>, Weak<Environment>),
 }
 
@@ -44,7 +47,6 @@ impl Symbol {
             Self::Uninterned(_) => None,
             Self::Generated(s, env) => Some((s.clone(), env.upgrade().unwrap())),
         }
-    
     }
 }
 
@@ -52,7 +54,7 @@ impl AsRef<str> for Symbol {
     fn as_ref(&self) -> &str {
         match self {
             Self::Interned(s) => s.as_str(),
-            Self::Uninterned(s) => s.as_str(),
+            Self::Uninterned(s) => &s,
             Self::Generated(s, _) => (**s).as_ref(),
         }
     }
@@ -61,9 +63,9 @@ impl AsRef<str> for Symbol {
 impl std::fmt::Debug for Symbol {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Interned(s) => write!(f, "{:?}", s),
-            Self::Uninterned(s) => write!(f, "{:?}", s),
-            Self::Generated(s, _) => write!(f, "{:?}!", s),
+            Self::Interned(s) => write!(f, "{}", s),
+            Self::Uninterned(s) => write!(f, "{}", s),
+            Self::Generated(s, _) => write!(f, "{}!", s),
         }
     }
 }
@@ -76,7 +78,6 @@ impl std::fmt::Display for Symbol {
             Self::Generated(s, _) => write!(f, "{}", s),
         }
     }
-
 }
 
 impl std::ops::Deref for Symbol {
@@ -278,7 +279,6 @@ impl Sexpr {
             _ => None,
         }
     }
-    
 
     pub fn is_vector_like(&self) -> bool {
         match self {
@@ -421,7 +421,7 @@ impl Sexpr {
                 true
             }
 
-            _ => false
+            _ => false,
         }
     }
 
@@ -683,8 +683,6 @@ impl Sexpr {
     }
 }
 
-
-
 #[derive(Debug, Clone)]
 pub enum ScmError {
     MismatchedRepetitionPatterns(Sexpr),
@@ -698,8 +696,12 @@ pub fn cons(car: Sexpr, cdr: Sexpr) -> Sexpr {
     Sexpr::Pair(Rc::new((car, cdr)))
 }
 
-
-pub fn from_r7rs_parser(e: &Expr<NoIntern>, interner: &Rc<SymbolInterner>) -> Sexpr {
+pub fn from_r7rs_parser(
+    e: &Expr<NoIntern>,
+    interner: &Rc<SymbolInterner>,
+    source_locs: &mut SourceProvider,
+    filename: Rc<String>,
+) -> Sexpr {
     match e {
         Expr::BigInt(n) => Sexpr::BigInt(Rc::new(n.clone())),
         Expr::BigRational(n) => Sexpr::BigRational(Rc::new(n.clone())),
@@ -712,16 +714,31 @@ pub fn from_r7rs_parser(e: &Expr<NoIntern>, interner: &Rc<SymbolInterner>) -> Se
         Expr::GrowableVector(v) | Expr::ImmutableVector(v) => {
             let mut elems = Vec::new();
             for e in v.iter() {
-                elems.push(from_r7rs_parser(e, interner));
+                elems.push(from_r7rs_parser(e, interner, source_locs, filename.clone()));
             }
             Sexpr::Vector(Rc::new(elems))
         }
 
         Expr::Null => Sexpr::Null,
         Expr::Rational(r) => Sexpr::Rational32(Rc::new(r.clone())),
-        Expr::Pair(car, cdr) => cons(from_r7rs_parser(car, interner), from_r7rs_parser(cdr, interner)),
+        Expr::Pair(car, cdr) => cons(
+            from_r7rs_parser(car, interner, source_locs, filename.clone()),
+            from_r7rs_parser(cdr, interner, source_locs, filename),
+        ),
         Expr::Symbol(s) => Sexpr::Symbol(interner.intern(s)),
-        Expr::Syntax(_, expr) => from_r7rs_parser(expr, interner),
+        Expr::Syntax(pos, expr) => {
+            let expr = from_r7rs_parser(expr, interner, source_locs, filename.clone());
+
+            let loc = SourceLocation {
+                column: pos.col,
+                line: pos.line,
+                filename: filename.clone(),
+            };
+
+            source_locs.mark(&expr, loc);
+
+            expr
+        }
         Expr::Str(s) => Sexpr::String(Rc::new(s.clone())),
     }
 }
@@ -731,9 +748,7 @@ impl std::fmt::Display for Sexpr {
         let mut vec = Vec::new();
         let mut out = termcolor::NoColor::new(&mut vec);
         match self.pretty_print(&mut out) {
-            Ok(_) => {
-                f.write_str(std::str::from_utf8(&vec).unwrap())
-            },
+            Ok(_) => f.write_str(std::str::from_utf8(&vec).unwrap()),
             Err(_) => Err(std::fmt::Error),
         }
     }

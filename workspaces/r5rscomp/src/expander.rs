@@ -73,7 +73,7 @@ pub fn global_env(interner: &Rc<SymbolInterner>) -> Rc<Environment> {
             ));
         }
 
-        Ok(make_seq(seq))
+        Ok(make_seq(seq, cenv.source(form)))
     });
 
     define_special!("define", define, form, cenv => {
@@ -131,7 +131,7 @@ pub fn global_env(interner: &Rc<SymbolInterner>) -> Rc<Environment> {
             let test = expand(&test, cenv)?;
             let consequent = expand(&consequent, cenv)?;
 
-            return Ok(make_test(test, consequent, make_constant(Sexpr::Unspecified)));
+            return Ok(make_test(test, consequent, make_constant(Sexpr::Unspecified, cenv.source(form)), cenv.source(form)));
         } else if len == 4 {
             let test = form.cadr();
             let consequent = form.caddr();
@@ -141,7 +141,7 @@ pub fn global_env(interner: &Rc<SymbolInterner>) -> Rc<Environment> {
             let consequent = expand(&consequent, cenv)?;
             let alternative = expand(&alternative, cenv)?;
 
-            return Ok(make_test(test, consequent, alternative));
+            return Ok(make_test(test, consequent, alternative, cenv.source(form)));
         } else {
             return Err(ScmError::UnexpectedType(
                 form.clone(),
@@ -218,7 +218,6 @@ pub fn global_env(interner: &Rc<SymbolInterner>) -> Rc<Environment> {
                     vec![make_proc_case(
                         CaseInfo {
                             formals: bindings_vec.iter().map(|(x, _)| x.clone()).collect(),
-                            rest: false,
                             proper: true,
                         },
                         body,
@@ -226,17 +225,18 @@ pub fn global_env(interner: &Rc<SymbolInterner>) -> Rc<Environment> {
                 );
 
                 let funcall = make_fun_call(
-                    make_ref(lam_var.clone()),
+                    make_ref(lam_var.clone(), src.clone()),
                     bindings_vec
                         .iter()
                         .map(|(_, init)| init.clone())
                         .collect::<Vec<_>>()
                         .as_slice(),
-                    src);
+                    src.clone());
 
                 let bind = make_rec(
                     vec![(lam_var, Rc::new(TreeNode::Proc(proc)))],
-                    funcall
+                    funcall,
+                    src.clone(),
                 );
 
                 Ok(bind)
@@ -288,7 +288,7 @@ pub fn global_env(interner: &Rc<SymbolInterner>) -> Rc<Environment> {
 
                 let body = expand_body(&body, &cenv)?;
 
-                Ok(make_bind(vars, bindings_vec, body))
+                Ok(make_bind(vars, bindings_vec, body, cenv.source(form)))
             } else {
                 todo!()
             }
@@ -349,7 +349,7 @@ pub fn global_env(interner: &Rc<SymbolInterner>) -> Rc<Environment> {
 
             let body = expand_body(&body, &cenv)?;
 
-            Ok(make_rec(vars.iter().zip(bindings.iter()).map(|(var, expr)| (var.clone(), expr.clone())).collect(), body))
+            Ok(make_rec(vars.iter().zip(bindings.iter()).map(|(var, expr)| (var.clone(), expr.clone())).collect(), body, cenv.source(form)))
         } else {
             return Err(ScmError::UnexpectedType(
                 form.clone(),
@@ -407,7 +407,7 @@ pub fn global_env(interner: &Rc<SymbolInterner>) -> Rc<Environment> {
 
             let body = expand_body(&body, &cenv)?;
 
-            Ok(make_rec(vars.iter().zip(bindings.iter()).map(|(var, expr)| (var.clone(), expr.clone())).collect(), body))
+            Ok(make_rec(vars.iter().zip(bindings.iter()).map(|(var, expr)| (var.clone(), expr.clone())).collect(), body, cenv.source(form)))
         } else {
             return Err(ScmError::UnexpectedType(
                 form.clone(),
@@ -424,7 +424,7 @@ pub fn global_env(interner: &Rc<SymbolInterner>) -> Rc<Environment> {
                 form.clone(),
                 "symbol expected for syntax-rules name",
             ))?;
-            
+
             let mut ellipsis = None::<Rc<Symbol>>;
             let lit;
             let mut trans_rules;
@@ -469,7 +469,7 @@ pub fn global_env(interner: &Rc<SymbolInterner>) -> Rc<Environment> {
                         "[(id . pattern) template] expected",
                     ));
                 };
-                
+
                 patterns.push(pat.clone());
                 templates.push(cadr.clone());
 
@@ -499,7 +499,7 @@ pub fn global_env(interner: &Rc<SymbolInterner>) -> Rc<Environment> {
                 Environment::Global(global) => {
                     global.bindings.insert(name.clone(), Definition::Macro(Rc::new(rules)));
 
-                    Ok(make_constant(Sexpr::Unspecified))
+                    Ok(make_constant(Sexpr::Unspecified, cenv.source(form)))
                 }
 
                 _ => return Err(ScmError::Custom(form.clone(), format!("define-syntax-rules in non-global environment"))),
@@ -513,8 +513,226 @@ pub fn global_env(interner: &Rc<SymbolInterner>) -> Rc<Environment> {
         }
     });
 
-    define_special!("quote", quote, form, _cenv => {
-        Ok(make_constant(form.cadr().clone()))
+    define_special!("quote", quote, form, cenv => {
+        Ok(make_constant(form.cadr().clone(), cenv.source(form)))
+    });
+
+    // (let-syntax ([id expr] ...) body ...)
+    //
+    //
+    // our implementation does not do CTE, it simply assumes that `expr` in bindings
+    // is an `syntax-rules` object.
+    define_special!("let-syntax", let_syntax, form, cenv => {
+        if form.list_length().filter(|x| *x >= 3).is_none() {
+            return Err(ScmError::UnexpectedType(
+                form.clone(),
+                "(let-syntax ([id expr] ...) body ...) expected",
+            ));
+        }
+        let bindings = form.cadr();
+        let body = form.cddr();
+
+        let mut ls = bindings;
+
+        let mut syntax_rules = Vec::new();
+
+        while let Some((binding, rest)) = ls.pair() {
+            let name = binding.car().symbol().unwrap();
+            let rules = binding.cadr().cdr();
+
+            let mut ellipsis = None;
+            let lit;
+            let mut trans_rules;
+            match rules {
+                _ if rules.car().is_symbol() && rules.cdr().is_pair() => {
+                    ellipsis = rules.car().symbol().map(|x| Symbol::root(x).clone());
+                    lit = rules.cdr().car();
+                    trans_rules = rules.cdr().cdr();
+                }
+
+                _ if rules.is_pair() => {
+                    lit = rules.car();
+                    trans_rules = rules.cdr();
+                }
+
+                _ => return Err(ScmError::UnexpectedType(
+                    binding.clone(),
+                    "(syntax-rules <ellipsis>? (<literal-id> ...)
+                    [(id . pattern) template] ...) expected",
+                )),
+            }
+
+            let mut patterns = Vec::new();
+            let mut templates = Vec::new();
+
+            while let Some((rule, rest)) = trans_rules.pair() {
+                let Some((car, Some((cadr, Sexpr::Null)))) = rule.pair().map(|(car, cdr)| (car, cdr.pair())) else {
+                    return Err(ScmError::UnexpectedType(
+                        rule.clone(),
+                        "[(id . pattern) template] expected",
+                    ));
+                };
+
+                let Some((_, pat)) = car.pair() else {
+                    return Err(ScmError::UnexpectedType(
+                        car.clone(),
+                        "[(id . pattern) template] expected",
+                    ));
+                };
+
+                patterns.push(pat.clone());
+                templates.push(cadr.clone());
+
+                trans_rules = rest;
+            }
+
+            let mut literal_set = HashSet::new();
+
+            let mut expr = lit;
+
+            while let Some((Some(sym), cdr)) = expr.pair().map(|(car, cdr)| (car.symbol(), cdr)) {
+                literal_set.insert(Symbol::root(sym).clone());
+
+                expr = cdr;
+            }
+
+            if !expr.is_null() {
+                return Err(ScmError::UnexpectedType(
+                    lit.clone(),
+                    "literal identifier list expected",
+                ));
+            }
+
+            let rules = Rc::new(SyntaxRules::new(cenv.interner.clone(), Some(name.clone()), literal_set, ellipsis, patterns, templates, cenv.env.clone()));
+            syntax_rules.push((name.clone(), rules));
+            ls = rest;
+        }
+
+        let env = Environment::Lexical(Lexical {
+            parent: cenv.env.clone(),
+            bindings: syntax_rules.iter().map(|(x, y)| (x.clone(), Definition::Macro(y.clone()))).collect()
+        });
+
+
+        let body = expand_body(&body, &Cenv {
+            env: Rc::new(env),
+            ..cenv.clone()
+        })?;
+
+        Ok(body)
+    });
+
+    // (letrec-syntax ([id expr] ...) body ...)
+    //
+    //
+    // our implementation does not do CTE, it simply assumes that `expr` in bindings
+    // is an `syntax-rules` object.
+    define_special!("letrec-syntax", letrec_syntax, form, cenv => {
+        if form.list_length().filter(|x| *x >= 3).is_none() {
+            return Err(ScmError::UnexpectedType(
+                form.clone(),
+                "(let-syntax ([id expr] ...) body ...) expected",
+            ));
+        }
+        let bindings = form.cadr();
+        let body = form.cddr();
+
+        let mut env = Rc::new(Environment::Lexical(Lexical {
+            parent: cenv.env.clone(),
+            bindings: HashMap::new(),
+        }));
+
+        let mut ls = bindings;
+
+        let mut syntax_rules = Vec::new();
+
+        while let Some((binding, rest)) = ls.pair() {
+            let name = binding.car().symbol().unwrap();
+            let rules = binding.cadr().cdr();
+
+            let mut ellipsis = None;
+            let lit;
+            let mut trans_rules;
+            match rules {
+                _ if rules.car().is_symbol() && rules.cdr().is_pair() => {
+                    ellipsis = rules.car().symbol().map(|x| Symbol::root(x).clone());
+                    lit = rules.cdr().car();
+                    trans_rules = rules.cdr().cdr();
+                }
+
+                _ if rules.is_pair() => {
+                    lit = rules.car();
+                    trans_rules = rules.cdr();
+                }
+
+                _ => return Err(ScmError::UnexpectedType(
+                    binding.clone(),
+                    "(syntax-rules <ellipsis>? (<literal-id> ...)
+                    [(id . pattern) template] ...) expected",
+                )),
+            }
+
+            let mut patterns = Vec::new();
+            let mut templates = Vec::new();
+
+            while let Some((rule, rest)) = trans_rules.pair() {
+                let Some((car, Some((cadr, Sexpr::Null)))) = rule.pair().map(|(car, cdr)| (car, cdr.pair())) else {
+                    return Err(ScmError::UnexpectedType(
+                        rule.clone(),
+                        "[(id . pattern) template] expected",
+                    ));
+                };
+
+                let Some((_, pat)) = car.pair() else {
+                    return Err(ScmError::UnexpectedType(
+                        car.clone(),
+                        "[(id . pattern) template] expected",
+                    ));
+                };
+
+                patterns.push(pat.clone());
+                templates.push(cadr.clone());
+
+                trans_rules = rest;
+            }
+
+            let mut literal_set = HashSet::new();
+
+            let mut expr = lit;
+
+            while let Some((Some(sym), cdr)) = expr.pair().map(|(car, cdr)| (car.symbol(), cdr)) {
+                literal_set.insert(Symbol::root(sym).clone());
+
+                expr = cdr;
+            }
+
+            if !expr.is_null() {
+                return Err(ScmError::UnexpectedType(
+                    lit.clone(),
+                    "literal identifier list expected",
+                ));
+            }
+
+            let rules = Rc::new(SyntaxRules::new(cenv.interner.clone(), Some(name.clone()), literal_set, ellipsis, patterns, templates, env.clone()));
+            syntax_rules.push((name.clone(), rules));
+            ls = rest;
+        }
+
+        let Environment::Lexical(ref mut lex) = &mut *env else {
+            unreachable!()
+        };
+
+        for (name, rules) in syntax_rules {
+            lex.bindings.insert(name, Definition::Macro(rules));
+        }
+
+
+        let body = expand_body(&body, &Cenv {
+            env,
+            ..cenv.clone()
+        })?;
+
+        Ok(body)
     });
 
     Rc::new(Environment::Global(env))
@@ -558,14 +776,12 @@ fn expand_vanilla_lambda(
     };
 
     let body = expand_body(&body, &cenv)?;
-
     Ok(Rc::new(TreeNode::Proc(make_proc(
         cenv.expr_name.clone(),
         vec![make_proc_case(
             CaseInfo {
                 formals: vars,
-                rest: nopts != 0,
-                proper: true,
+                proper: nopts == 0,
             },
             body,
         )],
@@ -609,9 +825,8 @@ fn expand_define(form: Sexpr, oform: Sexpr, cenv: &Cenv) -> Result<Rc<TreeNode>,
             ));
         }
         return Ok(make_global_set(
-            &cenv.interner,
             name.symbol().unwrap().clone(),
-            make_constant(Sexpr::Unspecified),
+            make_constant(Sexpr::Unspecified, cenv.source(&oform)),
             cenv.source(&oform),
         ));
     } else if form.cddr().cdr().is_null() {
@@ -633,7 +848,6 @@ fn expand_define(form: Sexpr, oform: Sexpr, cenv: &Cenv) -> Result<Rc<TreeNode>,
         }
 
         Ok(make_global_set(
-            &cenv.interner,
             name.symbol().unwrap().clone(),
             value,
             cenv.source(&oform),
@@ -689,20 +903,21 @@ pub fn expand(program: &Sexpr, cenv: &Cenv) -> Result<Rc<TreeNode>, ScmError> {
                 }
 
                 Ok(make_fun_call(
-                    make_primref(primref.clone()),
+                    make_primref(Rc::new(primref.to_string()), cenv.source(program)),
                     &iargs,
                     cenv.source(program),
                 ))
             }
 
             _ => {
-                let gref = make_global_ref(&cenv.interner, id.clone(), cenv.source(program));
+                let gref = make_global_ref(id.clone(), cenv.source(program));
 
                 expand_call(program, gref, program.cdr(), cenv)
             }
         }
     }
     if program.is_pair() {
+        let loc = cenv.source(program);
         if !program.is_proper_list() {
             return Err(ScmError::UnexpectedType(
                 program.clone(),
@@ -730,7 +945,7 @@ pub fn expand(program: &Sexpr, cenv: &Cenv) -> Result<Rc<TreeNode>, ScmError> {
                 }
 
                 Ok(make_fun_call(
-                    make_primref(prim.clone()),
+                    make_primref(Rc::new(prim.to_string()), loc.clone()),
                     &iargs,
                     cenv.source(program),
                 ))
@@ -755,9 +970,8 @@ pub fn expand(program: &Sexpr, cenv: &Cenv) -> Result<Rc<TreeNode>, ScmError> {
         let r = cenv.env.lookup::<true>(program.symbol().unwrap());
 
         match r {
-            Definition::Variable(var) => Ok(make_ref(var)),
+            Definition::Variable(var) => Ok(make_ref(var, cenv.source(program))),
             Definition::Undefined => Ok(make_global_ref(
-                &cenv.interner,
                 program.symbol().cloned().unwrap(),
                 cenv.source(program),
             )),
@@ -767,7 +981,7 @@ pub fn expand(program: &Sexpr, cenv: &Cenv) -> Result<Rc<TreeNode>, ScmError> {
             )),
         }
     } else {
-        Ok(make_constant(program.clone()))
+        Ok(make_constant(program.clone(), cenv.source(program)))
     }
 }
 
@@ -795,7 +1009,7 @@ fn expand_body(exprs: &Sexpr, cenv: &Cenv) -> Result<Rc<TreeNode>, ScmError> {
 
                     Some(Definition::Macro(rules)) => {
                         let expanded = rules.expand(expr.cdr())?;
-                        
+
                         return rec(&cons(expanded, rest.clone()), cenv, defs);
                     }
 
@@ -871,6 +1085,7 @@ fn expand_body(exprs: &Sexpr, cenv: &Cenv) -> Result<Rc<TreeNode>, ScmError> {
         cenv: &Cenv,
         defs: &mut Vec<(Sexpr, Sexpr)>,
     ) -> Result<Rc<TreeNode>, ScmError> {
+        let loc = cenv.source(exprs);
         if defs.is_empty() {
             let mut nodes = Vec::new();
 
@@ -879,7 +1094,7 @@ fn expand_body(exprs: &Sexpr, cenv: &Cenv) -> Result<Rc<TreeNode>, ScmError> {
                 exprs = rest;
             }
 
-            return Ok(make_seq(nodes));
+            return Ok(make_seq(nodes, loc));
         } else {
             let mut env = Lexical {
                 bindings: HashMap::new(),
@@ -922,7 +1137,7 @@ fn expand_body(exprs: &Sexpr, cenv: &Cenv) -> Result<Rc<TreeNode>, ScmError> {
                 exprs = rest;
             }
 
-            return Ok(make_rec_star(bindings, make_seq(body)));
+            return Ok(make_rec_star(bindings, make_seq(body, loc.clone()), loc));
         }
     }
 

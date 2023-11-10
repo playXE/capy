@@ -6,18 +6,17 @@ struct RcInner<T> {
     value: MaybeUninit<T>,
 }
 
-pub struct Rc<T> {
+pub struct Rc<T: std::fmt::Debug> {
     inner: NonNull<RcInner<T>>,
 }
 
-impl<T> Rc<T> {
+impl<T: std::fmt::Debug> Rc<T> {
     #[cold]
     #[inline(never)]
     unsafe fn drop_slow(&mut self) {
         let inner = self.inner.as_mut();
-
         inner.value.assume_init_drop();
-
+        inner.weak -= 1;
         if inner.weak == 0 {
             let _ = Box::from_raw(self.inner.as_ptr());
         }
@@ -32,7 +31,7 @@ impl<T> Rc<T> {
     }
 }
 
-impl<T> Clone for Rc<T> {
+impl<T: std::fmt::Debug> Clone for Rc<T> {
     #[inline]
     fn clone(&self) -> Self {
         unsafe {
@@ -43,7 +42,7 @@ impl<T> Clone for Rc<T> {
     }
 }
 
-impl<T> Drop for Rc<T> {
+impl<T: std::fmt::Debug> Drop for Rc<T> {
     #[inline]
     fn drop(&mut self) {
         unsafe {
@@ -56,7 +55,7 @@ impl<T> Drop for Rc<T> {
     }
 }
 
-impl<T> std::ops::Deref for Rc<T> {
+impl<T: std::fmt::Debug> std::ops::Deref for Rc<T> {
     type Target = T;
 
     #[inline]
@@ -65,21 +64,21 @@ impl<T> std::ops::Deref for Rc<T> {
     }
 }
 
-impl<T> std::borrow::Borrow<T> for Rc<T> {
+impl<T: std::fmt::Debug> std::borrow::Borrow<T> for Rc<T> {
     #[inline]
     fn borrow(&self) -> &T {
         &**self
     }
 }
 
-impl<T> std::ops::DerefMut for Rc<T> {
+impl<T: std::fmt::Debug> std::ops::DerefMut for Rc<T> {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe { self.inner.as_mut().value.assume_init_mut() }
     }
 }
 
-impl<T> std::fmt::Debug for Rc<T>
+impl<T: std::fmt::Debug> std::fmt::Debug for Rc<T>
 where
     T: std::fmt::Debug,
 {
@@ -88,16 +87,16 @@ where
     }
 }
 
-impl<T> std::fmt::Display for Rc<T>
+impl<T: std::fmt::Debug> std::fmt::Display for Rc<T>
 where
     T: std::fmt::Display,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        (**self).fmt(f)
+        write!(f, "{}", **self)        
     }
 }
 
-impl<T> std::cmp::PartialEq for Rc<T>
+impl<T: std::fmt::Debug> std::cmp::PartialEq for Rc<T>
 where
     T: std::cmp::PartialEq,
 {
@@ -107,9 +106,9 @@ where
     }
 }
 
-impl<T> std::cmp::Eq for Rc<T> where T: std::cmp::Eq {}
+impl<T: std::fmt::Debug> std::cmp::Eq for Rc<T> where T: std::cmp::Eq {}
 
-impl<T> std::cmp::PartialOrd for Rc<T>
+impl<T: std::fmt::Debug> std::cmp::PartialOrd for Rc<T>
 where
     T: std::cmp::PartialOrd,
 {
@@ -119,7 +118,7 @@ where
     }
 }
 
-impl<T> std::cmp::Ord for Rc<T>
+impl<T: std::fmt::Debug> std::cmp::Ord for Rc<T>
 where
     T: std::cmp::Ord,
 {
@@ -129,7 +128,7 @@ where
     }
 }
 
-impl<T> std::hash::Hash for Rc<T>
+impl<T: std::fmt::Debug> std::hash::Hash for Rc<T>
 where
     T: std::hash::Hash,
 {
@@ -139,26 +138,26 @@ where
     }
 }
 
-impl<T> From<T> for Rc<T> {
+impl<T: std::fmt::Debug> From<T> for Rc<T> {
     #[inline]
     fn from(value: T) -> Self {
         Self::new(value)
     }
 }
 
-impl<T> std::convert::AsRef<T> for Rc<T> {
+impl<T: std::fmt::Debug> std::convert::AsRef<T> for Rc<T> {
     #[inline]
     fn as_ref(&self) -> &T {
         &**self
     }
 }
 
-impl<T> Rc<T> {
+impl<T: std::fmt::Debug> Rc<T> {
     #[inline]
     pub fn new(value: T) -> Self {
         let inner = Box::new(RcInner {
             strong: 1,
-            weak: 0,
+            weak: 1,
             value: MaybeUninit::new(value),
         });
 
@@ -190,7 +189,7 @@ pub struct Weak<T> {
     inner: NonNull<RcInner<T>>,
 }
 
-impl<T> Weak<T> {
+impl<T: std::fmt::Debug> Weak<T> {
     #[inline]
     pub fn upgrade(&self) -> Option<Rc<T>> {
         unsafe {
@@ -239,11 +238,12 @@ where
     T: std::fmt::Debug,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        self.upgrade().unwrap().fmt(f)
+        write!(f, "#<weak {:p}>", self.inner)
+        //self.upgrade().unwrap().fmt(f)
     }
 }
 
-impl<T> std::fmt::Display for Weak<T>
+impl<T: std::fmt::Debug> std::fmt::Display for Weak<T>
 where
     T: std::fmt::Display,
 {
