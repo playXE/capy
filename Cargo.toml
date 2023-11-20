@@ -2,3 +2,6 @@
 resolver = "2"
 members = ["workspaces/capy", "workspaces/r5rscomp"]
 default-members = ["workspaces/capy", "workspaces/r5rscomp"]
+
+[profile.release]
+lto = "fat"

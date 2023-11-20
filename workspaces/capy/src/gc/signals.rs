@@ -5,6 +5,7 @@ use std::{mem::MaybeUninit, ptr::null_mut};
 use libc::*;
 
 use crate::gc::safepoint;
+use crate::gc::stack::{approximate_stack_pointer, registers_from_ucontext};
 use crate::runtime::thread::Thread;
 
 
@@ -26,11 +27,18 @@ pub unsafe extern "C" fn segv_handler(sig: i32, info: *mut siginfo_t, context: *
     // and we got here. Polling page gets protected only when safepoint is requested.
     if safepoint::addr_in_safepoint((*info).si_addr() as usize) {
         let thread = Thread::current();
+        let approximate_stack_pointer = approximate_stack_pointer();
+        if !thread.stack.contains(approximate_stack_pointer as _) {
+            log::error!("alternative stack was used to capture signal, retry");
+            return;
+        }
 
+        thread.platform_registers = Some(registers_from_ucontext(context));
+        thread.approx_sp = approximate_stack_pointer;
         log::trace!(target: "gc-safepoint", "{:?} reached safepoint", std::thread::current().id());
         // basically spin-loop that waits for safepoint to be disabled
         thread.enter_safepoint();
-
+        thread.platform_registers = None;
         log::trace!(target: "gc-safepoint", "{:?} exit safepoint", std::thread::current().id());
         return;
     }

@@ -1,4 +1,4 @@
-use super::{safepoint::SafepointSynchronize, CapyVM};
+use super::{safepoint::SafepointSynchronize, stack::{registers_from_ucontext, approximate_stack_pointer}, CapyVM};
 use crate::{
     runtime::{
         thread::{threads, Thread, ThreadKind},
@@ -11,7 +11,7 @@ use mmtk::{
     vm::{Collection, GCThreadContext},
 };
 use std::{
-    mem::transmute,
+    mem::{transmute, MaybeUninit},
     sync::{Arc, Barrier},
 };
 pub struct VMCollection;
@@ -27,7 +27,7 @@ impl Collection<CapyVM> for VMCollection {
                     b2.wait();
                     let tls = Thread::current();
                     tls.register_worker(true);
-                    
+
                     start_control_collector(&Runtime::get().mmtk, transmute(tls), &mut controller);
                     threads().remove_current_thread();
                 });
@@ -57,7 +57,6 @@ impl Collection<CapyVM> for VMCollection {
         F: FnMut(&'static mut mmtk::Mutator<CapyVM>),
     {
         unsafe {
-            
             // Sets safepoint page to `PROT_NONE` and waits for all threads to enter safepoint.
             // Some threads might enter through invocation of `safepoint_scope` function.
             // One place where this is done is inside `Mutex::lock`.
@@ -94,12 +93,22 @@ impl Collection<CapyVM> for VMCollection {
         std::process::exit(1);
     }
 
-    fn block_for_gc(_: mmtk::util::VMMutatorThread) {
+    fn block_for_gc(tls: mmtk::util::VMMutatorThread) {
         let rt = Runtime::get();
 
-        let mut ml = rt.gc_waiters.lock(true);
+        unsafe {
+            let mut ucontext = MaybeUninit::uninit();
+            libc::getcontext(ucontext.as_mut_ptr());
 
-        ml.wait();
+            let thread: &'static mut Thread = transmute(tls);
+            thread.platform_registers = Some(registers_from_ucontext(ucontext.as_mut_ptr()));
+            thread.approx_sp = approximate_stack_pointer();
+            let mut ml = rt.gc_waiters.lock(true);
+
+            ml.wait();
+
+            thread.platform_registers = None;
+        }
     }
 
     fn schedule_finalization(_tls: mmtk::util::VMWorkerThread) {}

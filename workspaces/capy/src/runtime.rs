@@ -1,17 +1,51 @@
+#![allow(unused_imports)]
+use std::mem::size_of;
+
+use mmtk::{
+    util::{
+        constants::LOG_BYTES_IN_GBYTE,
+        conversions::{self, chunk_align_down, chunk_align_up},
+        heap::vm_layout::VMLayout,
+        Address,
+    },
+    vm::RootsWorkFactory,
+};
 use once_cell::sync::{Lazy, OnceCell};
+use rand::Rng;
 
-use crate::{define_flag, define_option_handler, gc::CapyVM, runtime::utils::formatted_size, sync::monitor::Monitor};
+use crate::{
+    define_flag, define_option_handler,
+    gc::{
+        edges::{initialize_compressed_oops_base_and_shift, ScmEdge},
+        ptr_compr::HeapCompressionScheme,
+        CapyVM,
+    },
+    runtime::{
+        cell::{CellReference, CellTag, SchemeHeader},
+        utils::{formatted_size, log2i_graceful, round_down_usize, round_up_usize},
+        value::Word,
+    },
+    sync::monitor::Monitor,
+};
 
-use self::{utils::{get_total_memory, MemorySize}, thread::Thread};
+use self::{
+    thread::Thread,
+    utils::{get_total_memory, MemorySize},
+    value::{Tagged, TaggedValue},
+};
 
 pub mod bitfield;
 pub mod cell;
+pub mod code_block;
+pub mod factory;
 pub mod flags;
 pub mod pure_nan;
+pub mod segmented_vec;
+pub mod smi;
+pub mod tagged;
 pub mod thread;
 pub mod utils;
 pub mod value;
-pub mod factory;
 pub mod vm;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -19,10 +53,7 @@ pub enum GCPlan {
     #[default]
     Immix,
     StickyImmix,
-    GenImmix,
-    GenCopy,
     MarkSweep,
-    SemiSpace,
     NoGC,
 }
 
@@ -33,14 +64,10 @@ fn parse_gc_plan(argument: &str) {
     let plan = match lower.as_str() {
         "immix" => GCPlan::Immix,
         "stickyimmix" => GCPlan::StickyImmix,
-        "genimmix" => GCPlan::GenImmix,
-        "gencopy" => GCPlan::GenCopy,
         "marksweep" => GCPlan::MarkSweep,
-        "semispace" => GCPlan::SemiSpace,
         "nogc" => GCPlan::NoGC,
         _ => GCPlan::Immix,
     };
-
     GC_PLAN.get_or_init(|| plan);
 }
 
@@ -107,7 +134,7 @@ fn set_heap_size() {
                 .max(min_heap_size().0);
             reasonable_initial = reasonable_initial.min(max_heap_size().0);
 
-           // log::info!("Initial heap size {}", formatted_size(reasonable_initial));
+            // log::info!("Initial heap size {}", formatted_size(reasonable_initial));
             set_initial_heap_size(MemorySize(reasonable_initial));
         }
 
@@ -123,20 +150,71 @@ impl GCPlan {
         match self {
             GCPlan::Immix => "Immix",
             GCPlan::StickyImmix => "StickyImmix",
-            GCPlan::GenImmix => "GenImmix",
-            GCPlan::GenCopy => "GenCopy",
             GCPlan::MarkSweep => "MarkSweep",
-            GCPlan::SemiSpace => "SemiSpace",
             GCPlan::NoGC => "NoGC",
         }
+    }
+}
+
+pub static mut SCM_UNDEFINED: TaggedValue = TaggedValue::new(0);
+pub static mut SCM_UNSPECIFIED: TaggedValue = TaggedValue::new(0);
+pub static mut SCM_EOF_OBJECT: TaggedValue = TaggedValue::new(0);
+pub static mut SCM_TRUE: TaggedValue = TaggedValue::new(0);
+pub static mut SCM_FALSE: TaggedValue = TaggedValue::new(0);
+pub static mut SCM_NULL: TaggedValue = TaggedValue::new(0);
+
+#[cfg(feature = "compressed-oops")]
+pub const PTR_COMPR_BASE_ALIGNMENT: usize = 1 << 32;
+#[cfg(feature = "compressed-oops")]
+pub const PTR_COMPR_RESERVATION_SIZE: usize = 1 << 32;
+#[allow(dead_code)]
+fn get_random_mmap_addr() -> usize {
+    let mut random = 0;
+    let mut rng = rand::thread_rng();
+
+    for _ in 0..4 {
+        random |= rng.gen::<usize>();
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    {
+        random <<= 32;
+        random |= rand::thread_rng().gen::<usize>();
+        random &= 46;
+    }
+    #[cfg(target_pointer_width = "32")]
+    {
+        random &= 46;
+    }
+
+    unsafe {
+        let addr = libc::mmap(
+            random as *mut libc::c_void,
+            4 * 4096,
+            libc::PROT_NONE,
+            libc::MAP_PRIVATE | libc::MAP_ANON,
+            -1,
+            0,
+        );
+        println!("random: {:x}, addr: {:p}", random, addr);
+        libc::munmap(addr, 4 * 4096);
+
+        addr as _
     }
 }
 
 fn build_mmtk() -> mmtk::MMTK<CapyVM> {
     let mut builder = mmtk::MMTKBuilder::new();
     builder.set_option("plan", GC_PLAN.get_or_init(|| GCPlan::Immix).to_str());
-    log::info!("GC plan: {}", GC_PLAN.get_or_init(|| GCPlan::Immix).to_str());
-    log::info!("GC Trigger: DynamicHeapSize:{},{}", formatted_size(min_heap_size().0), formatted_size(max_heap_size().0));
+    log::info!(
+        "GC plan: {}",
+        GC_PLAN.get_or_init(|| GCPlan::Immix).to_str()
+    );
+    log::info!(
+        "GC Trigger: DynamicHeapSize:{},{}",
+        formatted_size(min_heap_size().0),
+        formatted_size(max_heap_size().0)
+    );
     builder.set_option(
         "gc_trigger",
         &format!(
@@ -155,12 +233,37 @@ fn build_mmtk() -> mmtk::MMTK<CapyVM> {
     };
     builder.set_option("threads", threads.to_string().as_str());
 
+    #[cfg(feature = "compressed-oops")]
+    {
+        let max_heap_size = builder.options.gc_trigger.max_heap_size();
+        assert!(
+            max_heap_size <= (4usize << LOG_BYTES_IN_GBYTE),
+            "Heap size cannot be larger than 4GB when using compressed oops"
+        );
+        let start = 0x5_0000_0000;
+        let end = start + PTR_COMPR_RESERVATION_SIZE; // size + 4GB
+
+        let start = round_down_usize(start, PTR_COMPR_BASE_ALIGNMENT);
+        let end = round_up_usize(end, PTR_COMPR_BASE_ALIGNMENT, 0);
+
+        let constants = unsafe {
+            VMLayout {
+                log_address_space: 32,
+                heap_start: Address::from_usize(start),
+                heap_end: Address::from_usize(end),
+                log_space_extent: 32,
+                force_use_contiguous_spaces: false,
+            }
+        };
+        builder.set_vm_layout(constants);
+    }
+
     builder.build()
 }
 
 pub struct Runtime {
     pub(crate) mmtk: mmtk::MMTK<CapyVM>,
-    pub(crate) gc_waiters: Monitor<()>
+    pub(crate) gc_waiters: Monitor<()>,
 }
 
 impl Runtime {
@@ -175,23 +278,90 @@ impl Runtime {
     fn new() -> Self {
         set_heap_size();
         let mmtk = build_mmtk();
+
+        #[cfg(feature = "compressed-oops")]
+        {
+            initialize_compressed_oops_base_and_shift();
+        }
         crate::gc::safepoint::init();
 
-       
-        Self { mmtk, gc_waiters: Monitor::new(()) }
+        Self {
+            mmtk,
+            gc_waiters: Monitor::new(()),
+        }
+    }
+
+    unsafe fn init_main(&self) {
+        let thread = Thread::current();
+        debug_assert!(thread.is_mutator());
+
+        let undef = thread.mmtk().alloc_immortal(
+            size_of::<SchemeHeader>() + size_of::<Word>(),
+            CellTag::UNDEFINED,
+        );
+        let unspec = thread.mmtk().alloc_immortal(
+            size_of::<SchemeHeader>() + size_of::<Word>(),
+            CellTag::UNSPECIFIED,
+        );
+        let eof = thread
+            .mmtk()
+            .alloc_immortal(size_of::<SchemeHeader>() + size_of::<Word>(), CellTag::EOF);
+
+        let t = thread
+            .mmtk()
+            .alloc_immortal(size_of::<SchemeHeader>() + size_of::<Word>(), CellTag::TRUE);
+
+        let f = thread.mmtk().alloc_immortal(
+            size_of::<SchemeHeader>() + size_of::<Word>(),
+            CellTag::FALSE,
+        );
+
+        let n = thread
+            .mmtk()
+            .alloc_immortal(size_of::<SchemeHeader>() + size_of::<Word>(), CellTag::NULL);
+
+        SCM_UNDEFINED = Tagged::<CellReference>::from(undef).to_value();
+        SCM_UNSPECIFIED = Tagged::<CellReference>::from(unspec).to_value();
+        SCM_EOF_OBJECT = Tagged::<CellReference>::from(eof).to_value();
+
+        SCM_TRUE = Tagged::<CellReference>::from(t).to_value();
+        SCM_FALSE = Tagged::<CellReference>::from(f).to_value();
+        SCM_NULL = Tagged::<CellReference>::from(n).to_value();
     }
 
     pub fn get() -> &'static Self {
         &*RUNTIME
     }
+
+    pub(crate) unsafe fn scan_roots(&self, mut factory: impl RootsWorkFactory<ScmEdge>) {
+        unsafe {
+            let mut edges = vec![];
+            let mut edge_from_ref = |val: &mut TaggedValue| {
+                if val.is_cell() {
+                    edges.push(ScmEdge::from(val));
+                }
+            };
+
+            // TODO: Potentially does not require scanning since
+            // it is in immortal space but we do it anyway just for safety.
+            edge_from_ref(&mut SCM_UNDEFINED);
+            edge_from_ref(&mut SCM_UNSPECIFIED);
+            edge_from_ref(&mut SCM_EOF_OBJECT);
+            edge_from_ref(&mut SCM_TRUE);
+            edge_from_ref(&mut SCM_FALSE);
+            edge_from_ref(&mut SCM_NULL);
+
+            factory.create_process_edge_roots_work(edges);
+        }
+    }
 }
 
 static RUNTIME: Lazy<Runtime> = Lazy::new(|| Runtime::new());
 
-
 pub fn enter_scheme<F, R>(f: F) -> R
-where F: FnOnce(&mut Thread) -> R {
-
+where
+    F: FnOnce(&mut Thread) -> R,
+{
     let mut thread = Thread::current();
     if thread.is_mutator() {
         return f(&mut thread);
@@ -201,7 +371,7 @@ where F: FnOnce(&mut Thread) -> R {
     }
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&mut thread)));
-    
+
     unsafe {
         thread.deregister_mutator();
     }

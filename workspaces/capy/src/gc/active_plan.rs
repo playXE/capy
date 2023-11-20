@@ -47,6 +47,6 @@ impl ActivePlan<CapyVM> for VMActivePlan {
         object: mmtk::util::ObjectReference,
         _worker: &mut mmtk::scheduler::GCWorker<CapyVM>,
     ) -> mmtk::util::ObjectReference {
-        object
+        unreachable!("{:p}", object.to_raw_address().to_ptr::<()>());
     }
 }

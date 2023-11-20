@@ -1,29 +1,39 @@
 use std::{
     intrinsics::{likely, unlikely},
-    mem::{transmute, MaybeUninit},
+    mem::{align_of, size_of, transmute, MaybeUninit},
     panic::AssertUnwindSafe,
-    ptr::null_mut,
+    ptr::{null, null_mut},
     sync::atomic::{AtomicI8, Ordering},
 };
 
 use crate::{
-    gc::{shadow_stack::ShadowStack, CapyVM},
-    runtime::cell::SchemeHeader,
-    sync::mutex::{Condvar, Mutex, MutexGuard},
+    gc::{
+        edges::SHIFT,
+        ptr_compr::HeapCompressionScheme,
+        shadow_stack::ShadowStack,
+        stack::{PlatformRegisters, StackBounds},
+        CapyVM,
+    },
+    runtime::{
+        cell::{SchemeHeader, OBJECT_REF_OFFSET},
+        factory::align_allocation,
+    },
+    sync::mutex::{Condvar, Mutex, MutexGuard}, interpreter::entry_frame::EntryFrame,
 };
 use mmtk::{
     memory_manager::bind_mutator,
     util::{
         alloc::{AllocatorSelector, BumpAllocator, ImmixAllocator},
         metadata::side_metadata::GLOBAL_SIDE_METADATA_VM_BASE_ADDRESS,
-        Address,
+        Address, ObjectReference,
     },
     Mutator, MutatorContext,
 };
 
 use super::{
     cell::{CellReference, CellTag},
-    value::Value,
+    utils::round_up_usize,
+    value::{TaggedValue, Value},
     vm::VirtualMachine,
     GCPlan, Runtime, GC_PLAN,
 };
@@ -45,10 +55,12 @@ pub enum ThreadKind {
 
 #[repr(C)]
 pub struct Thread {
-    pub vm: MaybeUninit<VirtualMachine>,
-
+    pub top_entry_frame: *mut EntryFrame,
     pub mmtk: MaybeUninit<MMTKLocalState>,
     pub selector: AllocatorSelector,
+    pub stack: StackBounds,
+    pub platform_registers: Option<PlatformRegisters>,
+    pub approx_sp: *const *const u8,
     pub id: u64,
     pub safepoint_addr: *mut u8,
     pub gc_state: i8,
@@ -87,7 +99,8 @@ impl Thread {
     }
 
     pub unsafe fn initialize_main(&mut self) {
-        mmtk::memory_manager::initialize_collection(Runtime::get().mmtk(), transmute(self))
+        mmtk::memory_manager::initialize_collection(Runtime::get().mmtk(), transmute(self));
+        Runtime::get().init_main();
     }
 
     pub unsafe fn state_save_and_set(&mut self, state: i8) -> i8 {
@@ -163,6 +176,14 @@ impl Thread {
         unsafe { &mut THREAD }
     }
 
+    pub fn get_registers(&self) -> (&PlatformRegisters, usize) {
+        (
+            self.platform_registers.as_ref().unwrap(),
+            size_of::<PlatformRegisters>(),
+        )
+    }
+
+
     pub(crate) fn register_worker(&mut self, controller: bool) {
         self.kind = if controller {
             ThreadKind::GCController
@@ -185,6 +206,12 @@ impl Thread {
         let local_state = MMTKLocalState {
             bump_pointer: 0,
             bump_limit: 0,
+            base: if cfg!(feature = "compression-oops") {
+                HeapCompressionScheme::base()
+            } else {
+                0
+            },
+            shift: SHIFT,
             los_threshold: 0,
             shadow_stack: ShadowStack::new(),
             needs_write_barrier: false,
@@ -195,43 +222,32 @@ impl Thread {
         let th = threads();
         th.add_thread(self as *mut Thread);
 
-        self.vm = MaybeUninit::new(VirtualMachine::new());
-
-        unsafe {
-            self.vm().prepare_stack();
-        }
-
         self.mmtk = MaybeUninit::new(local_state);
-
+        self.stack = StackBounds::current_thread_stack_bounds();
         self.mmtk().init();
     }
 
     pub unsafe fn deregister_mutator(&mut self) {
-        unsafe {
-            threads().remove_current_thread();
-            self.mmtk().store_bump_pointer();
-            mmtk::memory_manager::destroy_mutator(&mut self.mmtk().mutator);
-            //self.mmtk.assume_init_drop();
-            self.vm.assume_init_drop();
-            self.kind = ThreadKind::None;
-        }
+        threads().remove_current_thread();
+        self.mmtk().store_bump_pointer();
+        mmtk::memory_manager::destroy_mutator(&mut self.mmtk().mutator);
+        self.kind = ThreadKind::None;
     }
 
     pub fn mmtk(&mut self) -> &mut MMTKLocalState {
         unsafe { &mut *self.mmtk.as_mut_ptr() }
     }
 
-    pub fn vm(&mut self) -> &mut VirtualMachine {
-        unsafe { &mut *self.vm.as_mut_ptr() }
-    }
-
     /// Writes `value` to `cell[offset]`. Performs write-barrier if necessary.
-    pub fn reference_write(&mut self, mut cell: CellReference, offset: usize, value: Value) {
+    pub fn reference_write<T>(
+        &mut self,
+        mut cell: CellReference<T>,
+        offset: usize,
+        value: TaggedValue,
+    ) {
         // SAFETY: currently all GCs in mmtk-core use post-write barrier.
         // just set the value and only then check if we need to do write barrier.
-        unsafe {
-            cell.word_set_unchecked(offset, value);
-        }
+        unsafe { cell.value_set_unchecked(offset, value) }
         let mmtk = self.mmtk();
 
         if mmtk.needs_write_barrier && value.is_cell() {
@@ -246,7 +262,10 @@ impl Thread {
                 if unlikely((byte_val >> shift) & 1 == 1) {
                     let src = cell.0;
                     let slot = cell.edge(offset);
-                    let target = value.get_cell().0;
+                    let target = value
+                        .get_cell_reference_fast::<()>(cell.to_ptr() as _)
+                        .cell()
+                        .0;
                     mmtk.mutator
                         .barrier()
                         .object_reference_write_slow(src, slot, target);
@@ -271,6 +290,8 @@ impl Thread {
 pub struct MMTKLocalState {
     pub bump_pointer: usize,
     pub bump_limit: usize,
+    pub base: usize,
+    pub shift: usize,
     pub los_threshold: usize,
     pub inline_alloc: bool,
     pub needs_write_barrier: bool,
@@ -287,7 +308,7 @@ impl MMTKLocalState {
             .constraints()
             .max_non_los_default_alloc_bytes;
         self.needs_write_barrier = match GC_PLAN.get().unwrap() {
-            GCPlan::GenCopy | GCPlan::StickyImmix | GCPlan::GenImmix => true,
+            GCPlan::StickyImmix => true,
             _ => false,
         };
 
@@ -363,16 +384,16 @@ impl MMTKLocalState {
     pub fn alloc_small(&mut self, size: usize, type_id: CellTag) -> CellReference {
         debug_assert!(size <= self.los_threshold);
 
-        let res = self.bump_pointer;
+        let res = align_allocation(self.bump_pointer, align_of::<usize>(), 0);
 
         if likely(res + size <= self.bump_limit) {
             let objref = res as *mut SchemeHeader;
             unsafe {
                 objref.write(SchemeHeader::new(type_id));
 
-                self.bump_pointer += size;
+                self.bump_pointer = res + size;
 
-                return std::mem::transmute(objref);
+                return std::mem::transmute(objref.add(1));
             }
         }
 
@@ -383,7 +404,7 @@ impl MMTKLocalState {
         // do not check for `inline_alloc` here. If it is false
         // then `bump_pointer + size <= bump_limit` will fail.
         if likely(size <= self.los_threshold) {
-            let res = self.bump_pointer;
+            let res = align_allocation(self.bump_pointer, 16, 0);
 
             if likely(res + size <= self.bump_limit) {
                 let objref = res as *mut SchemeHeader;
@@ -395,9 +416,9 @@ impl MMTKLocalState {
                 unsafe {
                     objref.write(SchemeHeader::new(type_id));
 
-                    self.bump_pointer += size;
+                    self.bump_pointer = res + size;
 
-                    return std::mem::transmute(objref);
+                    return std::mem::transmute(objref.add(1));
                 }
             }
         }
@@ -406,6 +427,7 @@ impl MMTKLocalState {
     #[cold]
     #[inline(never)]
     pub fn alloc_slow(&mut self, size: usize, type_id: CellTag) -> CellReference {
+        let size = round_up_usize(size, 8, 0);
         if size > self.los_threshold {
             log::debug!(target: "capy", "LOS allocation of {} bytes requested", size);
             self.alloc_los(size, type_id)
@@ -415,29 +437,30 @@ impl MMTKLocalState {
                 self.store_bump_pointer();
                 let mem = self.mutator.alloc_slow(
                     size,
-                    std::mem::align_of::<usize>(),
+                    align_of::<usize>(),
                     0,
                     mmtk::AllocationSemantics::Default,
                 );
-                let objref = mem.to_mut_ptr::<SchemeHeader>();
-                objref.write(SchemeHeader::new(type_id));
-                let objref = std::mem::transmute(objref);
+
+                let objref: ObjectReference = std::mem::transmute(mem + OBJECT_REF_OFFSET);
+                let cell = CellReference::<()>(objref, Default::default());
+                *cell.header_mut() = SchemeHeader::new(type_id);
                 self.mutator
                     .post_alloc(objref, size, mmtk::AllocationSemantics::Default);
                 self.fetch_bump_pointer();
-                CellReference(objref, Default::default())
+                cell
             }
         } else {
             unsafe {
                 let mem = self.mutator.alloc(
                     size,
-                    std::mem::align_of::<usize>(),
+                    align_of::<usize>(),
                     0,
                     mmtk::AllocationSemantics::Default,
                 );
                 let objref = mem.to_mut_ptr::<SchemeHeader>();
                 objref.write(SchemeHeader::new(type_id));
-                let objref = std::mem::transmute(objref);
+                let objref = std::mem::transmute(objref.add(1));
 
                 self.mutator
                     .post_alloc(objref, size, mmtk::AllocationSemantics::Default);
@@ -448,34 +471,33 @@ impl MMTKLocalState {
 
     pub fn alloc_immortal(&mut self, size: usize, type_id: CellTag) -> CellReference {
         unsafe {
+            let size = round_up_usize(size, align_of::<usize>(), 0);
             let mem = self.mutator.alloc(
                 size,
-                std::mem::align_of::<usize>(),
-                0,
+                align_of::<usize>(),
+                OBJECT_REF_OFFSET as _,
                 mmtk::AllocationSemantics::Immortal,
             );
             let objref = mem.to_mut_ptr::<SchemeHeader>();
 
             objref.write(SchemeHeader::new(type_id));
-            let objref = std::mem::transmute(objref);
+            let objref = std::mem::transmute(objref.add(1));
             self.mutator
                 .post_alloc(objref, size, mmtk::AllocationSemantics::Immortal);
+            println!("alloc {:p}", objref.to_raw_address().to_ptr::<u8>());
             CellReference(objref, Default::default())
         }
     }
 
     fn alloc_los(&mut self, size: usize, type_id: CellTag) -> CellReference {
         unsafe {
-            let mem = self.mutator.alloc(
-                size,
-                std::mem::align_of::<usize>(),
-                0,
-                mmtk::AllocationSemantics::Los,
-            );
+            let mem =
+                self.mutator
+                    .alloc(size, align_of::<usize>(), 0, mmtk::AllocationSemantics::Los);
             let objref = mem.to_mut_ptr::<SchemeHeader>();
 
             objref.write(SchemeHeader::new(type_id));
-            let objref = std::mem::transmute(objref);
+            let objref = std::mem::transmute(objref.add(1));
             self.mutator
                 .post_alloc(objref, size, mmtk::AllocationSemantics::Los);
             CellReference(objref, Default::default())
@@ -596,9 +618,14 @@ static mut SINK: u8 = 0;
 #[thread_local]
 static mut THREAD: Thread = Thread {
     id: 0,
+    top_entry_frame: null_mut(),
+    stack: StackBounds {
+        bound: null_mut(),
+        origin: null_mut(),
+    },
+    platform_registers: None,
+    approx_sp: null(),
     selector: AllocatorSelector::None,
-    vm: MaybeUninit::uninit(),
-
     mmtk: MaybeUninit::uninit(),
     safepoint_addr: null_mut(),
     gc_state: 2,

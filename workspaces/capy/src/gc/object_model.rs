@@ -4,7 +4,7 @@ use std::{
 };
 
 use mmtk::{
-    util::{Address, ObjectReference, alloc::fill_alignment_gap},
+    util::{alloc::fill_alignment_gap, Address, ObjectReference},
     vm::ObjectModel,
 };
 
@@ -17,27 +17,33 @@ pub struct VMObjectModel;
 impl VMObjectModel {
     #[inline(always)]
     pub fn raw_bytes_used(cell: CellReference) -> usize {
-        match cell.cell_tag() {
-            CellTag::PAIR | CellTag::RATIONAL | CellTag::COMPLEX => 3 * size_of::<Value>(),
-            CellTag::PROGRAM => {
-                let nfreevars = cell.u64_ref(CellReference::<Program>::NUM_FREE_VARS_OFFSET);
-                size_of::<Value>() * 3 + (size_of::<Value>() * nfreevars as usize)
-            }
+        round_up_usize(
+            match cell.cell_tag() {
+                CellTag::PAIR | CellTag::RATIONAL | CellTag::COMPLEX => 2 * size_of::<Value>(),
+                CellTag::PROGRAM => {
+                    let nfreevars = cell.word_ref(CellReference::<Program>::NUM_FREE_VARS_OFFSET);
+                    size_of::<Value>() * 2 + (size_of::<Value>() * nfreevars as usize)
+                }
 
-            tag if tag.feature() == CellFeature::VectorLike => {
-                let length = cell.u64_ref(1);
-                size_of::<Value>() * (2 + length as usize)
-            }
+                CellTag::FLONUM => size_of::<f64>(),
 
-            tag if tag.feature() == CellFeature::BytevectorLike => {
-                let length = cell.u64_ref(1);
-                2 * size_of::<Value>() + length as usize
-            }
+                tag if tag.feature() == CellFeature::VectorLike => {
+                    let length = cell.word_ref(CellReference::<Vector>::LENGTH_OFFSET);
+                    size_of::<Value>() * (1 + length as usize)
+                }
 
-            _ => {
-                todo!()
-            }
-        }
+                tag if tag.feature() == CellFeature::BytevectorLike => {
+                    let length = cell.word_ref(CellReference::<Bytevector>::LENGTH_OFFSET);
+                    1 * size_of::<Value>() + length as usize
+                }
+                
+                _ => {
+                    todo!()
+                }
+            } + size_of::<SchemeHeader>(),
+            8,
+            0,
+        )
     }
 
     #[inline(always)]
@@ -48,7 +54,7 @@ impl VMObjectModel {
             size += HASHCODE_SIZE;
         }
 
-        round_up_usize(size, align_of::<usize>(), 0)
+        size
     }
     #[inline(always)]
     pub fn bytes_required_when_copied(cell: CellReference) -> usize {
@@ -58,7 +64,7 @@ impl VMObjectModel {
             size += HASHCODE_SIZE;
         }
 
-        round_up_usize(size, align_of::<usize>(), 0)
+        size
     }
 
     #[inline(always)]
@@ -74,7 +80,7 @@ impl VMObjectModel {
         assert!(to_address.is_zero() || to_obj.to_raw_address().is_zero());
 
         let mut copy_bytes = num_bytes;
-        let mut obj_ref_offset = 0;
+        let mut obj_ref_offset = OBJECT_REF_OFFSET;
         let hash_state;
 
         let cell = CellReference::<()>(from_obj, PhantomData);
@@ -114,6 +120,7 @@ impl VMObjectModel {
             debug_assert_eq!(to_obj.to_raw_address(), to_address + obj_ref_offset);
         }
 
+
         if hash_state == HASH_STATE_HASHED {
             let cell = CellReference::<()>(from_obj, PhantomData);
             let hashcode = cell.hashcode();
@@ -127,7 +134,7 @@ impl VMObjectModel {
         to_obj
     }
     fn get_offset_for_alignment(object: ObjectReference) -> usize {
-        let mut offset = 0;
+        let mut offset = OBJECT_REF_OFFSET as usize;
         let cell = CellReference::<()>(object, PhantomData);
 
         if cell.header().cell_hash() != HASH_STATE_UNHASHED as u32 {
@@ -159,7 +166,7 @@ impl ObjectModel<CapyVM> for VMObjectModel {
 
     const UNIFIED_OBJECT_REFERENCE_ADDRESS: bool = false;
     const VM_WORST_CASE_COPY_EXPANSION: f64 = 1.5;
-    const OBJECT_REF_OFFSET_LOWER_BOUND: isize = -HASHCODE_OFFSET;
+    const OBJECT_REF_OFFSET_LOWER_BOUND: isize = -(HASHCODE_OFFSET + OBJECT_REF_OFFSET);
 
     fn ref_to_address(object: mmtk::util::ObjectReference) -> mmtk::util::Address {
         object.to_raw_address()
@@ -175,13 +182,13 @@ impl ObjectModel<CapyVM> for VMObjectModel {
         let hash_state = cell.header().cell_hash();
 
         if hash_state == HASH_STATE_HASHED_AND_MOVED as u32 {
-            return object.to_raw_address() - HASHCODE_SIZE;
+            return object.to_raw_address() + (-(HASHCODE_SIZE as isize + OBJECT_REF_OFFSET));
         }
-        object.to_raw_address()
+        object.to_raw_address() + (-OBJECT_REF_OFFSET)
     }
 
     fn ref_to_header(object: mmtk::util::ObjectReference) -> mmtk::util::Address {
-        object.to_raw_address()
+        object.to_raw_address() + (-OBJECT_REF_OFFSET)
     }
 
     fn get_type_descriptor(_: ObjectReference) -> &'static [i8] {
@@ -196,12 +203,12 @@ impl ObjectModel<CapyVM> for VMObjectModel {
         let bytes = Self::bytes_required_when_copied(CellReference::<()>(from, PhantomData));
         let align = Self::get_align_when_copied(from);
         let offset = Self::get_align_offset_when_copied(from);
+       
         let region = copy_context.alloc_copy(from, bytes, align, offset, semantics);
 
         let to_obj = Self::move_object(region, from, ObjectReference::NULL, bytes);
 
         copy_context.post_copy(to_obj, bytes, semantics);
-        println!("copy {:p}->{:p}({})", from.to_raw_address().to_ptr::<()>(), to_obj.to_raw_address().to_ptr::<()>(), bytes);
         to_obj
     }
 
@@ -215,7 +222,7 @@ impl ObjectModel<CapyVM> for VMObjectModel {
         let bytes = if copy {
             let bytes = Self::bytes_required_when_copied(CellReference::<()>(from, PhantomData));
             Self::move_object(unsafe { Address::zero() }, from, to, bytes);
-            bytes 
+            bytes
         } else {
             Self::bytes_used(CellReference::<()>(from, PhantomData))
         };
@@ -255,7 +262,7 @@ impl ObjectModel<CapyVM> for VMObjectModel {
             res += HASHCODE_SIZE;
         }
 
-        ObjectReference::from_raw_address(res)
+        ObjectReference::from_raw_address(res + OBJECT_REF_OFFSET)
     }
 
     fn dump_object(object: ObjectReference) {

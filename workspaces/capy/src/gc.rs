@@ -3,20 +3,22 @@ pub struct CapyVM;
 
 use mmtk::{
     util::ObjectReference,
-    vm::{
-        edge_shape::{SimpleEdge, UnimplementedMemorySlice},
-        ReferenceGlue, VMBinding,
-    },
+    vm::{ReferenceGlue, VMBinding},
 };
+
+use self::edges::ScmEdge;
 
 pub mod active_plan;
 pub mod collection;
+pub mod edges;
+pub mod memory_region;
 pub mod object_model;
+pub mod ptr_compr;
 pub mod safepoint;
 pub mod scanning;
 pub mod shadow_stack;
+pub mod stack;
 pub mod signals;
-pub mod memory_region;
 pub mod virtual_memory;
 
 impl VMBinding for CapyVM {
@@ -24,9 +26,12 @@ impl VMBinding for CapyVM {
     type VMScanning = scanning::VMScanning;
     type VMCollection = collection::VMCollection;
     type VMActivePlan = active_plan::VMActivePlan;
-    type VMEdge = SimpleEdge;
-    type VMMemorySlice = UnimplementedMemorySlice;
+    type VMEdge = ScmEdge;
+    type VMMemorySlice = ScmEdge;
     type VMReferenceGlue = VMReferenceGlue;
+
+    const MAX_ALIGNMENT: usize = 8;
+    const MIN_ALIGNMENT: usize = 8;
 }
 
 pub struct VMReferenceGlue;

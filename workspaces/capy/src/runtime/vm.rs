@@ -1,17 +1,13 @@
 use std::{
     mem::{size_of, transmute},
-    ptr::{null, null_mut},
+    ptr::{null, null_mut, addr_of_mut},
 };
 
-use mmtk::{
-    util::Address,
-    vm::{edge_shape::SimpleEdge, RootsWorkFactory},
-};
+use mmtk::{util::Address, vm::RootsWorkFactory};
 
 use crate::{
-    gc::CapyVM,
+    gc::{edges::ScmEdge, CapyVM},
     interpreter::{
-        stackframe::{scm_frame_dynamic_link, scm_frame_previous_sp},
         StackElement,
     },
 };
@@ -52,7 +48,7 @@ impl VirtualMachine {
             stack_size: 0,
             stack_bottom: null_mut(),
             stack_top: null_mut(),
-            registers: null_mut()
+            registers: null_mut(),
         }
     }
 
@@ -66,8 +62,8 @@ impl VirtualMachine {
         self.sp = self.stack_top;
     }
 
-    pub(crate) unsafe fn mark_stack(&mut self, factory: &mut impl RootsWorkFactory<SimpleEdge>) {
-        let mut edges = vec![];
+    pub(crate) unsafe fn mark_stack(&mut self, _factory: &mut impl RootsWorkFactory<ScmEdge>) {
+       /*  let mut edges = vec![];
 
         let mut fp = self.fp;
         let mut sp = self.sp;
@@ -79,9 +75,7 @@ impl VirtualMachine {
                 // and Value::is_cell() would return true for them as well when MMTk would panic on them.
                 if mmtk::memory_manager::is_in_mmtk_spaces::<CapyVM>(transmute(sp.read().as_ptr)) {
                     if (*sp).as_value.is_cell() {
-                        edges.push(SimpleEdge::from_address(Address::from_mut_ptr(
-                            &mut (&mut *sp).as_value,
-                        )))
+                        edges.push(ScmEdge::from(addr_of_mut!((*sp).as_value)));
                     }
                 }
 
@@ -90,8 +84,8 @@ impl VirtualMachine {
             sp = scm_frame_previous_sp(fp);
             fp = scm_frame_dynamic_link(fp);
         }
-
-        factory.create_process_edge_roots_work(edges);
+        
+        factory.create_process_edge_roots_work(edges);*/
     }
 }
 

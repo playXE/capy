@@ -8,13 +8,11 @@
 
 use std::intrinsics::unlikely;
 
-use mmtk::{
-    util::Address,
-    vm::{edge_shape::SimpleEdge, RootsWorkFactory},
-};
+use mmtk::{util::Address, vm::RootsWorkFactory};
 
-use crate::runtime::value::Value;
+use crate::runtime::value::*;
 
+use super::edges::ScmEdge;
 /// Implementation of shadow-stack that uses separate stack for roots.
 /// Roots are appended to the stack before operation that may trigger GC and
 /// restored after the operation.
@@ -28,10 +26,10 @@ use crate::runtime::value::Value;
 ///
 pub struct ShadowStack {
     root_stack_index: usize,
-    root_stack_base: *mut Value,
-    root_stack_top: *mut Value,
-    root_stack_limit: *mut Value,
-    root_stack_memory: *mut Value,
+    root_stack_base: *mut TaggedValue,
+    root_stack_top: *mut TaggedValue,
+    root_stack_limit: *mut TaggedValue,
+    root_stack_memory: *mut TaggedValue,
     root_stack_size: usize,
 }
 
@@ -51,8 +49,8 @@ impl ShadowStack {
         self.root_stack_size = 1024;
         self.root_stack_index = 1024;
         self.root_stack_memory = {
-            mmtk::memory_manager::malloc(self.root_stack_size * std::mem::size_of::<Value>())
-                .to_mut_ptr::<Value>()
+            mmtk::memory_manager::malloc(self.root_stack_size * std::mem::size_of::<TaggedValue>())
+                .to_mut_ptr::<TaggedValue>()
         };
         self.root_stack_base = self.root_stack_memory;
         self.root_stack_top = self.root_stack_memory;
@@ -64,8 +62,8 @@ impl ShadowStack {
 
         unsafe {
             let new_root_stack_memory =
-                mmtk::memory_manager::malloc(root_stack_size * std::mem::size_of::<Value>())
-                    .to_mut_ptr::<Value>();
+                mmtk::memory_manager::malloc(root_stack_size * std::mem::size_of::<TaggedValue>())
+                    .to_mut_ptr::<TaggedValue>();
 
             std::ptr::copy_nonoverlapping(
                 self.root_stack_memory,
@@ -84,7 +82,7 @@ impl ShadowStack {
         }
     }
     #[inline(always)]
-    pub fn push_to_save(&mut self, value: Value) {
+    pub fn push_to_save(&mut self, value: TaggedValue) {
         unsafe {
             if unlikely(self.root_stack_top >= self.root_stack_limit) {
                 self.expand();
@@ -95,8 +93,11 @@ impl ShadowStack {
     }
 
     #[inline(always)]
-    pub fn push_many(&mut self, values: &[Value]) {
+    pub fn push_many(&mut self, values: &[TaggedValue]) {
         unsafe {
+            if values.is_empty() {
+                return;
+            }
             if unlikely(self.root_stack_top.add(values.len()) >= self.root_stack_limit) {
                 self.expand();
             }
@@ -106,12 +107,12 @@ impl ShadowStack {
     }
 
     #[inline(always)]
-    pub fn pop_many<const N: usize>(&mut self) -> [Value; N] {
+    pub fn pop_many<const N: usize>(&mut self) -> [TaggedValue; N] {
         unsafe {
-            let mut result = std::mem::MaybeUninit::<[Value; N]>::uninit();
+            let mut result = std::mem::MaybeUninit::<[TaggedValue; N]>::uninit();
             std::ptr::copy_nonoverlapping(
                 self.root_stack_top.sub(N),
-                result.as_mut_ptr() as *mut Value,
+                result.as_mut_ptr() as *mut TaggedValue,
                 N,
             );
             self.root_stack_top = self.root_stack_top.sub(N);
@@ -120,7 +121,7 @@ impl ShadowStack {
     }
 
     #[inline(always)]
-    pub fn pop_to_restore(&mut self) -> Value {
+    pub fn pop_to_restore(&mut self) -> TaggedValue {
         unsafe {
             self.root_stack_top = self.root_stack_top.sub(1);
             let value = self.root_stack_top.read();
@@ -134,13 +135,14 @@ impl ShadowStack {
     /// # Safety
     ///
     /// Should be invoked only by GC code.
-    pub unsafe fn mark_roots(&mut self, factory: &mut impl RootsWorkFactory<SimpleEdge>) {
+    pub unsafe fn mark_roots(&mut self, factory: &mut impl RootsWorkFactory<ScmEdge>) {
         let mut edges = Vec::with_capacity(64);
         let mut ptr = self.root_stack_base;
 
         while ptr < self.root_stack_top {
-            if (*ptr).is_cell() {
-                edges.push(SimpleEdge::from_address(Address::from_mut_ptr(ptr)));
+            let val = ptr.read_unaligned();
+            if val.is_cell() {
+                edges.push(ScmEdge::from(ptr));
             }
             if edges.len() > 64 {
                 factory.create_process_edge_roots_work(std::mem::take(&mut edges));
@@ -162,7 +164,6 @@ impl ShadowStack {
         self.root_stack_top = self.root_stack_base.add(offset);
     }
 }
-
 
 #[macro_export]
 macro_rules! count {
@@ -250,4 +251,3 @@ where
         }
     }
 }
-

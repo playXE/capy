@@ -401,7 +401,6 @@ pub fn pass_letrec(x: &Rc<TreeNode>) -> Rc<TreeNode> {
             } else {
                 // "Otherwise we resort to assignment". Also
                 // consumes any fixes saved up
-                println!("assignment");
                 let new_fixes = make_fixes(&state.graph, fixes, body);
                 fixes.clear();
                 make_bind(
