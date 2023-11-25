@@ -2,7 +2,7 @@ use super::{edges::ScmEdge, CapyVM};
 use crate::runtime::{
     cell::{CellFeature, CellReference, CellTag, Pair, Rational, Vector},
     thread::Thread,
-    Runtime,
+    Runtime, code_block::CodeBlock, value::Tagged,
 };
 use mmtk::{vm::Scanning, MutatorContext};
 use std::{marker::PhantomData, mem::transmute};
@@ -56,7 +56,11 @@ impl Scanning<CapyVM> for VMScanning {
             }
 
             CellTag::FLONUM => (),
-
+            CellTag::CODE_BLOCK => {
+                let mut cell = cell.downcast::<CodeBlock>();
+                let constant_pool = &mut cell.constant_pool;
+                edge_visitor.visit_edge(ScmEdge::from(constant_pool as *mut Tagged<CellReference<_>>));
+            }
             tag if tag.feature() == CellFeature::VectorLike => {
                 let length = cell.word_ref(CellReference::<Vector>::LENGTH_OFFSET);
                 for i in 0..length {

@@ -592,6 +592,16 @@ true~a
             (lambda (arg size)
                 (string-append "\n && "(argument-fits-check arg size)))))))
 
+    (define (opcode-field-indexes op)
+        (apply string-append 
+            (map* (lambda (arg)
+                (format "pub const ~a_~a_INDEX: usize = ~a;~%"
+                    (opcode-upcase-name op)
+                    (string-upcase (symbol->string (argument-name arg)))
+                    (argument-index arg)))
+                (opcode-args op))))
+
+
     (define (opcode-struct op)
         (let (
             [id (opcode-opcode-id op)]
@@ -619,6 +629,7 @@ impl std::ops::DerefMut for ~a {
     }
 }
 
+
 impl ~a {
     ~a
     ~a
@@ -629,6 +640,8 @@ impl ~a {
     ~a
     ~a
 }
+
+~a
 "
               (opcode-documentation op)
               capitalized-name (opcode-members op)
@@ -643,6 +656,7 @@ impl ~a {
               (opcode-emitter-impl op)
               (opcode-emitter op)
               (opcode-dumper op)
+              (opcode-field-indexes op)
               )))
     
     (define (opcode-print-members op prefix f)

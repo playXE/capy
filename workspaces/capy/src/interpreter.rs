@@ -4,6 +4,7 @@ pub mod llint;
 pub mod stackframe;
 pub mod register;
 pub mod entry_frame;
+pub mod slow_paths;
 
 #[derive(Clone, Copy)]
 #[repr(C)]

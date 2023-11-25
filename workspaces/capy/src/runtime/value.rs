@@ -149,7 +149,7 @@ impl<T> Tagged<T> {
         Self(TaggedBase::new(address), PhantomData)
     }
 
-    pub const IS_FULL: bool = !cfg!(feature = "compressed-oops");
+    pub const IS_FULL: bool = true;
 
     pub const fn ptr(self) -> usize {
         self.0.ptr

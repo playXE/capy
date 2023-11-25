@@ -17,9 +17,10 @@ use capy::{
         utils::is_aligned,
         value::{Tagged, Value, *},
         Runtime,
-    },
+    }, interpreter::llint::InterpreterGenerator,
 };
-use macroassembler::assembler::{link_buffer::LinkBuffer, x86assembler::*};
+use capy::interpreter::llint::*;
+use macroassembler::{assembler::{link_buffer::LinkBuffer, x86assembler::*, abstract_macro_assembler::Address}, jit::gpr_info::{T0, T1, T2, T3}};
 
 fn main() {
     env_logger::init();
@@ -29,10 +30,18 @@ fn main() {
     enter_scheme(|thread| {
         unsafe { thread.initialize_main() }
         
-        let x = thread.make_flonum::<true>(42.42).to_value();
+        let mut llint = InterpreterGenerator::new();
 
-        mmtk::memory_manager::handle_user_collection_request(Runtime::get().mmtk(), thread.to_mmtk());
+        llint.bump_allocate(THREAD, T0, INVALID_GPR, 48, T1);
 
-        println!("{:p}->{:x}", &x, x.ptr);
+        let mut code = LinkBuffer::from_macro_assembler(&mut *llint).unwrap();
+
+        let mut out = String::new();
+
+        code.finalize_with_disassembly(true, "", &mut out).unwrap();
+
+        println!("{}", out);
+
+
     });
 }

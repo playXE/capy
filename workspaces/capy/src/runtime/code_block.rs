@@ -15,3 +15,21 @@ pub struct CodeBlock {
     pub num_parameters: Word,
     pub instructions: *const u8,
 }
+
+impl super::cell::Cell for CodeBlock {
+    const TAG: super::cell::CellTag = super::cell::CellTag::CODE_BLOCK;
+}
+
+impl std::ops::Deref for CellReference<CodeBlock> {
+    type Target = CodeBlock;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*self.to_ptr().cast() }
+    }
+}
+
+impl std::ops::DerefMut for CellReference<CodeBlock> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { &mut *self.to_ptr().cast() }
+    }
+}

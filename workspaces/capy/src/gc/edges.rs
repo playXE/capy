@@ -5,8 +5,12 @@ use mmtk::{
     util::{Address, ObjectReference},
     vm::edge_shape::{Edge, MemorySlice, UnimplementedMemorySliceEdgeIterator},
 };
+use num_traits::{ToPrimitive, Unsigned};
 
-use crate::{gc::CapyVM, runtime::value::*};
+use crate::{
+    gc::CapyVM,
+    runtime::{cell::CellReference, tagged::TaggedImpl, value::*},
+};
 
 use super::ptr_compr::HeapCompressionScheme;
 
@@ -21,18 +25,17 @@ pub fn initialize_compressed_oops_base_and_shift() {
     HeapCompressionScheme::init_base(mmtk::memory_manager::starting_heap_address().as_usize())
 }
 
-
-/// Custom edge type implementation for CapyScheme. 
-/// 
+/// Custom edge type implementation for CapyScheme.
+///
 /// We need this to be custom because of two things:
 /// 1) Compressed pointers.
 /// 2) Pointer tagging.
-/// 
-/// First of all, compressed pointers before actually being updated or scanned need to be 
-/// decompressed, and then again compressed if GC decides to move them. 
-/// Then, our pointer tagging scheme assumes that top bit is set to 1 for objects, so we 
+///
+/// First of all, compressed pointers before actually being updated or scanned need to be
+/// decompressed, and then again compressed if GC decides to move them.
+/// Then, our pointer tagging scheme assumes that top bit is set to 1 for objects, so we
 /// have to subtract 1 from the address to untag it and add 1 to tag it back.
-/// 
+///
 /// Alternative is to use `scan_object_and_trace_edges` instead of `scan_object`
 /// but it seems to be slower than enqueing edges properly.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -101,15 +104,14 @@ impl From<&mut TaggedValue> for ScmEdge {
     }
 }
 
-impl From<*mut TaggedValue> for ScmEdge {
-    fn from(addr: *mut TaggedValue) -> Self {
+impl<T: Unsigned + Copy + ToPrimitive> From<*mut TaggedImpl<T>> for ScmEdge {
+    fn from(addr: *mut TaggedImpl<T>) -> Self {
         unsafe {
             let val = addr.read_unaligned();
             debug_assert!(val.is_cell());
             let address = Address::from_ptr(addr);
-            println!("edge {:p}->{:x}", addr, HeapCompressionScheme::decompress_tagged(addr.read_unaligned().ptr));
             Self {
-                addr: if TaggedValue::IS_FULL {
+                addr: if TaggedImpl::<T>::IS_FULL {
                     address
                 } else {
                     Self::tag_address(address)
@@ -119,11 +121,20 @@ impl From<*mut TaggedValue> for ScmEdge {
     }
 }
 
+impl<T> From<*mut Tagged<CellReference<T>>> for ScmEdge {
+    fn from(value: *mut Tagged<CellReference<T>>) -> Self {
+        unsafe {
+            let val = value.read_unaligned();
+            debug_assert!(val.0.is_cell());
+            let address = Address::from_ptr(value);
+
+            Self { addr: address }
+        }
+    }
+}
+
 impl From<Address> for ScmEdge {
     fn from(value: Address) -> Self {
-        unsafe {
-            println!("addr edge: {:p}->{:x}", value.to_ptr::<TaggedValue>(), HeapCompressionScheme::decompress_tagged(value.to_ptr::<TaggedValue>().read_unaligned().ptr));
-        }
         Self { addr: value }
     }
 }

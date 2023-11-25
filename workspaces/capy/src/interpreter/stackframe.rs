@@ -52,6 +52,8 @@ pub enum CallFrameSlot {
     FirstArgument = Self::ArgumentCount as usize + 1,
 }
 
+pub const CALL_SITE_INDEX_OFFSET: usize = CallFrameSlot::ArgumentCount as usize * size_of::<u64>() + size_of::<u32>();
+
 /// Represents the current state of program execution.
 /// Passed as the first argument to most functions.
 #[repr(C)]
