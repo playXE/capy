@@ -11,35 +11,42 @@ use macroassembler::{
         abstract_macro_assembler::{
             AbsoluteAddress, Address, BaseIndex, Extend, Jump, JumpList, Label, Operand, Scale,
         },
+        link_buffer::LinkBuffer,
         x86assembler::INVALID_GPR,
         RelationalCondition, ResultCondition, TargetMacroAssembler,
     },
     jit::fpr_info::*,
     jit::gpr_info::*,
+    wtf::executable_memory_handle::CodeRef,
 };
 use mmtk::util::{
     alloc::{AllocatorInfo, AllocatorSelector},
     metadata::side_metadata::GLOBAL_SIDE_METADATA_VM_BASE_ADDRESS,
 };
+use once_cell::sync::Lazy;
 
 use crate::{
     bytecode::{
-        conversions::OpcodeSize, macros::NUMBER_OF_BYTECODE_IDS, opcodes::*, OpcodeID,
-        FIRST_CONSTANT_REGISTER_INDEX16, FIRST_CONSTANT_REGISTER_INDEX32,
-        FIRST_CONSTANT_REGISTER_INDEX8,
+        conversions::OpcodeSize, macros::*, opcodes::*, OpcodeID, FIRST_CONSTANT_REGISTER_INDEX16,
+        FIRST_CONSTANT_REGISTER_INDEX32, FIRST_CONSTANT_REGISTER_INDEX8,
     },
     gc::{ptr_compr::HeapCompressionScheme, CapyVM},
     runtime::{
-        cell::OBJECT_REF_OFFSET,
+        cell::{CellReference, OBJECT_REF_OFFSET},
         code_block::CodeBlock,
         thread::{MMTKLocalState, Thread},
-        value::{self, Word, SMI_SHIFT_SIZE, SMI_TAG_SIZE},
+        value::{
+            self, undefined, Tagged, Word, HEAP_OBJECT_TAG, HEAP_OBJECT_TAG_MASK, SMI_SHIFT_SIZE,
+            SMI_TAG, SMI_TAG_MASK, SMI_TAG_SIZE,
+        },
         Runtime,
     },
 };
 
 use super::{
     entry_frame::VMEntryRecord,
+    proto_callframe::ProtoCallFrame,
+    register::{AsBits, Register},
     stackframe::{CallFrameSlot, CallerFrameAndPC, CALL_SITE_INDEX_OFFSET},
 };
 
@@ -89,14 +96,18 @@ cfg_if::cfg_if! {
         pub const PB: u8 = CS2;
         pub const HEAP_BASE: u8 = CS3;
         pub const THREAD: u8 = CS4;
+        pub const EXTRA_TEMP_REG: u8 = T5;
     } else if #[cfg(all(windows, target_arch="x86_64"))] {
         pub const PB: u8 = CS0;
         pub const HEAP_BASE: u8 = CS1;
         pub const THREAD: u8 = CS2;
+        pub const EXTRA_TEMP_REG: u8 = T0;
     } else {
         compile_error!("Unsupported target architecture");
     }
 }
+
+pub const SCALE: Scale = Scale::TimesEight;
 
 pub const OPCODE_ID_NARROW_SIZE: usize = 1;
 pub const OPCODE_ID_WIDE16_SIZE: usize = 2; // Wide16 prefix + OpcodeID
@@ -118,7 +129,7 @@ pub const VM_ENTRY_TOTAL_FRAME_SIZE: usize =
 pub struct InterpreterGenerator {
     asm: TargetMacroAssembler,
     opcode_handlers: HashMap<OpcodeID, (Label, Label, Label)>,
-    slowpaths: Vec<Box<dyn FnOnce(Self)>>,
+    slowpaths: Vec<Box<dyn FnOnce(&mut Self)>>,
 }
 
 impl std::ops::Deref for InterpreterGenerator {
@@ -686,9 +697,9 @@ impl InterpreterGenerator {
     ) {
         self.load_pc();
         self.get_operand(size, dst_virtual_register, T1);
-        self.store64(
+        self.store_word(
             RETURN_VALUE_GPR,
-            BaseIndex::new(CFR, T1, Scale::TimesEight, 0, Extend::None),
+            BaseIndex::new(CFR, T1, SCALE, 0, Extend::None),
         );
         dispatch(self);
     }
@@ -701,26 +712,28 @@ impl InterpreterGenerator {
     ) {
         self.load_pc();
         self.get_operand(size, dst_virtual_register, T1);
-        self.store64(
+        self.store_word(
             RETURN_VALUE_GPR,
-            BaseIndex::new(CFR, T1, Scale::TimesEight, 0, Extend::None),
+            BaseIndex::new(CFR, T1, SCALE, 0, Extend::None),
         );
         dispatch(self);
     }
 
     pub fn load_constant(&mut self, size: OpcodeSize, index: u8, value: u8) {
         self.load64(Address::new(CFR, CODE_BLOCK as i32), value);
+        self.untag_object(value, value);
         self.load64(
             Address::new(value, offset_of!(CodeBlock, constant_pool) as i32),
             value,
         );
+        self.untag_object(value, value);
         match size {
             OpcodeSize::Narrow => {
                 self.load_word(
                     BaseIndex::new(
                         value,
                         index,
-                        Scale::TimesEight,
+                        SCALE,
                         -(FIRST_CONSTANT_REGISTER_INDEX8 as i32 * size_of::<Word>() as i32)
                             + size_of::<Word>() as i32,
                         Extend::None,
@@ -734,8 +747,9 @@ impl InterpreterGenerator {
                     BaseIndex::new(
                         value,
                         index,
-                        Scale::TimesEight,
-                        -(FIRST_CONSTANT_REGISTER_INDEX16 as i32 * 8) + size_of::<Word>() as i32,
+                        SCALE,
+                        -(FIRST_CONSTANT_REGISTER_INDEX16 as i32 * size_of::<Word>() as i32)
+                            + size_of::<Word>() as i32,
                         Extend::None,
                     ),
                     value,
@@ -744,10 +758,7 @@ impl InterpreterGenerator {
 
             OpcodeSize::Wide32 => {
                 self.sub64(FIRST_CONSTANT_REGISTER_INDEX32 as i32, index);
-                self.load_word(
-                    BaseIndex::new(value, index, Scale::TimesEight, 0, Extend::None),
-                    value,
-                );
+                self.load_word(BaseIndex::new(value, index, SCALE, 0, Extend::None), value);
             }
         }
     }
@@ -760,10 +771,7 @@ impl InterpreterGenerator {
                     index,
                     FIRST_CONSTANT_REGISTER_INDEX8 as i32,
                 );
-                self.load64(
-                    BaseIndex::new(CFR, index, Scale::TimesEight, 0, Extend::None),
-                    value,
-                );
+                self.load64(BaseIndex::new(CFR, index, SCALE, 0, Extend::None), value);
                 j
             }
 
@@ -773,10 +781,7 @@ impl InterpreterGenerator {
                     index,
                     FIRST_CONSTANT_REGISTER_INDEX16 as i32,
                 );
-                self.load64(
-                    BaseIndex::new(CFR, index, Scale::TimesEight, 0, Extend::None),
-                    value,
-                );
+                self.load64(BaseIndex::new(CFR, index, SCALE, 0, Extend::None), value);
                 j
             }
 
@@ -786,10 +791,7 @@ impl InterpreterGenerator {
                     index,
                     FIRST_CONSTANT_REGISTER_INDEX32 as i32,
                 );
-                self.load64(
-                    BaseIndex::new(CFR, index, Scale::TimesEight, 0, Extend::None),
-                    value,
-                );
+                self.load64(BaseIndex::new(CFR, index, SCALE, 0, Extend::None), value);
                 j
             }
         };
@@ -828,6 +830,25 @@ impl InterpreterGenerator {
         }
     }
 
+    pub fn ccall2(&mut self, func: impl Into<Operand>) {
+        cfg_if::cfg_if! {
+            if #[cfg(all(windows, target_arch="x86_64"))]
+            {
+                self.mov(ARGUMENT_GPR1, ARGUMENT_GPR2);
+                self.mov(ARGUMENT_GPR0, ARGUMENT_GPR1);
+                self.sub64(64i32, SP);
+                self.mov(SP, ARGUMENT_GPR0);
+                self.add64(32i32, ARGUMENT_GPR0);
+                self.asm.call_op(Some(func));
+                self.mov(Address::new(RETURN_VALUE_GPR, 8), RETURN_VALUE_GPR2);
+                self.mov(Address::new(RETURN_VALUE_GPR, 0), RETURN_VALUE_GPR);
+                self.add64(64i32, SP);
+            } else {
+                self.asm.call_op(Some(func));
+            }
+        }
+    }
+
     pub fn call_slow_path(&mut self, slow_path: impl Into<Operand>) {
         self.prepare_state_for_ccall();
         self.mov(THREAD, ARGUMENT_GPR0);
@@ -850,7 +871,7 @@ impl InterpreterGenerator {
     pub fn load_variable(&mut self, size: OpcodeSize, field_index: usize, value_reg: u8) {
         get_operand!(self, size, field_index, value_reg);
         self.load_word(
-            BaseIndex::new(CFR, value_reg, Scale::TimesEight, 0, Extend::None),
+            BaseIndex::new(CFR, value_reg, SCALE, 0, Extend::None),
             value_reg,
         );
     }
@@ -859,7 +880,7 @@ impl InterpreterGenerator {
         get_operand!(self, size, field_index, value_reg);
         self.store_word(
             value_reg,
-            BaseIndex::new(CFR, value_reg, Scale::TimesEight, 0, Extend::None),
+            BaseIndex::new(CFR, value_reg, SCALE, 0, Extend::None),
         );
     }
 
@@ -906,8 +927,6 @@ impl InterpreterGenerator {
         con_size_in_bytes: usize,
         t1: u8,
     ) -> JumpList {
-        assert!(obj == RETURN_VALUE_GPR, "object must be in rax for cmpxchg");
-
         let max_non_los_bytes = Thread::current().mmtk().los_threshold;
 
         let mut jl = JumpList::new();
@@ -949,7 +968,7 @@ impl InterpreterGenerator {
         if var_size_in_bytes == INVALID_GPR {
             self.lea64(Address::new(obj, con_size_in_bytes as i32), end);
         } else {
-            self.add64_rrr(obj, var_size_in_bytes as i32, end);
+            self.add64_rrr(var_size_in_bytes as i32, obj, end);
         }
         // slowpath if end < obj
         jl.push(self.branch64(RelationalCondition::Below, end, obj));
@@ -961,14 +980,447 @@ impl InterpreterGenerator {
         jl
     }
 
+    pub fn tag_object(&mut self, val: u8, dest: u8) {
+        self.add64_rrr(HEAP_OBJECT_TAG as i32, val, dest);
+    }
+
+    pub fn untag_object(&mut self, src: u8, dest: u8) {
+        self.sub64_rrr(src, HEAP_OBJECT_TAG as i32, dest);
+    }
+
+    pub fn decompress(&mut self, src: u8, dest: u8) {
+        if cfg!(feature = "compressed-oops") {
+            self.add64_rrr(src, HEAP_BASE, dest);
+        } else {
+            self.mov(src, dest);
+        }
+    }
+
+    pub fn compress(&mut self, src: u8, dest: u8) {
+        if cfg!(feature = "compressed-oops") {
+            self.move32_if_needed(src, dest);
+        } else {
+            self.mov(src, dest);
+        }
+    }
+
+    pub fn untag_and_decompress(&mut self, src: u8, dest: u8) {
+        if cfg!(feature = "compressed-oops") {
+            cfg_if::cfg_if! {
+                if #[cfg(target_arch="x86_64")]
+                {
+                    self.x86_lea64(BaseIndex::new(HEAP_BASE, src, Scale::TimesOne, -(HEAP_OBJECT_TAG as i32), Extend::None), dest);
+                } else {
+                    self.add64_rrr(src, HEAP_BASE, dest);
+                    self.sub64(HEAP_OBJECT_TAG as i32, dest);
+                }
+            }
+        } else {
+            self.sub64_rrr(src, HEAP_OBJECT_TAG as i32, dest);
+        }
+    }
+
+    pub fn smi_to_int(&mut self, src: u8, dest: u8) {
+        let shift_bits = SMI_TAG_SIZE + SMI_SHIFT_SIZE;
+        self.rshift32_rrr(src, shift_bits as i32, dest);
+    }
+
+    pub fn int_to_smi(&mut self, src: u8, dest: u8) {
+        let shift_bits = SMI_TAG_SIZE + SMI_SHIFT_SIZE;
+        let tag = SMI_TAG;
+        self.lshift32_rrr(src, shift_bits as i32, dest);
+        self.or32(tag as i32, dest);
+    }
+
+    pub fn branch_smi_tag(&mut self, value: u8) -> Jump {
+        if size_of::<Word>() == 4 {
+            self.branch_test32(ResultCondition::Zero, value, SMI_TAG_MASK as i32)
+        } else {
+            self.branch_test64(ResultCondition::Zero, value, SMI_TAG_MASK as i32)
+        }
+    }
+
+    pub fn branch_heap_object_tag(&mut self, value: u8) -> Jump {
+        if size_of::<Word>() == 4 {
+            self.branch_test32(ResultCondition::NonZero, value, HEAP_OBJECT_TAG_MASK as i32)
+        } else {
+            self.branch_test64(ResultCondition::NonZero, value, HEAP_OBJECT_TAG_MASK as i32)
+        }
+    }
+
+    pub fn branch_not_smi_tag(&mut self, value: u8) -> Jump {
+        if size_of::<Word>() == 4 {
+            self.branch_test32(ResultCondition::NonZero, value, SMI_TAG_MASK as i32)
+        } else {
+            self.branch_test64(ResultCondition::NonZero, value, SMI_TAG_MASK as i32)
+        }
+    }
+
+    pub fn branch_not_heap_object_tag(&mut self, value: u8) -> Jump {
+        if size_of::<Word>() == 4 {
+            self.branch_test32(ResultCondition::Zero, value, HEAP_OBJECT_TAG_MASK as i32)
+        } else {
+            self.branch_test64(ResultCondition::Zero, value, HEAP_OBJECT_TAG_MASK as i32)
+        }
+    }
+
+    pub fn do_vm_entry(&mut self, make_call: impl FnOnce(&mut Self, u8, u8, u8, u8)) {
+        self.function_prologue();
+        self.push_callee_saves();
+
+        let entry = ARGUMENT_GPR0;
+        let thread = ARGUMENT_GPR1;
+        let proto_callframe = ARGUMENT_GPR2;
+
+        self.vm_entry_record(CFR, SP);
+
+        self.store64(
+            thread,
+            Address::new(SP, offset_of!(VMEntryRecord, thread) as i32),
+        );
+
+        self.load64(
+            Address::new(thread, offset_of!(Thread, top_call_frame) as i32),
+            T4,
+        );
+        self.store64(
+            T4,
+            Address::new(SP, offset_of!(VMEntryRecord, prev_top_call_frame) as i32),
+        );
+        self.load64(
+            Address::new(thread, offset_of!(Thread, top_entry_frame) as i32),
+            T4,
+        );
+        self.store64(
+            T4,
+            Address::new(SP, offset_of!(VMEntryRecord, prev_top_entry_frame) as i32),
+        );
+
+        self.load32(
+            Address::new(
+                proto_callframe,
+                offset_of!(ProtoCallFrame, padded_arg_count) as i32,
+            ),
+            T4,
+        );
+        self.add64(CALL_FRAME_HEADER_SLOTS as i32, T4);
+        self.lshift64(3i32, T4);
+        self.sub64_rrr(SP, T4, T3);
+
+        // copy header
+        self.load64(
+            Address::new(
+                proto_callframe,
+                offset_of!(ProtoCallFrame, code_block_value) as i32,
+            ),
+            EXTRA_TEMP_REG,
+        );
+        self.store64(EXTRA_TEMP_REG, Address::new(SP, CODE_BLOCK as i32));
+        self.load64(
+            Address::new(
+                proto_callframe,
+                offset_of!(ProtoCallFrame, callee_value) as i32,
+            ),
+            EXTRA_TEMP_REG,
+        );
+        self.store64(EXTRA_TEMP_REG, Address::new(SP, CALLEE as i32));
+        self.load64(
+            Address::new(
+                proto_callframe,
+                offset_of!(ProtoCallFrame, arg_count_and_code_origin_value) as i32,
+            ),
+            EXTRA_TEMP_REG,
+        );
+        self.store64(EXTRA_TEMP_REG, Address::new(SP, ARGUMNET_COUNT as i32));
+
+        self.load32(
+            Address::new(
+                proto_callframe,
+                offset_of!(ProtoCallFrame, arg_count_and_code_origin_value) as i32
+                    + offset_of!(AsBits, payload) as i32,
+            ),
+            T4,
+        );
+        self.load32(
+            Address::new(
+                proto_callframe,
+                offset_of!(ProtoCallFrame, padded_arg_count) as i32,
+            ),
+            EXTRA_TEMP_REG,
+        );
+
+        let copy_args = self.branch32(RelationalCondition::Equal, T4, EXTRA_TEMP_REG);
+
+        // TODO: Throw exception
+        self.illegal_instruction();
+
+        copy_args.link(&mut self.asm);
+
+        self.load64(
+            Address::new(proto_callframe, offset_of!(ProtoCallFrame, args) as i32),
+            T3,
+        );
+
+        let copy_args_loop = self.label();
+        let copy_args_done = self.branch32(RelationalCondition::Equal, T4, 0i32);
+        self.sub32(1i32, T4);
+        self.load_word(
+            BaseIndex::new(T3, T4, SCALE, 0, Extend::None),
+            EXTRA_TEMP_REG,
+        );
+        self.store_word(
+            EXTRA_TEMP_REG,
+            BaseIndex::new(SP, T4, SCALE, 8, Extend::None),
+        );
+        let j = self.jump();
+        j.link_to(&mut self.asm, copy_args_loop);
+
+        copy_args_done.link(&mut self.asm);
+
+        self.store64(
+            SP,
+            Address::new(thread, offset_of!(Thread, top_call_frame) as i32),
+        );
+        self.store64(
+            CFR,
+            Address::new(thread, offset_of!(Thread, top_entry_frame) as i32),
+        );
+
+        make_call(self, entry, proto_callframe, T3, T4);
+
+        self.vm_entry_record(CFR, T4);
+        self.load64(
+            Address::new(T4, offset_of!(VMEntryRecord, thread) as i32),
+            thread,
+        );
+        self.load64(
+            Address::new(T4, offset_of!(VMEntryRecord, prev_top_call_frame) as i32),
+            T2,
+        );
+        self.store64(
+            T2,
+            Address::new(thread, offset_of!(Thread, top_call_frame) as i32),
+        );
+        self.load64(
+            Address::new(T4, offset_of!(VMEntryRecord, prev_top_entry_frame) as i32),
+            T2,
+        );
+        self.store64(
+            T2,
+            Address::new(thread, offset_of!(Thread, top_entry_frame) as i32),
+        );
+
+        self.sub64_rrr(CFR, CALLEE_SAVE_REGISTER_SIZE as i32, SP);
+
+        self.pop_callee_saves();
+        self.function_epilogue();
+        self.ret();
+    }
+
+    pub fn make_scheme_call(&mut self, entry: u8, _proto_cfr: u8, _temp1: u8, _temp2: u8) {
+        self.add64(16i32, SP);
+        self.call_op(Some(entry));
+        self.sub64(16i32, SP);
+    }
+
+    pub fn make_native_call(&mut self, entry: u8, _proto_cfr: u8, temp1: u8, _temp2: u8) {
+        self.mov(entry, temp1);
+        self.store64(CFR, Address::new(SP, 0));
+        self.mov(ARGUMENT_GPR1, ARGUMENT_GPR0);
+        self.mov(SP, ARGUMENT_GPR1);
+        self.call_op(Some(temp1));
+    }
+
+    pub fn prologue(&mut self) {
+        self.mov(ARGUMENT_GPR1, THREAD);
+        self.preserve_caller_pc_and_cfr();
+        self.load64(Address::new(CFR, CODE_BLOCK as i32), T1);
+
+        self.preserve_callee_saves_used_by_llint();
+        self.load64(
+            Address::new(T1, offset_of!(CodeBlock, instructions) as i32),
+            PB,
+        );
+        self.xor64(PC, PC);
+
+        // get new SP in T0
+        self.get_frame_register_size_for_code_block(T1, T0);
+        self.sub64_rrr(CFR, T0, T0);
+
+        self.mov(SP, T2);
+        self.mov(T0, SP);
+
+        let zero_stack_loop = self.label();
+        let zero_stack_done = self.branch64(RelationalCondition::Equal, T2, SP);
+        self.sub64(8i32, T2);
+        self.store64(0i32, Address::new(T2, 0));
+        let j = self.jump();
+        j.link_to(&mut self.asm, zero_stack_loop);
+        zero_stack_done.link(&mut self.asm);
+        if cfg!(feature = "compressed-oops") {
+            self.mov(HeapCompressionScheme::base() as i64, HEAP_BASE);
+        } else {
+            self.mov(0i64, HEAP_BASE);
+        }
+
+        
+    }
+
     pub fn op_mov(&mut self, size: OpcodeSize) {
         get_operand!(self, size, OP_MOV_SRC_INDEX, T1);
         self.load_constant_or_variable(size, T1, T2);
         get_operand!(self, size, OP_MOV_DEST_INDEX, T1);
-        self.store64(
-            T2,
-            BaseIndex::new(CFR, T1, Scale::TimesEight, 8, Extend::None),
-        );
+        self.store_word(T2, BaseIndex::new(CFR, T1, SCALE, 8, Extend::None));
         self.dispatch_op(size, OP_MOV);
     }
+
+    pub fn op_wide16(&mut self) {
+        self.next_instruction_wide16();
+    }
+
+    pub fn op_wide32(&mut self) {
+        self.next_instruction_wide32();
+    }
+
+    pub fn no_wide(&mut self, f: impl Fn(&mut Self), op: OpcodeID) {
+        self.comment(format!("{}:", OPCODE_NAMES[op as usize]));
+        let narrow = self.label();
+        f(self);
+        let wide16 = self.label();
+        self.asm.illegal_instruction();
+        let wide32 = self.label();
+        self.asm.illegal_instruction();
+        self.register_opcode(op, narrow, wide16, wide32);
+    }
+
+    pub fn op_nop(&mut self, size: OpcodeSize) {
+        self.dispatch_op(size, OP_NOP);
+    }
+
+    pub fn op_enter(&mut self, _: OpcodeSize) {
+        self.load_word(Address::new(CFR, CODE_BLOCK), T2);
+        self.decompress(T2, T2);
+        self.untag_object(T2, T2);
+
+        self.load_word(Address::new(T2, offset_of!(CodeBlock, num_vars) as i32), T2);
+        self.sub64(CALLEE_SAVE_SPACE_AS_VIRTUAL_REGISTERS as i32, T2);
+        self.mov(CFR, T1);
+        self.sub64(CALLEE_SAVE_SPACE_AS_VIRTUAL_REGISTERS as i32 * 8, T1);
+        let enter_done = self.branch_test64(ResultCondition::Zero, T2, T2);
+        self.mov(undefined().ptr as i32, T0);
+        self.neg32(T2);
+        self.sign_extend32_to_64(T2, T2);
+        let enter_loop = self.label();
+        self.store_word(T0, BaseIndex::new(T1, T2, SCALE, 0, Extend::None));
+        self.add64(1i32, T2);
+        let j = self.branch_test64(ResultCondition::NonZero, T2, T2);
+        j.link_to(&mut self.asm, enter_loop);
+        enter_done.link(&mut self.asm);
+        self.dispatch_op(OpcodeSize::Narrow, OP_ENTER);
+    }
+
+    pub fn op_allocate(&mut self, size: OpcodeSize) {
+        get_operand!(self, size, OP_ALLOCATE_SIZE_INDEX, T1);
+        self.load_constant_or_variable(size, T1, T1);
+        let slowpath = self.bump_allocate(THREAD, T2, T1, usize::MAX, T3);
+        let init = self.label();
+        get_operand!(self, size, OP_ALLOCATE_TAG_INDEX, T1);
+        self.store16(T1, Address::new(T2, -(OBJECT_REF_OFFSET as i32)));
+        get_operand!(self, size, OP_ALLOCATE_DST_INDEX, T1);
+        self.tag_object(T2, T2);
+        self.compress(T2, T2);
+        self.store_word(T2, BaseIndex::new(CFR, T1, SCALE, 8, Extend::None));
+
+        self.slowpaths.push(Box::new(move |llint| {
+            slowpath.link(&mut llint.asm);
+            llint.mov(THREAD, ARGUMENT_GPR0);
+            llint.mov(T1, ARGUMENT_GPR1);
+            llint.ccall2(AbsoluteAddress::new(super::slow_paths::allocate as _));
+            let j = llint.jump();
+            j.link_to(&mut llint.asm, init);
+        }));
+    }
+
+    pub fn slowpaths(&mut self) {
+        for slowpath in std::mem::take(&mut self.slowpaths) {
+            slowpath(self);
+        }
+    }
 }
+
+pub struct Thunk {
+    pub code_ref: CodeRef,
+}
+
+unsafe impl Send for Thunk {}
+unsafe impl Sync for Thunk {}
+
+static VM_ENTRY_TO_SCHEME: Lazy<Thunk> = Lazy::new(|| {
+    let mut llint = InterpreterGenerator::new();
+
+    llint.do_vm_entry(InterpreterGenerator::make_scheme_call);
+
+    let mut code = LinkBuffer::from_macro_assembler(&mut llint.asm).unwrap();
+
+    let code = code.finalize_without_disassembly();
+
+    Thunk { code_ref: code }
+});
+
+pub fn vm_entry_to_scheme(
+    addr: *const (),
+    thread: &mut Thread,
+    proto_cfr: &mut ProtoCallFrame,
+) -> Register {
+    unsafe {
+        let code = VM_ENTRY_TO_SCHEME.code_ref.start();
+        let func: extern "C-unwind" fn(*const (), *mut Thread, *mut ProtoCallFrame) -> Register =
+            std::mem::transmute(code);
+
+        func(addr, thread, proto_cfr)
+    }
+}
+
+static VM_ENTRY_TO_NATIVE: Lazy<Thunk> = Lazy::new(|| {
+    let mut llint = InterpreterGenerator::new();
+
+    llint.do_vm_entry(InterpreterGenerator::make_native_call);
+
+    let mut code = LinkBuffer::from_macro_assembler(&mut llint.asm).unwrap();
+
+    let code = code.finalize_without_disassembly();
+
+    Thunk { code_ref: code }
+});
+
+pub fn vm_entry_to_native(
+    addr: *const (),
+    thread: &mut Thread,
+    proto_cfr: &mut ProtoCallFrame,
+) -> Register {
+    unsafe {
+        let code = VM_ENTRY_TO_NATIVE.code_ref.start();
+        let func: extern "C-unwind" fn(*const (), *mut Thread, *mut ProtoCallFrame) -> Register =
+            std::mem::transmute(code);
+
+        func(addr, thread, proto_cfr)
+    }
+}
+
+static FUNCTION_FOR_CALL_PROLOGUE: Lazy<Thunk> = Lazy::new(|| {
+    let mut llint = InterpreterGenerator::new();
+
+    llint.prologue();
+    llint.dispatch(Operand::Imm32(0i32));
+
+    let mut code = LinkBuffer::from_macro_assembler(&mut llint.asm).unwrap();
+
+    let code = code.finalize_without_disassembly();
+
+    Thunk { code_ref: code }
+});
+
+pub fn function_for_call_prologue_addr() -> *const () {
+    FUNCTION_FOR_CALL_PROLOGUE.code_ref.start() as _
+}
+

@@ -16,14 +16,14 @@ impl<T> SegmentedVec<T> {
             !elem.is_empty()
         });
     }
-    /// Constructs a new, empty SegmentedVec<T> with a default chunk size of 256.
+    /// Constructs a new, empty `SegmentedVec<T>` with a default chunk size of 256.
     ///
     /// The segmented vector will not allocate until elements are pushed onto it.
     pub fn new() -> Self {
         SegmentedVec::with_chunk_size(256)
     }
 
-    /// Constructs a new, empty SegmentedVec<T> with the provided chunk size.
+    /// Constructs a new, empty `SegmentedVec<T>` with the provided chunk size.
     ///
     /// The segmented vector will not allocate until elements are pushed onto it.
     pub fn with_chunk_size(chunk_size: usize) -> Self {

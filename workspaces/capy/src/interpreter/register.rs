@@ -1,13 +1,14 @@
-use crate::runtime::{value::*, cell::CellReference};
+use crate::runtime::{value::*, cell::CellReference, code_block::CodeBlock};
 
 use super::stackframe::CallFrame;
 
 
+#[repr(C)]
 pub union Register {
     pub value: Tagged<Value>,
     pub compressed: TaggedValue,
     pub callframe: *mut CallFrame,
-    pub code_block: Tagged<CellReference>,
+    pub code_block: Tagged<CellReference<CodeBlock>>,
     pub flonum: f64,
     pub word: Word,
     pub u32: u32,

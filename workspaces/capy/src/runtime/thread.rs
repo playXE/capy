@@ -18,7 +18,7 @@ use crate::{
         cell::{SchemeHeader, OBJECT_REF_OFFSET},
         factory::align_allocation,
     },
-    sync::mutex::{Condvar, Mutex, MutexGuard}, interpreter::entry_frame::EntryFrame,
+    sync::mutex::{Condvar, Mutex, MutexGuard}, interpreter::{entry_frame::EntryFrame, stackframe::CallFrame},
 };
 use mmtk::{
     memory_manager::bind_mutator,
@@ -34,7 +34,6 @@ use super::{
     cell::{CellReference, CellTag},
     utils::round_up_usize,
     value::{TaggedValue, Value},
-    vm::VirtualMachine,
     GCPlan, Runtime, GC_PLAN,
 };
 
@@ -56,6 +55,7 @@ pub enum ThreadKind {
 #[repr(C)]
 pub struct Thread {
     pub top_entry_frame: *mut EntryFrame,
+    pub top_call_frame: *mut CallFrame,
     pub mmtk: MaybeUninit<MMTKLocalState>,
     pub selector: AllocatorSelector,
     pub stack: StackBounds,
@@ -619,6 +619,7 @@ static mut SINK: u8 = 0;
 static mut THREAD: Thread = Thread {
     id: 0,
     top_entry_frame: null_mut(),
+    top_call_frame: null_mut(),
     stack: StackBounds {
         bound: null_mut(),
         origin: null_mut(),

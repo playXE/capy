@@ -1,3 +1,7 @@
+//! # Pointer compression
+//! 
+//! Based on V8 compressed pointers. See https://v8.dev/blog/pointer-compression
+
 #[cfg(feature = "compressed-oops")]
 pub mod enabled {
     use std::sync::atomic::AtomicUsize;

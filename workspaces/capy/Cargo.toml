@@ -22,7 +22,7 @@ ctor = "0.2"
 parking_lot_core = "0.9"
 rsetjmp = { git = "https://github.com/playXE/rsetjmp" }
 ahash = "0.8"
-macroassembler = { version = "1.0", features = ["x86-disasm"] }
+macroassembler = { version = "1.0.5", features = ["x86-disasm"] }
 
 [features]
 compressed-oops = []

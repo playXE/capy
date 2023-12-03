@@ -87,6 +87,18 @@
                 (callee VirtualRegister)
                 (argc usize)
                 (argv usize))))
+    (op 'subr-call 
+        '(
+            (docs 
+"Calls subroutine at `callee` with `argc` arguments. Subroutines
+are a piece of native code so this is a special instruction, bytecode compiler
+does not naturally emit it.")
+            (args 
+                (dst VirtualRegister)
+                (callee u32)
+                (argc usize)
+                (argv usize)))
+    )
     (op 'nop '())
     (op 'wide16 '())
     (op 'wide32 '())
@@ -323,6 +335,5 @@ to jump to, `default` is where we go if no entry in jtable is present"
             (args 
                 (dst VirtualRegister)
                 (src VirtualRegister))))
-    
     (end-section 'Bytecode)
 ))

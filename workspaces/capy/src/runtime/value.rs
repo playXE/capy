@@ -103,7 +103,7 @@ pub const fn has_heap_object_tag(value: usize) -> bool {
 pub type TaggedValue = TaggedImpl<Word>;
 pub type TaggedBase = TaggedImpl<usize>;
 
-/// Tagged<T> represents an uncompressed V8 tagged pointer.
+/// `Tagged<T>`` represents an uncompressed V8 tagged pointer.
 ///
 /// The tagged pointer is a pointer-sized value with a tag in the LSB. The value
 /// is either:
@@ -130,6 +130,7 @@ pub type TaggedBase = TaggedImpl<usize>;
 ///    Smi:     |____int32_value____|00...............00|
 ///
 
+#[repr(transparent)]
 pub struct Tagged<T>(pub TaggedBase, pub PhantomData<T>);
 
 impl<T> Clone for Tagged<T> {
